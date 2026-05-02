@@ -15,6 +15,7 @@ singBoxSystemdServicePath="/etc/systemd/system/${singBoxServiceName}.service"
 xrayOpenrcServicePath="/etc/init.d/${xrayServiceName}"
 singBoxOpenrcServicePath="/etc/init.d/${singBoxServiceName}"
 managedMultiRealityPrefix="30_VLESS_vision_reality_multi_"
+managedMultiRealityDNSPrefix="31_VLESS_vision_reality_multi_dns_"
 managedMultiRealityShortID="6ba85179e30d4fc2"
 managedMultiRealityKeySuffix=".key"
 
@@ -3292,6 +3293,25 @@ getManagedMultiRealityKeyFile() {
     echo "${configFile%.json}${managedMultiRealityKeySuffix}"
 }
 
+getManagedMultiRealityDNSConfigFileById() {
+    local nodeId=$1
+    if [[ "${coreInstallType}" == "2" ]]; then
+        echo "/etc/v2ray-agent/sing-box/conf/config/${managedMultiRealityDNSPrefix}${nodeId}.json"
+    fi
+}
+
+getManagedMultiRealityInboundTag() {
+    local configFile=$1
+    jq -r '.inbounds[0].tag // ""' "${configFile}"
+}
+
+readManagedMultiRealityDNSServer() {
+    local dnsConfigFile=$1
+    if [[ -f "${dnsConfigFile}" ]]; then
+        jq -r '.dns.servers[]? | select(.tag | startswith("managedMultiDNS_")) | .server // empty' "${dnsConfigFile}" | head -n 1
+    fi
+}
+
 persistManagedMultiRealityKeyInfo() {
     local configFile=$1
     local publicKey=$2
@@ -3328,6 +3348,9 @@ buildManagedMultiRealityEntries() {
         local port=
         local target=
         local userCount=
+        local dnsConfigFile=
+        local dnsServer=
+        local dnsSummary=
 
         nodeId=$(basename "${file}" .json)
         nodeId=${nodeId#${managedMultiRealityPrefix}}
@@ -3347,7 +3370,18 @@ buildManagedMultiRealityEntries() {
         managedMultiRealityNodePorts[index]="${port}"
         managedMultiRealityNodeTargets[index]="${target}"
         managedMultiRealityNodeUserCounts[index]="${userCount}"
-        managedMultiRealityNodeLabels[index]="端口:${port} 目标:${target} 用户:${userCount}"
+        dnsConfigFile=$(getManagedMultiRealityDNSConfigFileById "${nodeId}")
+        if [[ -n "${dnsConfigFile}" && -f "${dnsConfigFile}" ]]; then
+            dnsServer=$(readManagedMultiRealityDNSServer "${dnsConfigFile}")
+            if [[ -n "${dnsServer}" ]]; then
+                dnsSummary=" DNS:${dnsServer}"
+            else
+                dnsSummary=" DNS:已配置"
+            fi
+        else
+            dnsSummary=
+        fi
+        managedMultiRealityNodeLabels[index]="端口:${port} 目标:${target} 用户:${userCount}${dnsSummary}"
         index=$((index + 1))
     done < <(listManagedMultiRealityFiles)
 }
@@ -3375,6 +3409,7 @@ selectManagedMultiRealityNode() {
     managedMultiRealitySelectedId="${managedMultiRealityNodeIds[${managedMultiRealityNodeIndex}]}"
     managedMultiRealitySelectedPort="${managedMultiRealityNodePorts[${managedMultiRealityNodeIndex}]}"
     managedMultiRealitySelectedTarget="${managedMultiRealityNodeTargets[${managedMultiRealityNodeIndex}]}"
+    managedMultiRealitySelectedInboundTag="$(getManagedMultiRealityInboundTag "${managedMultiRealitySelectedFile}")"
 }
 
 promptManagedMultiRealityPort() {
@@ -3482,6 +3517,7 @@ writeManagedMultiRealityXrayConfig() {
       "listen": "::",
       "port": ${port},
       "protocol": "vless",
+      "tag": "VLESSRealityMulti${port}",
       "settings": {
         "clients": ${usersJson},
         "decryption": "none"
@@ -3556,6 +3592,199 @@ writeManagedMultiRealitySingBoxConfig() {
   ]
 }
 EOF
+}
+
+ensureSingBoxDefaultDNSConfig() {
+    if [[ -z "${singBoxConfigPath}" ]]; then
+        singBoxConfigPath=/etc/v2ray-agent/sing-box/conf/config/
+    fi
+    if [[ ! -f "${singBoxConfigPath}dns.json" ]]; then
+        cat <<EOF >"${singBoxConfigPath}dns.json"
+{
+  "dns": {
+    "servers": [
+      {
+        "tag": "local",
+        "type": "local"
+      }
+    ],
+    "final": "local"
+  },
+  "route": {
+    "default_domain_resolver": "local"
+  }
+}
+EOF
+    fi
+}
+
+writeManagedMultiRealitySingBoxDNSRoutingConfig() {
+    local file=$1
+    local inboundTag=$2
+    local dnsServer=$3
+    local domainList=$4
+    local nodeId=$5
+
+    local safeNodeId=
+    safeNodeId=$(echo "${nodeId}" | tr -c '[:alnum:]' '_')
+    local routingName="managed_multi_dns_${safeNodeId}"
+    local dnsTag="managedMultiDNS_${safeNodeId}"
+
+    local rules=
+    rules=$(initSingBoxRules "${domainList}" "${routingName}")
+    local domainRules=
+    domainRules=$(echo "${rules}" | jq '.domainRules')
+    local ruleSet=
+    ruleSet=$(echo "${rules}" | jq '.ruleSet')
+    local ruleSetTag=[]
+    if [[ "$(echo "${ruleSet}" | jq '.|length')" != "0" ]]; then
+        ruleSetTag=$(echo "${ruleSet}" | jq '.|map(.tag)')
+    fi
+
+    cat <<EOF >"${file}"
+{
+  "dns": {
+    "servers": [
+      {
+        "tag": "${dnsTag}",
+        "type": "udp",
+        "server": "${dnsServer}"
+      }
+    ],
+    "rules": [
+      {
+        "inbound": [
+          "${inboundTag}"
+        ],
+        "rule_set": ${ruleSetTag},
+        "domain_regex": ${domainRules},
+        "server": "${dnsTag}"
+      }
+    ]
+  },
+  "route": {
+    "default_domain_resolver": "local",
+    "rule_set": ${ruleSet}
+  }
+}
+EOF
+    jq 'if .dns.rules[0].rule_set == [] then del(.dns.rules[0].rule_set) else . end |
+        if .dns.rules[0].domain_regex == [] then del(.dns.rules[0].domain_regex) else . end |
+        if .route.rule_set == [] then del(.route.rule_set) else . end' "${file}" >"${file}.tmp" && mv "${file}.tmp" "${file}"
+}
+
+selectManagedMultiRealityNodeWithDNS() {
+    local actionLabel=$1
+    buildManagedMultiRealityEntries
+    if [[ ${#managedMultiRealityNodeFiles[@]} -eq 0 ]]; then
+        echoContent yellow " ---> 当前没有已部署的多实例 Reality 节点"
+        exit 0
+    fi
+
+    local matchedNodeFiles=()
+    local matchedNodeIds=()
+    local matchedNodeLabels=()
+    local matchedNodePorts=()
+    local matchedNodeTargets=()
+    local matchedNodeInboundTags=()
+    local matchedNodeDNSFiles=()
+    local index=0
+    for index in "${!managedMultiRealityNodeFiles[@]}"; do
+        local dnsConfigFile=
+        dnsConfigFile=$(getManagedMultiRealityDNSConfigFileById "${managedMultiRealityNodeIds[${index}]}")
+        if [[ -n "${dnsConfigFile}" && -f "${dnsConfigFile}" ]]; then
+            matchedNodeFiles+=("${managedMultiRealityNodeFiles[${index}]}")
+            matchedNodeIds+=("${managedMultiRealityNodeIds[${index}]}")
+            matchedNodeLabels+=("${managedMultiRealityNodeLabels[${index}]}")
+            matchedNodePorts+=("${managedMultiRealityNodePorts[${index}]}")
+            matchedNodeTargets+=("${managedMultiRealityNodeTargets[${index}]}")
+            matchedNodeInboundTags+=("$(getManagedMultiRealityInboundTag "${managedMultiRealityNodeFiles[${index}]}")")
+            matchedNodeDNSFiles+=("${dnsConfigFile}")
+        fi
+    done
+
+    if [[ ${#matchedNodeFiles[@]} -eq 0 ]]; then
+        echoContent yellow " ---> 当前没有已配置节点级 DNS 分流的多实例 Reality 节点"
+        exit 0
+    fi
+
+    echoContent yellow "\n请选择要${actionLabel}的多实例 Reality 节点"
+    for index in "${!matchedNodeFiles[@]}"; do
+        echoContent green "$((index + 1)).${matchedNodeIds[${index}]} ${matchedNodeLabels[${index}]}"
+    done
+    read -r -p "请选择节点编号:" managedMultiRealityNodeIndex
+    if ! [[ "${managedMultiRealityNodeIndex}" =~ ^[0-9]+$ ]] || ((managedMultiRealityNodeIndex < 1 || managedMultiRealityNodeIndex > ${#matchedNodeFiles[@]})); then
+        echoContent red " ---> 选择错误"
+        exit 0
+    fi
+    managedMultiRealityNodeIndex=$((managedMultiRealityNodeIndex - 1))
+    managedMultiRealitySelectedFile="${matchedNodeFiles[${managedMultiRealityNodeIndex}]}"
+    managedMultiRealitySelectedId="${matchedNodeIds[${managedMultiRealityNodeIndex}]}"
+    managedMultiRealitySelectedPort="${matchedNodePorts[${managedMultiRealityNodeIndex}]}"
+    managedMultiRealitySelectedTarget="${matchedNodeTargets[${managedMultiRealityNodeIndex}]}"
+    managedMultiRealitySelectedInboundTag="${matchedNodeInboundTags[${managedMultiRealityNodeIndex}]}"
+    managedMultiRealitySelectedDNSConfigFile="${matchedNodeDNSFiles[${managedMultiRealityNodeIndex}]}"
+}
+
+setManagedMultiRealityDNSRouting() {
+    if [[ "${coreInstallType}" != "2" ]]; then
+        echoContent red " ---> 当前仅支持 sing-box 多实例 Reality 节点按节点配置 DNS 分流"
+        echoContent yellow " ---> Xray-core 现阶段仍是核心级 DNS 分流，不支持同一进程内按多个 Reality 节点分别指定上游 DNS"
+        exit 0
+    fi
+
+    selectManagedMultiRealityNode "配置节点级 DNS 分流"
+    if [[ -z "${managedMultiRealitySelectedInboundTag}" ]]; then
+        echoContent red " ---> 节点入站标签读取失败"
+        exit 0
+    fi
+
+    local setDNS=
+    local domainList=
+    local dnsConfigFile=
+    dnsConfigFile=$(getManagedMultiRealityDNSConfigFileById "${managedMultiRealitySelectedId}")
+    if [[ -f "${dnsConfigFile}" ]]; then
+        echoContent yellow " ---> 当前节点已存在节点级 DNS 分流配置，继续会直接覆盖"
+        read -r -p "是否继续覆盖？[y/n]:" managedMultiRealityDNSOverwrite
+        if [[ "${managedMultiRealityDNSOverwrite}" != "y" ]]; then
+            echoContent yellow " ---> 已取消"
+            exit 0
+        fi
+    fi
+
+    echoContent red "=============================================================="
+    echoContent yellow "节点:${managedMultiRealitySelectedId}"
+    echoContent yellow "端口:${managedMultiRealitySelectedPort}"
+    echoContent yellow "目标:${managedMultiRealitySelectedTarget}"
+    read -r -p "请输入分流的DNS:" setDNS
+    if [[ -z "${setDNS}" ]]; then
+        echoContent red " ---> dns不可为空"
+        exit 0
+    fi
+    echoContent yellow "录入示例:netflix,disney,hulu"
+    read -r -p "请按照上面示例录入域名:" domainList
+    if [[ -z "${domainList}" ]]; then
+        echoContent red " ---> 域名不可为空"
+        exit 0
+    fi
+
+    ensureSingBoxDefaultDNSConfig
+    addSingBoxOutbound 01_direct_outbound
+    writeManagedMultiRealitySingBoxDNSRoutingConfig "${dnsConfigFile}" "${managedMultiRealitySelectedInboundTag}" "${setDNS}" "${domainList}" "${managedMultiRealitySelectedId}"
+    handleSingBox restart
+    echoContent green " ---> 节点级 DNS 分流配置成功: ${managedMultiRealitySelectedId}"
+}
+
+removeManagedMultiRealityDNSRouting() {
+    if [[ "${coreInstallType}" != "2" ]]; then
+        echoContent red " ---> 当前仅支持 sing-box 多实例 Reality 节点按节点卸载 DNS 分流"
+        exit 0
+    fi
+
+    selectManagedMultiRealityNodeWithDNS "卸载节点级 DNS 分流"
+    rm -f "${managedMultiRealitySelectedDNSConfigFile}"
+    handleSingBox restart
+    echoContent green " ---> 已卸载节点级 DNS 分流: ${managedMultiRealitySelectedId}"
 }
 
 deployManagedMultiRealityNode() {
@@ -3738,6 +3967,7 @@ deleteManagedMultiRealityNode() {
     selectManagedMultiRealityNode "删除"
     rm -f "${managedMultiRealitySelectedFile}"
     rm -f "$(getManagedMultiRealityKeyFile "${managedMultiRealitySelectedFile}")"
+    rm -f "$(getManagedMultiRealityDNSConfigFileById "${managedMultiRealitySelectedId}")"
     if [[ "${coreInstallType}" == "1" ]]; then
         handleXray restart
     else
@@ -4207,7 +4437,7 @@ removeSingBoxRouteRule() {
 addSingBoxOutbound() {
     local tag=$1
     local type="ipv4"
-    local detour=$2
+    local detour=${2:-}
     if echo "${tag}" | grep -q "IPv6"; then
         type=ipv6
     fi
@@ -9405,9 +9635,15 @@ dnsRouting() {
     echoContent red "\n=============================================================="
     echoContent yellow "# 注意事项"
     echoContent yellow "# 使用说明：请参考仓库 README \n"
+    echoContent yellow "# 多实例节点级 DNS 分流当前仅支持 sing-box，多实例节点可单独指定上游 DNS\n"
+    if [[ "${coreInstallType}" == "1" ]]; then
+        echoContent yellow "# 当前核心为 Xray-core，节点级 DNS 分流暂不可用，仅支持全局 DNS 分流\n"
+    fi
 
-    echoContent yellow "1.添加"
-    echoContent yellow "2.卸载"
+    echoContent yellow "1.全局添加"
+    echoContent yellow "2.全局卸载"
+    echoContent yellow "3.多实例节点添加"
+    echoContent yellow "4.多实例节点卸载"
     read -r -p "请选择:" selectType
 
     case ${selectType} in
@@ -9416,6 +9652,12 @@ dnsRouting() {
         ;;
     2)
         removeUnlockDNS
+        ;;
+    3)
+        setManagedMultiRealityDNSRouting
+        ;;
+    4)
+        removeManagedMultiRealityDNSRouting
         ;;
     esac
 }
@@ -9565,6 +9807,9 @@ addSingBoxDNSConfig() {
             "server":"hosts"
         }
     ]
+  },
+  "route": {
+    "default_domain_resolver": "local"
   }
 }
 EOF
@@ -9584,14 +9829,15 @@ EOF
       }
     ],
     "rules": [
-      {
-        "rule_set": ${ruleSetTag},
-        "domain_regex": ${domainRules},
-        "server":"dnsRouting"
-      }
+        {
+            "rule_set": ${ruleSetTag},
+            "domain_regex": ${domainRules},
+            "server":"dnsRouting"
+        }
     ]
   },
   "route":{
+    "default_domain_resolver":"local",
     "rule_set":${ruleSet}
   }
 }
@@ -9647,9 +9893,13 @@ EOF
     "dns": {
         "servers":[
             {
-                "type":"local"
+                "type":"local",
+                "tag":"local"
             }
         ]
+    },
+    "route": {
+        "default_domain_resolver":"local"
     }
 }
 EOF
@@ -9682,9 +9932,13 @@ EOF
     "dns": {
         "servers":[
             {
-                "type":"local"
+                "type":"local",
+                "tag":"local"
             }
         ]
+    },
+    "route": {
+        "default_domain_resolver":"local"
     }
 }
 EOF
@@ -11349,7 +11603,7 @@ menu() {
     cd "$HOME" || exit
     echoContent red "\n=============================================================="
     echoContent green "维护：dodo258"
-    echoContent green "当前版本：v3.6.10"
+    echoContent green "当前版本：v3.6.12"
     echoContent green "项目：https://github.com/dodo258/sbox-deploy-tool"
     echoContent green "描述：多实例重构版管理脚本\c"
     showInstallStatus
