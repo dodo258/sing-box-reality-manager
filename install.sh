@@ -8974,7 +8974,7 @@ routingToolsMenu() {
     echoContent yellow "2.WARP分流【第三方 IPv6】"
     echoContent yellow "3.IPv6分流"
     echoContent yellow "4.Socks5分流【替换任意门分流】"
-    echoContent yellow "5.DNS分流"
+    echoMenuHint "5.DNS分流" "流媒体/解锁常用"
     #    echoContent yellow "6.VMess+WS+TLS分流"
     echoContent yellow "7.SNI反向代理分流"
 
@@ -10161,8 +10161,8 @@ selectCoreInstall() {
         echoContent yellow "# 同机想再加一个不同端口的节点，请返回主菜单选 13.添加新端口\n"
     fi
     echoContent red "\n=============================================================="
-    echoMenuHint "1.Xray-core" "推荐：VLESS/Reality 优先选这个"
-    echoMenuHint "2.sing-box" "备选：想用 sing-box 再选"
+    echoMenuHint "1.Xray-core" "兼容旧功能时选这个"
+    echoMenuHint "2.sing-box" "推荐：多实例优先选这个"
     echoContent red "=============================================================="
     read -r -p "请选择:" selectCoreType
     case ${selectCoreType} in
@@ -11603,7 +11603,7 @@ menu() {
     cd "$HOME" || exit
     echoContent red "\n=============================================================="
     echoContent green "维护：dodo258"
-    echoContent green "当前版本：v3.6.12"
+    echoContent green "当前版本：v3.6.13"
     echoContent green "项目：https://github.com/dodo258/sbox-deploy-tool"
     echoContent green "描述：多实例重构版管理脚本\c"
     showInstallStatus
@@ -11620,7 +11620,7 @@ menu() {
     echoContent yellow "4.Hysteria2管理"
     echoContent yellow "5.REALITY管理"
     echoContent yellow "6.Tuic管理"
-    echoMenuHint "7.多实例Reality" "部署多个独立端口节点选这个"
+    echoMenuHint "7.多实例Reality" "先装一个主节点再用这个"
 
     echoContent skyBlue "-------------------------工具管理-----------------------------"
     echoContent yellow "8.账号/订阅管理"
