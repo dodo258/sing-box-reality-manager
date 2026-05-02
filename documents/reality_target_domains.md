@@ -4,9 +4,9 @@
 
 复测环境:
 
-*   一台海外 VPS
+*   一台中国大陆云服务器
 *   工具: `xray tls ping domain:443`
-*   口径: 这一轮优先保留更适合中国大陆常见网络直连使用的保守域名
+*   口径: 这一轮优先保留 `PQ 握手正常` 且 `curl` 直连不返回 `000` 的保守域名
 
 整理目标:
 
@@ -27,14 +27,10 @@
 
 ```text
 gateway.icloud.com
-swdist.apple.com
-swcdn.apple.com
-updates.cdn-apple.com
 download-installer.cdn.mozilla.net
 addons.mozilla.org
 www.mozilla.org
 www.booking.com
-www.visitcalifornia.com
 www.kayak.com
 www.japan.travel
 www.nintendo.com
@@ -42,7 +38,6 @@ store.epicgames.com
 www.aniplex.co.jp
 www.gundam.info
 arxiv.org
-www.nature.com
 www.berkeley.edu
 www.caltech.edu
 www.princeton.edu
@@ -53,7 +48,6 @@ www.ox.ac.uk
 www.cam.ac.uk
 www.nyu.edu
 www.python.org
-react.dev
 redis.io
 www.mongodb.com
 www.asus.com
@@ -84,18 +78,15 @@ www.sennheiser.com
 
 ## 最推荐
 
-如果你就想先抓一把更稳妥的，我建议优先从这 14 个里选:
+如果你就想先抓一把更稳妥的，我建议优先从这 11 个里选:
 
 *   `gateway.icloud.com`
-*   `swdist.apple.com`
 *   `download-installer.cdn.mozilla.net`
 *   `addons.mozilla.org`
 *   `www.booking.com`
 *   `www.nintendo.com`
 *   `www.aniplex.co.jp`
 *   `arxiv.org`
-*   `www.nature.com`
-*   `react.dev`
 *   `www.python.org`
 *   `www.cloudflare.com`
 *   `www.atlassian.com`
@@ -106,9 +97,6 @@ www.sennheiser.com
 ### Apple / 浏览器 / CDN
 
 *   `gateway.icloud.com`
-*   `swdist.apple.com`
-*   `swcdn.apple.com`
-*   `updates.cdn-apple.com`
 *   `download-installer.cdn.mozilla.net`
 *   `addons.mozilla.org`
 *   `www.mozilla.org`
@@ -119,7 +107,6 @@ www.sennheiser.com
 ### 旅游 / 目的地
 
 *   `www.booking.com`
-*   `www.visitcalifornia.com`
 *   `www.kayak.com`
 *   `www.japan.travel`
 
@@ -132,7 +119,6 @@ www.sennheiser.com
 ### 学术 / 研究 / 高校
 
 *   `arxiv.org`
-*   `www.nature.com`
 *   `www.berkeley.edu`
 *   `www.caltech.edu`
 *   `www.princeton.edu`
@@ -146,7 +132,6 @@ www.sennheiser.com
 ### 技术 / 云 / 开发工具
 
 *   `www.python.org`
-*   `react.dev`
 *   `redis.io`
 *   `www.mongodb.com`
 *   `www.ibm.com`
@@ -246,6 +231,12 @@ www.sennheiser.com
 *   `www.hp.com`
 *   `www.dell.com`
 *   `www.intel.com`
+*   `swdist.apple.com`
+*   `swcdn.apple.com`
+*   `updates.cdn-apple.com`
+*   `www.visitcalifornia.com`
+*   `www.nature.com`
+*   `react.dev`
 *   `dl.google.com`
 *   `www.tripadvisor.com`
 *   `www.lonelyplanet.com`
