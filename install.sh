@@ -68,7 +68,7 @@ checkCentosSELinux() {
     if command -v getenforce >/dev/null 2>&1 && [ "$(getenforce)" == "Enforcing" ]; then
         echoContent yellow "# 注意事项"
         echoContent yellow "检测到SELinux已开启，请手动关闭后重试"
-        echoContent yellow "项目说明：https://github.com/dodo258/sbox-deploy-tool"
+        echoContent yellow "项目说明：https://github.com/dodo258/sing-box-reality-manager"
         exit 0
     fi
 }
@@ -2016,7 +2016,7 @@ switchDNSAPI() {
 # 初始化dns配置
 initDNSAPIConfig() {
     if [[ "$1" == "cloudflare" ]]; then
-        echoContent yellow "\n CF_Token 配置请参考仓库 README：https://github.com/dodo258/sbox-deploy-tool\n"
+        echoContent yellow "\n CF_Token 配置请参考仓库 README：https://github.com/dodo258/sing-box-reality-manager\n"
         read -r -p "请输入API Token:" cfAPIToken
         if [[ -z "${cfAPIToken}" ]]; then
             echoContent red " ---> 输入为空，请重新输入"
@@ -2336,9 +2336,9 @@ nginxBlog() {
             #  randomNum=$((RANDOM % 6 + 1))
             randomNum=$(randomNum 1 9)
             if [[ "${release}" == "alpine" ]]; then
-                wget -q -P "${nginxStaticPath}" "https://raw.githubusercontent.com/dodo258/sbox-deploy-tool/main/fodder/blog/unable/html${randomNum}.zip"
+                wget -q -P "${nginxStaticPath}" "https://raw.githubusercontent.com/dodo258/sing-box-reality-manager/main/fodder/blog/unable/html${randomNum}.zip"
             else
-                wget -q "${wgetShowProgressStatus}" -P "${nginxStaticPath}" "https://raw.githubusercontent.com/dodo258/sbox-deploy-tool/main/fodder/blog/unable/html${randomNum}.zip"
+                wget -q "${wgetShowProgressStatus}" -P "${nginxStaticPath}" "https://raw.githubusercontent.com/dodo258/sing-box-reality-manager/main/fodder/blog/unable/html${randomNum}.zip"
             fi
 
             unzip -o "${nginxStaticPath}html${randomNum}.zip" -d "${nginxStaticPath}" >/dev/null
@@ -2351,9 +2351,9 @@ nginxBlog() {
         rm -rf "${nginxStaticPath}*"
 
         if [[ "${release}" == "alpine" ]]; then
-            wget -q -P "${nginxStaticPath}" "https://raw.githubusercontent.com/dodo258/sbox-deploy-tool/main/fodder/blog/unable/html${randomNum}.zip"
+            wget -q -P "${nginxStaticPath}" "https://raw.githubusercontent.com/dodo258/sing-box-reality-manager/main/fodder/blog/unable/html${randomNum}.zip"
         else
-            wget -q "${wgetShowProgressStatus}" -P "${nginxStaticPath}" "https://raw.githubusercontent.com/dodo258/sbox-deploy-tool/main/fodder/blog/unable/html${randomNum}.zip"
+            wget -q "${wgetShowProgressStatus}" -P "${nginxStaticPath}" "https://raw.githubusercontent.com/dodo258/sing-box-reality-manager/main/fodder/blog/unable/html${randomNum}.zip"
         fi
 
         unzip -o "${nginxStaticPath}html${randomNum}.zip" -d "${nginxStaticPath}" >/dev/null
@@ -7009,9 +7009,9 @@ updateNginxBlog() {
         rm -rf "${nginxStaticPath}*"
 
         if [[ "${release}" == "alpine" ]]; then
-            wget -q -P "${nginxStaticPath}" "https://raw.githubusercontent.com/dodo258/sbox-deploy-tool/main/fodder/blog/unable/html${selectInstallNginxBlogType}.zip"
+            wget -q -P "${nginxStaticPath}" "https://raw.githubusercontent.com/dodo258/sing-box-reality-manager/main/fodder/blog/unable/html${selectInstallNginxBlogType}.zip"
         else
-            wget -q "${wgetShowProgressStatus}" -P "${nginxStaticPath}" "https://raw.githubusercontent.com/dodo258/sbox-deploy-tool/main/fodder/blog/unable/html${selectInstallNginxBlogType}.zip"
+            wget -q "${wgetShowProgressStatus}" -P "${nginxStaticPath}" "https://raw.githubusercontent.com/dodo258/sing-box-reality-manager/main/fodder/blog/unable/html${selectInstallNginxBlogType}.zip"
         fi
 
         unzip -o "${nginxStaticPath}html${selectInstallNginxBlogType}.zip" -d "${nginxStaticPath}" >/dev/null
@@ -7829,9 +7829,9 @@ updateV2RayAgent() {
     echoContent skyBlue "\n进度  $1/${totalProgress} : 更新v2ray-agent脚本"
     rm -rf /etc/v2ray-agent/install.sh
     if [[ "${release}" == "alpine" ]]; then
-        wget -c -q -P /etc/v2ray-agent/ -N --no-check-certificate "https://raw.githubusercontent.com/dodo258/sbox-deploy-tool/main/install.sh"
+        wget -c -q -P /etc/v2ray-agent/ -N --no-check-certificate "https://raw.githubusercontent.com/dodo258/sing-box-reality-manager/main/install.sh"
     else
-        wget -c -q "${wgetShowProgressStatus}" -P /etc/v2ray-agent/ -N --no-check-certificate "https://raw.githubusercontent.com/dodo258/sbox-deploy-tool/main/install.sh"
+        wget -c -q "${wgetShowProgressStatus}" -P /etc/v2ray-agent/ -N --no-check-certificate "https://raw.githubusercontent.com/dodo258/sing-box-reality-manager/main/install.sh"
     fi
 
     sudo chmod 700 /etc/v2ray-agent/install.sh
@@ -7842,7 +7842,7 @@ updateV2RayAgent() {
     echoContent yellow " ---> 请手动执行[vasma]打开脚本"
     echoContent green " ---> 当前版本：${version}\n"
     echoContent yellow "如更新不成功，请手动执行下面命令\n"
-    echoContent skyBlue "wget -P /root -N --no-check-certificate https://raw.githubusercontent.com/dodo258/sbox-deploy-tool/main/install.sh && chmod 700 /root/install.sh && /root/install.sh"
+    echoContent skyBlue "wget -P /root -N --no-check-certificate https://raw.githubusercontent.com/dodo258/sing-box-reality-manager/main/install.sh && chmod 700 /root/install.sh && /root/install.sh"
     echo
     exit 0
 }
@@ -11003,9 +11003,9 @@ subscribe() {
 
                         echoContent skyBlue " ---> 下载 sing-box 通用配置文件"
                         if [[ "${release}" == "alpine" ]]; then
-                            wget -O "/etc/v2ray-agent/subscribe/sing-box/${emailMd5}" -q "https://raw.githubusercontent.com/dodo258/sbox-deploy-tool/main/documents/sing-box.json"
+                            wget -O "/etc/v2ray-agent/subscribe/sing-box/${emailMd5}" -q "https://raw.githubusercontent.com/dodo258/sing-box-reality-manager/main/documents/sing-box.json"
                         else
-                            wget -O "/etc/v2ray-agent/subscribe/sing-box/${emailMd5}" -q "${wgetShowProgressStatus}" "https://raw.githubusercontent.com/dodo258/sbox-deploy-tool/main/documents/sing-box.json"
+                            wget -O "/etc/v2ray-agent/subscribe/sing-box/${emailMd5}" -q "${wgetShowProgressStatus}" "https://raw.githubusercontent.com/dodo258/sing-box-reality-manager/main/documents/sing-box.json"
                         fi
 
                         jq ".outbounds=$(jq ".outbounds|map(if has(\"outbounds\") then .outbounds += $(jq ".|map(.tag)" "/etc/v2ray-agent/subscribe_local/sing-box/${email}") else . end)" "/etc/v2ray-agent/subscribe/sing-box/${emailMd5}")" "/etc/v2ray-agent/subscribe/sing-box/${emailMd5}" >"/etc/v2ray-agent/subscribe/sing-box/${emailMd5}_tmp" && mv "/etc/v2ray-agent/subscribe/sing-box/${emailMd5}_tmp" "/etc/v2ray-agent/subscribe/sing-box/${emailMd5}"
@@ -11603,8 +11603,8 @@ menu() {
     cd "$HOME" || exit
     echoContent red "\n=============================================================="
     echoContent green "维护：dodo258"
-    echoContent green "当前版本：v3.6.13"
-    echoContent green "项目：https://github.com/dodo258/sbox-deploy-tool"
+    echoContent green "当前版本：v3.6.14"
+    echoContent green "项目：https://github.com/dodo258/sing-box-reality-manager"
     echoContent green "描述：多实例重构版管理脚本\c"
     showInstallStatus
     checkWgetShowProgress

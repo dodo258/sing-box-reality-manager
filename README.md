@@ -1,4 +1,4 @@
-# sbox-deploy-tool
+# sing-box-reality-manager
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 
@@ -45,7 +45,7 @@
 ## 安装
 
 ```bash
-wget -P /root -N --no-check-certificate "https://raw.githubusercontent.com/dodo258/sbox-deploy-tool/main/install.sh" && chmod 700 /root/install.sh && /root/install.sh
+wget -P /root -N --no-check-certificate "https://raw.githubusercontent.com/dodo258/sing-box-reality-manager/main/install.sh" && chmod 700 /root/install.sh && /root/install.sh
 ```
 
 ## 使用
@@ -74,8 +74,8 @@ vasma
 
 ## 反馈
 
-*   仓库: [github.com/dodo258/sbox-deploy-tool](https://github.com/dodo258/sbox-deploy-tool)
-*   问题反馈: [提交 issue](https://github.com/dodo258/sbox-deploy-tool/issues)
+*   仓库: [github.com/dodo258/sing-box-reality-manager](https://github.com/dodo258/sing-box-reality-manager)
+*   问题反馈: [提交 issue](https://github.com/dodo258/sing-box-reality-manager/issues)
 
 ## 许可证
 
