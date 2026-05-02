@@ -16,6 +16,7 @@ xrayOpenrcServicePath="/etc/init.d/${xrayServiceName}"
 singBoxOpenrcServicePath="/etc/init.d/${singBoxServiceName}"
 managedMultiRealityPrefix="30_VLESS_vision_reality_multi_"
 managedMultiRealityShortID="6ba85179e30d4fc2"
+managedMultiRealityKeySuffix=".key"
 
 echoContent() {
     case $1 in
@@ -3286,6 +3287,31 @@ countManagedMultiRealityNodes() {
     echo "${count}"
 }
 
+getManagedMultiRealityKeyFile() {
+    local configFile=$1
+    echo "${configFile%.json}${managedMultiRealityKeySuffix}"
+}
+
+persistManagedMultiRealityKeyInfo() {
+    local configFile=$1
+    local publicKey=$2
+    local keyFile=
+    keyFile=$(getManagedMultiRealityKeyFile "${configFile}")
+    cat <<EOF >"${keyFile}"
+publicKey:${publicKey}
+shortId:${managedMultiRealityShortID}
+EOF
+}
+
+readManagedMultiRealityPublicKey() {
+    local configFile=$1
+    local keyFile=
+    keyFile=$(getManagedMultiRealityKeyFile "${configFile}")
+    if [[ -f "${keyFile}" ]]; then
+        grep '^publicKey:' <"${keyFile}" | awk -F "[:]" '{print $2}' | tail -n 1
+    fi
+}
+
 buildManagedMultiRealityEntries() {
     managedMultiRealityNodeFiles=()
     managedMultiRealityNodeIds=()
@@ -3387,6 +3413,7 @@ promptManagedMultiRealityTarget() {
 }
 
 generateManagedMultiRealityKeypair() {
+    echoContent skyBlue "\n生成Reality key\n"
     if [[ "${coreInstallType}" == "1" ]]; then
         managedMultiRealityKeypair=$("${xrayBinaryPath}" x25519 2>/dev/null)
         managedMultiRealityPrivateKey=$(echo "${managedMultiRealityKeypair}" | grep "PrivateKey" | awk '{print $2}')
@@ -3401,6 +3428,9 @@ generateManagedMultiRealityKeypair() {
         echoContent red " ---> 生成 Reality 密钥失败"
         exit 0
     fi
+
+    echoContent green "\n privateKey:${managedMultiRealityPrivateKey}"
+    echoContent green "\n publicKey:${managedMultiRealityPublicKey}"
 }
 
 generateManagedMultiRealityUserIdentity() {
@@ -3554,12 +3584,14 @@ deployManagedMultiRealityNode() {
         usersJson=$(buildManagedMultiRealityXrayUsersJson "${managedMultiRealityUUID}" "${managedMultiRealityUserName}")
         configFile="/etc/v2ray-agent/xray/conf/${managedMultiRealityPrefix}${nodeId}.json"
         writeManagedMultiRealityXrayConfig "${configFile}" "${managedMultiRealityPort}" "${managedMultiRealityTargetServerName}" "${managedMultiRealityTargetPort}" "${managedMultiRealityPrivateKey}" "${usersJson}"
+        persistManagedMultiRealityKeyInfo "${configFile}" "${managedMultiRealityPublicKey}"
         handleXray restart
         echoContent green " ---> Xray 多实例 Reality 节点部署成功"
     else
         usersJson=$(buildManagedMultiRealitySingBoxUsersJson "${managedMultiRealityUUID}" "${managedMultiRealityUserName}")
         configFile="/etc/v2ray-agent/sing-box/conf/config/${managedMultiRealityPrefix}${nodeId}.json"
         writeManagedMultiRealitySingBoxConfig "${configFile}" "${managedMultiRealityPort}" "${managedMultiRealityTargetServerName}" "${managedMultiRealityTargetPort}" "${managedMultiRealityPrivateKey}" "${usersJson}"
+        persistManagedMultiRealityKeyInfo "${configFile}" "${managedMultiRealityPublicKey}"
         handleSingBox restart
         echoContent green " ---> sing-box 多实例 Reality 节点部署成功"
     fi
@@ -3610,7 +3642,10 @@ showManagedMultiRealityAccounts() {
         privateKey=$(jq -r '.inbounds[0].tls.reality.private_key // ""' "${file}")
         usersPath='.inbounds[0].users[]'
     fi
-    publicKey=$(deriveRealityPublicKeyFromPrivateKey "${privateKey}")
+    publicKey=$(readManagedMultiRealityPublicKey "${file}")
+    if [[ -z "${publicKey}" ]]; then
+        publicKey=$(deriveRealityPublicKeyFromPrivateKey "${privateKey}")
+    fi
 
     echoContent skyBlue "\n========================= 多实例 Reality 账号 =========================\n"
     jq -c "${usersPath}" "${file}" | while read -r user; do
@@ -3702,6 +3737,7 @@ removeManagedMultiRealityUser() {
 deleteManagedMultiRealityNode() {
     selectManagedMultiRealityNode "删除"
     rm -f "${managedMultiRealitySelectedFile}"
+    rm -f "$(getManagedMultiRealityKeyFile "${managedMultiRealitySelectedFile}")"
     if [[ "${coreInstallType}" == "1" ]]; then
         handleXray restart
     else
@@ -11313,7 +11349,7 @@ menu() {
     cd "$HOME" || exit
     echoContent red "\n=============================================================="
     echoContent green "维护：dodo258"
-    echoContent green "当前版本：v3.6.1"
+    echoContent green "当前版本：v3.6.2"
     echoContent green "项目：https://github.com/dodo258/sbox-deploy-tool"
     echoContent green "描述：多实例重构版管理脚本\c"
     showInstallStatus

@@ -8177,7 +8177,7 @@ menu() {
     cd "$HOME" || exit
     echoContent red "\n================================================ ================="
     echoContent green "Maintainer: dodo258"
-    echoContent green "Current version: v3.6.1"
+    echoContent green "Current version: v3.6.2"
     echoContent green "Project: https://github.com/dodo258/sbox-deploy-tool"
     echoContent green "Description: 8-in-1 customized management script\c"
     showInstallStatus
