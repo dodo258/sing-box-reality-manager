@@ -11349,31 +11349,32 @@ menu() {
     cd "$HOME" || exit
     echoContent red "\n=============================================================="
     echoContent green "维护：dodo258"
-    echoContent green "当前版本：v3.6.8"
+    echoContent green "当前版本：v3.6.9"
     echoContent green "项目：https://github.com/dodo258/sbox-deploy-tool"
     echoContent green "描述：多实例重构版管理脚本\c"
     showInstallStatus
     checkWgetShowProgress
     echoContent red "=============================================================="
     if [[ -n "${coreInstallType}" ]]; then
-        echoMenuHint "1.重新安装" "全量安装"
+        echoContent yellow "1.重新安装"
     else
-        echoMenuHint "1.安装" "全量安装"
+        echoContent yellow "1.安装"
     fi
 
-    echoMenuHint "2.任意组合安装" "想自己挑协议就选这个"
+    echoContent yellow "2.任意组合安装"
     echoMenuHint "3.一键无域名Reality" "只装推荐VLESS，新手最推荐" "覆盖当前Reality节点并全新安装"
     echoContent yellow "4.Hysteria2管理"
     echoContent yellow "5.REALITY管理"
     echoContent yellow "6.Tuic管理"
+    echoMenuHint "19.多实例Reality" "部署多个独立端口节点选这个"
 
     echoContent skyBlue "-------------------------工具管理-----------------------------"
-    echoMenuHint "7.账号/订阅管理" "已有节点加用户/看订阅选这个"
+    echoContent yellow "7.账号/订阅管理"
     echoContent yellow "8.伪装站管理"
     echoContent yellow "9.证书管理"
     echoContent yellow "10.CDN节点管理"
     echoContent yellow "11.分流工具"
-    echoMenuHint "12.添加新端口" "给已有节点补入口，不是新节点"
+    echoContent yellow "12.添加新端口"
     echoContent yellow "13.BT下载管理"
     echoContent yellow "14.节点管理"
     echoContent yellow "15.域名黑名单"
@@ -11381,7 +11382,6 @@ menu() {
     echoContent yellow "16.core管理"
     echoContent yellow "17.更新脚本"
     echoContent yellow "18.安装BBR、DD脚本"
-    echoMenuHint "19.多实例Reality" "部署多个独立端口节点选这个"
     echoContent skyBlue "-------------------------脚本管理-----------------------------"
     echoContent yellow "20.卸载脚本"
     echoContent red "=============================================================="
