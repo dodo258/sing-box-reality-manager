@@ -4,20 +4,20 @@
 
 复测环境:
 
-*   服务器: `103.103.245.68`
-*   工具: `/etc/v2ray-agent/xray/xray tls ping domain:443`
-*   口径: 这一轮优先保留在该服务器上实测能协商出 `X25519MLKEM768` 的域名
+*   一台海外 VPS
+*   工具: `xray tls ping domain:443`
+*   口径: 这一轮优先保留更适合中国大陆常见网络直连使用的保守域名
 
 整理目标:
 
-*   扩充脚本默认随机池，不再只靠十几个老域名
-*   优先保留大厂、长期运营站点、常见下载站、旅游站、学术站、技术站
+*   收紧脚本默认随机池，尽量移除中国大陆网络环境下争议更大的域名
+*   优先保留大厂、长期运营站点、软件下载站、学术站、技术站
 *   行业尽量打散，不全压在 Apple/Google/AWS 一类高频热门域名上
 
 注意:
 
-*   这是 `2026-05-02` 这台服务器的快照，不是永久真相
-*   中国大陆不同地区和运营商下，直连表现仍然会有差异
+*   没有人能对所有中国大陆网络环境承诺 `100%` 直连
+*   中国大陆不同地区和运营商下，直连表现会有差异
 *   `301/302/403/404` 不等于不能用，Reality 更看重 TLS/ALPN 和整体握手指纹
 *   真正长期上机前，建议你仍然对自己常用的 3 到 8 个域名做抽样复测
 
@@ -33,20 +33,14 @@ updates.cdn-apple.com
 download-installer.cdn.mozilla.net
 addons.mozilla.org
 www.mozilla.org
-dl.google.com
 www.booking.com
 www.visitcalifornia.com
 www.kayak.com
 www.japan.travel
-www.tripadvisor.com
-www.lonelyplanet.com
-www.viator.com
 www.nintendo.com
 store.epicgames.com
-www.ubisoft.com
 www.aniplex.co.jp
 www.gundam.info
-www.crunchyroll.com
 arxiv.org
 www.nature.com
 www.berkeley.edu
@@ -66,13 +60,9 @@ www.asus.com
 www.ibm.com
 www.cloudflare.com
 www.atlassian.com
-www.figma.com
-www.notion.so
-vercel.com
 www.jetbrains.com
 www.docker.com
 www.postman.com
-gitlab.com
 s0.awsstatic.com
 d1.awsstatic.com
 m.media-amazon.com
@@ -86,10 +76,7 @@ www.netgear.com
 www.tp-link.com
 www.synology.com
 www.qnap.com
-www.digitalocean.com
-www.linode.com
 www.logitech.com
-www.razer.com
 www.seagate.com
 www.vmware.com
 www.sennheiser.com
@@ -97,17 +84,14 @@ www.sennheiser.com
 
 ## 最推荐
 
-如果你就想先抓一把更稳妥的，我建议优先从这 18 个里选:
+如果你就想先抓一把更稳妥的，我建议优先从这 14 个里选:
 
 *   `gateway.icloud.com`
 *   `swdist.apple.com`
 *   `download-installer.cdn.mozilla.net`
 *   `addons.mozilla.org`
-*   `dl.google.com`
 *   `www.booking.com`
-*   `www.kayak.com`
 *   `www.nintendo.com`
-*   `store.epicgames.com`
 *   `www.aniplex.co.jp`
 *   `arxiv.org`
 *   `www.nature.com`
@@ -116,7 +100,6 @@ www.sennheiser.com
 *   `www.cloudflare.com`
 *   `www.atlassian.com`
 *   `www.jetbrains.com`
-*   `gitlab.com`
 
 ## 分类扩展池
 
@@ -129,7 +112,6 @@ www.sennheiser.com
 *   `download-installer.cdn.mozilla.net`
 *   `addons.mozilla.org`
 *   `www.mozilla.org`
-*   `dl.google.com`
 *   `s0.awsstatic.com`
 *   `d1.awsstatic.com`
 *   `m.media-amazon.com`
@@ -140,18 +122,12 @@ www.sennheiser.com
 *   `www.visitcalifornia.com`
 *   `www.kayak.com`
 *   `www.japan.travel`
-*   `www.tripadvisor.com`
-*   `www.lonelyplanet.com`
-*   `www.viator.com`
 
-### 游戏 / 动漫 / 娱乐
+### 游戏 / 动漫
 
 *   `www.nintendo.com`
-*   `store.epicgames.com`
-*   `www.ubisoft.com`
 *   `www.aniplex.co.jp`
 *   `www.gundam.info`
-*   `www.crunchyroll.com`
 
 ### 学术 / 研究 / 高校
 
@@ -176,15 +152,9 @@ www.sennheiser.com
 *   `www.ibm.com`
 *   `www.cloudflare.com`
 *   `www.atlassian.com`
-*   `www.figma.com`
-*   `www.notion.so`
-*   `vercel.com`
 *   `www.jetbrains.com`
 *   `www.docker.com`
 *   `www.postman.com`
-*   `gitlab.com`
-*   `www.digitalocean.com`
-*   `www.linode.com`
 *   `www.vmware.com`
 
 ### 网络 / 设备 / 存储
@@ -196,7 +166,6 @@ www.sennheiser.com
 *   `www.synology.com`
 *   `www.qnap.com`
 *   `www.logitech.com`
-*   `www.razer.com`
 *   `www.seagate.com`
 *   `www.sennheiser.com`
 
@@ -210,7 +179,13 @@ www.sennheiser.com
 
 ## 暂不建议继续塞进默认随机池
 
-这些域名在 `2026-05-02` 这台服务器的实测里没有协商出 `X25519MLKEM768`，或者直接超时，我先不往默认随机池里放:
+这些域名我已经先从默认随机池里移走。原因包括:
+
+*   中国大陆网络环境下争议较大
+*   你反馈其中有些域名本身就不适合拿来做“高置信直连池”
+*   即便 TLS 探测能过，也不代表适合作为保守默认值
+
+目前不放默认池的包括:
 
 *   `itunes.apple.com`
 *   `images-na.ssl-images-amazon.com`
@@ -271,6 +246,19 @@ www.sennheiser.com
 *   `www.hp.com`
 *   `www.dell.com`
 *   `www.intel.com`
+*   `dl.google.com`
+*   `www.tripadvisor.com`
+*   `www.lonelyplanet.com`
+*   `www.viator.com`
+*   `www.ubisoft.com`
+*   `www.crunchyroll.com`
+*   `www.figma.com`
+*   `www.notion.so`
+*   `vercel.com`
+*   `gitlab.com`
+*   `www.digitalocean.com`
+*   `www.linode.com`
+*   `www.razer.com`
 
 ## 使用建议
 
