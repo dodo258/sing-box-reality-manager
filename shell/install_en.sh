@@ -7903,7 +7903,7 @@ initRealityDest() {
         realityDestDomain=${domain}:${port}
     else
         local realityDestDomainList=
-        realityDestDomainList="gateway.icloud.com,itunes.apple.com,download-installer.cdn.mozilla.net,addons.mozilla.org,s0.awsstatic.com,d1.awsstatic.com,images-na.ssl-images-amazon.com,m.media-amazon.com,dl.google.com,www.booking.com,www.visitcalifornia.com,www.nintendo.com,www.playstation.com,www.aniplex.co.jp,www.gundam.info,www.century21.com,www.sothebysrealty.com,arxiv.org,www.nature.com,www.stanford.edu,www.berkeley.edu,www.caltech.edu,www.python.org,react.dev,www.oracle.com,www.mongodb.com,redis.io,www.cisco.com,www.asus.com"
+        realityDestDomainList="gateway.icloud.com,swdist.apple.com,swcdn.apple.com,updates.cdn-apple.com,download-installer.cdn.mozilla.net,addons.mozilla.org,www.mozilla.org,dl.google.com,www.booking.com,www.visitcalifornia.com,www.kayak.com,www.japan.travel,www.tripadvisor.com,www.lonelyplanet.com,www.viator.com,www.nintendo.com,store.epicgames.com,www.ubisoft.com,www.aniplex.co.jp,www.gundam.info,www.crunchyroll.com,arxiv.org,www.nature.com,www.berkeley.edu,www.caltech.edu,www.princeton.edu,www.columbia.edu,www.ucla.edu,www.umich.edu,www.ox.ac.uk,www.cam.ac.uk,www.nyu.edu,www.python.org,react.dev,redis.io,www.mongodb.com,www.asus.com,www.ibm.com,www.cloudflare.com,www.atlassian.com,www.figma.com,www.notion.so,vercel.com,www.jetbrains.com,www.docker.com,www.postman.com,gitlab.com,s0.awsstatic.com,d1.awsstatic.com,m.media-amazon.com,www.century21.com,www.sothebysrealty.com,www.zillow.com,www.redfin.com,www.realtor.com,www.ericsson.com,www.netgear.com,www.tp-link.com,www.synology.com,www.qnap.com,www.digitalocean.com,www.linode.com,www.logitech.com,www.razer.com,www.seagate.com,www.vmware.com,www.sennheiser.com"
 
         echoContent skyBlue "\n====== Generate a domain name with fallback configuration , for example : [addons.mozilla.org:443] ======\n"
         echoContent green "Choose common TLS-enabled fallback domains and verify them yourself.\n"
@@ -8177,7 +8177,7 @@ menu() {
     cd "$HOME" || exit
     echoContent red "\n================================================ ================="
     echoContent green "Maintainer: dodo258"
-    echoContent green "Current version: v3.6.2"
+    echoContent green "Current version: v3.6.3"
     echoContent green "Project: https://github.com/dodo258/sbox-deploy-tool"
     echoContent green "Description: 8-in-1 customized management script\c"
     showInstallStatus

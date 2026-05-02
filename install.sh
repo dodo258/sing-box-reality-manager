@@ -11006,9 +11006,9 @@ checkRealityDest() {
 initRealityClientServersName() {
     local realityDestDomainList=
     if [[ "${coreInstallType}" == "1" || "${selectCoreType}" == "1" ]]; then
-        realityDestDomainList="gateway.icloud.com,download-installer.cdn.mozilla.net,addons.mozilla.org,dl.google.com,www.booking.com,www.visitcalifornia.com,www.kayak.com,www.nintendo.com,store.epicgames.com,www.aniplex.co.jp,www.gundam.info,www.crunchyroll.com,arxiv.org,www.nature.com,www.berkeley.edu,www.python.org,react.dev,redis.io,s0.awsstatic.com,d1.awsstatic.com,m.media-amazon.com,www.century21.com,www.sothebysrealty.com,www.caltech.edu,www.mongodb.com,www.asus.com,www.japan.travel,www.tripadvisor.com,www.zillow.com,www.redfin.com"
+        realityDestDomainList="gateway.icloud.com,swdist.apple.com,swcdn.apple.com,updates.cdn-apple.com,download-installer.cdn.mozilla.net,addons.mozilla.org,www.mozilla.org,dl.google.com,www.booking.com,www.visitcalifornia.com,www.kayak.com,www.japan.travel,www.tripadvisor.com,www.lonelyplanet.com,www.viator.com,www.nintendo.com,store.epicgames.com,www.ubisoft.com,www.aniplex.co.jp,www.gundam.info,www.crunchyroll.com,arxiv.org,www.nature.com,www.berkeley.edu,www.caltech.edu,www.princeton.edu,www.columbia.edu,www.ucla.edu,www.umich.edu,www.ox.ac.uk,www.cam.ac.uk,www.nyu.edu,www.python.org,react.dev,redis.io,www.mongodb.com,www.asus.com,www.ibm.com,www.cloudflare.com,www.atlassian.com,www.figma.com,www.notion.so,vercel.com,www.jetbrains.com,www.docker.com,www.postman.com,gitlab.com,s0.awsstatic.com,d1.awsstatic.com,m.media-amazon.com,www.century21.com,www.sothebysrealty.com,www.zillow.com,www.redfin.com,www.realtor.com,www.ericsson.com,www.netgear.com,www.tp-link.com,www.synology.com,www.qnap.com,www.digitalocean.com,www.linode.com,www.logitech.com,www.razer.com,www.seagate.com,www.vmware.com,www.sennheiser.com"
     elif [[ "${coreInstallType}" == "2" || "${selectCoreType}" == "2" ]]; then
-        realityDestDomainList="gateway.icloud.com,download-installer.cdn.mozilla.net,addons.mozilla.org,dl.google.com,www.booking.com,www.visitcalifornia.com,www.kayak.com,www.nintendo.com,store.epicgames.com,www.aniplex.co.jp,www.gundam.info,www.crunchyroll.com,arxiv.org,www.nature.com,www.berkeley.edu,www.python.org,react.dev,redis.io,s0.awsstatic.com,d1.awsstatic.com,m.media-amazon.com,www.century21.com,www.sothebysrealty.com,www.caltech.edu,www.mongodb.com,www.asus.com,www.japan.travel,www.tripadvisor.com,www.zillow.com,www.redfin.com"
+        realityDestDomainList="gateway.icloud.com,swdist.apple.com,swcdn.apple.com,updates.cdn-apple.com,download-installer.cdn.mozilla.net,addons.mozilla.org,www.mozilla.org,dl.google.com,www.booking.com,www.visitcalifornia.com,www.kayak.com,www.japan.travel,www.tripadvisor.com,www.lonelyplanet.com,www.viator.com,www.nintendo.com,store.epicgames.com,www.ubisoft.com,www.aniplex.co.jp,www.gundam.info,www.crunchyroll.com,arxiv.org,www.nature.com,www.berkeley.edu,www.caltech.edu,www.princeton.edu,www.columbia.edu,www.ucla.edu,www.umich.edu,www.ox.ac.uk,www.cam.ac.uk,www.nyu.edu,www.python.org,react.dev,redis.io,www.mongodb.com,www.asus.com,www.ibm.com,www.cloudflare.com,www.atlassian.com,www.figma.com,www.notion.so,vercel.com,www.jetbrains.com,www.docker.com,www.postman.com,gitlab.com,s0.awsstatic.com,d1.awsstatic.com,m.media-amazon.com,www.century21.com,www.sothebysrealty.com,www.zillow.com,www.redfin.com,www.realtor.com,www.ericsson.com,www.netgear.com,www.tp-link.com,www.synology.com,www.qnap.com,www.digitalocean.com,www.linode.com,www.logitech.com,www.razer.com,www.seagate.com,www.vmware.com,www.sennheiser.com"
     fi
     if [[ -n "${realityServerName}" && -z "${lastInstallationConfig}" ]]; then
         if echo ${realityDestDomainList} | grep -q "${realityServerName}"; then
@@ -11058,7 +11058,7 @@ initRealityClientServersName() {
             echoContent skyBlue "\n================ 配置客户端可用的serverNames ===============\n"
             echoContent yellow "#注意事项"
             echoContent green "Reality 目标域名建议优先使用仓库整理过的一线域名池，并自行复测可达性\n"
-            echoContent green "默认随机池已优先保留当前复测支持X25519MLKEM768的域名\n"
+            echoContent green "默认随机池已扩充，并优先保留当前复测支持X25519MLKEM768的域名\n"
             echoContent yellow "推荐文档: documents/reality_target_domains.md"
             echoContent yellow "录入示例:addons.mozilla.org:443\n"
             read -r -p "请输入目标域名，[回车]随机域名，默认端口443:" realityServerName
@@ -11349,7 +11349,7 @@ menu() {
     cd "$HOME" || exit
     echoContent red "\n=============================================================="
     echoContent green "维护：dodo258"
-    echoContent green "当前版本：v3.6.2"
+    echoContent green "当前版本：v3.6.3"
     echoContent green "项目：https://github.com/dodo258/sbox-deploy-tool"
     echoContent green "描述：多实例重构版管理脚本\c"
     showInstallStatus
