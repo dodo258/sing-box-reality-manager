@@ -6620,7 +6620,7 @@ deleteInstalledNode() {
     if removeInstalledNodeConfig "${selectedCoreType}" "${selectedProtocolType}"; then
         reloadInstalledNodeCores
         echoContent green " ---> 节点删除完成: ${selectedLabel}"
-        echoContent yellow " ---> 建议顺手执行一次 7.账号/订阅管理 -> 查看订阅，确认客户端节点列表已同步"
+        echoContent yellow " ---> 建议顺手执行一次 8.账号/订阅管理 -> 查看订阅，确认客户端节点列表已同步"
     fi
 }
 
@@ -9903,8 +9903,8 @@ selectCoreInstall() {
     echoContent skyBlue "\n功能 1/${totalProgress} : 选择核心安装"
     if [[ "${selectInstallType}" == "3" ]]; then
         echoContent yellow "# 注意：该功能会覆盖当前Reality节点并全新安装"
-        echoContent yellow "# 已有节点想继续加用户/看订阅，请返回主菜单选 7.账号/订阅管理"
-        echoContent yellow "# 同机想再加一个不同端口的节点，请返回主菜单选 12.添加新端口\n"
+        echoContent yellow "# 已有节点想继续加用户/看订阅，请返回主菜单选 8.账号/订阅管理"
+        echoContent yellow "# 同机想再加一个不同端口的节点，请返回主菜单选 13.添加新端口\n"
     fi
     echoContent red "\n=============================================================="
     echoMenuHint "1.Xray-core" "推荐：VLESS/Reality 优先选这个"
@@ -11349,7 +11349,7 @@ menu() {
     cd "$HOME" || exit
     echoContent red "\n=============================================================="
     echoContent green "维护：dodo258"
-    echoContent green "当前版本：v3.6.9"
+    echoContent green "当前版本：v3.6.10"
     echoContent green "项目：https://github.com/dodo258/sbox-deploy-tool"
     echoContent green "描述：多实例重构版管理脚本\c"
     showInstallStatus
@@ -11366,22 +11366,22 @@ menu() {
     echoContent yellow "4.Hysteria2管理"
     echoContent yellow "5.REALITY管理"
     echoContent yellow "6.Tuic管理"
-    echoMenuHint "19.多实例Reality" "部署多个独立端口节点选这个"
+    echoMenuHint "7.多实例Reality" "部署多个独立端口节点选这个"
 
     echoContent skyBlue "-------------------------工具管理-----------------------------"
-    echoContent yellow "7.账号/订阅管理"
-    echoContent yellow "8.伪装站管理"
-    echoContent yellow "9.证书管理"
-    echoContent yellow "10.CDN节点管理"
-    echoContent yellow "11.分流工具"
-    echoContent yellow "12.添加新端口"
-    echoContent yellow "13.BT下载管理"
-    echoContent yellow "14.节点管理"
-    echoContent yellow "15.域名黑名单"
+    echoContent yellow "8.账号/订阅管理"
+    echoContent yellow "9.伪装站管理"
+    echoContent yellow "10.证书管理"
+    echoContent yellow "11.CDN节点管理"
+    echoContent yellow "12.分流工具"
+    echoContent yellow "13.添加新端口"
+    echoContent yellow "14.BT下载管理"
+    echoContent yellow "15.节点管理"
+    echoContent yellow "16.域名黑名单"
     echoContent skyBlue "-------------------------版本管理-----------------------------"
-    echoContent yellow "16.core管理"
-    echoContent yellow "17.更新脚本"
-    echoContent yellow "18.安装BBR、DD脚本"
+    echoContent yellow "17.core管理"
+    echoContent yellow "18.更新脚本"
+    echoContent yellow "19.安装BBR、DD脚本"
     echoContent skyBlue "-------------------------脚本管理-----------------------------"
     echoContent yellow "20.卸载脚本"
     echoContent red "=============================================================="
@@ -11408,43 +11408,43 @@ menu() {
         manageTuic
         ;;
     7)
-        manageAccount 1
+        managedMultiRealityMenu
         ;;
     8)
-        updateNginxBlog 1
+        manageAccount 1
         ;;
     9)
-        renewalTLS 1
+        updateNginxBlog 1
         ;;
     10)
-        manageCDN 1
+        renewalTLS 1
         ;;
     11)
-        routingToolsMenu 1
+        manageCDN 1
         ;;
     12)
-        addCorePort 1
+        routingToolsMenu 1
         ;;
     13)
-        btTools 1
+        addCorePort 1
         ;;
     14)
-        manageInstalledNodes
+        btTools 1
         ;;
     15)
-        blacklist 1
+        manageInstalledNodes
         ;;
     16)
-        coreVersionManageMenu 1
+        blacklist 1
         ;;
     17)
-        updateV2RayAgent 1
+        coreVersionManageMenu 1
         ;;
     18)
-        bbrInstall
+        updateV2RayAgent 1
         ;;
     19)
-        managedMultiRealityMenu
+        bbrInstall
         ;;
     20)
         unInstall 1
