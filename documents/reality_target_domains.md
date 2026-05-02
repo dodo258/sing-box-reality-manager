@@ -138,7 +138,6 @@ www.sennheiser.com
 *   `www.cloudflare.com`
 *   `www.atlassian.com`
 *   `www.jetbrains.com`
-*   `www.docker.com`
 *   `www.postman.com`
 *   `www.vmware.com`
 
@@ -237,6 +236,7 @@ www.sennheiser.com
 *   `www.visitcalifornia.com`
 *   `www.nature.com`
 *   `react.dev`
+*   `www.docker.com`
 *   `dl.google.com`
 *   `www.tripadvisor.com`
 *   `www.lonelyplanet.com`
