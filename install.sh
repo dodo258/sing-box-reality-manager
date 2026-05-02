@@ -10901,10 +10901,10 @@ initRealityMldsa65() {
     tlsPingStatus=$?
 
     if [[ ${tlsPingStatus} -eq 124 ]]; then
-        echoContent yellow " 目标域名TLS探测超时，忽略ML-DSA-65。建议优先使用443端口的目标域名。"
+        echoContent yellow " 目标域名TLS探测超时，建议优先使用443端口的目标域名。"
         return 0
     elif [[ ${tlsPingStatus} -ne 0 || -z "${tlsPingResult}" ]]; then
-        echoContent yellow " 目标域名TLS探测失败，忽略ML-DSA-65。"
+        echoContent yellow " 目标域名TLS探测失败。"
         return 0
     fi
 
@@ -10932,10 +10932,10 @@ initRealityMldsa65() {
                 realityMldsa65=$(timeout 15 /etc/v2ray-agent/xray/xray mldsa65 2>/dev/null)
                 realityMldsa65Status=$?
                 if [[ ${realityMldsa65Status} -eq 124 ]]; then
-                    echoContent yellow " ML-DSA-65生成超时，已自动跳过。"
+                    echoContent yellow " 附加验证超时，已自动跳过。"
                     return 0
                 elif [[ ${realityMldsa65Status} -ne 0 || -z "${realityMldsa65}" ]]; then
-                    echoContent yellow " ML-DSA-65生成失败，已自动跳过。"
+                    echoContent yellow " 附加验证失败，已自动跳过。"
                     return 0
                 fi
                 realityMldsa65Seed=$(echo "${realityMldsa65}" | head -1 | awk '{print $2}')
@@ -10950,8 +10950,6 @@ initRealityMldsa65() {
         else
             echoContent green " 目标域名支持X25519MLKEM768。"
         fi
-    else
-        echoContent green " 目标域名不支持X25519MLKEM768，忽略ML-DSA-65，不影响Reality正常使用。"
     fi
 }
 # 检查reality域名是否符合
@@ -10972,9 +10970,9 @@ checkRealityDest() {
 initRealityClientServersName() {
     local realityDestDomainList=
     if [[ "${coreInstallType}" == "1" || "${selectCoreType}" == "1" ]]; then
-        realityDestDomainList="gateway.icloud.com,itunes.apple.com,download-installer.cdn.mozilla.net,addons.mozilla.org,s0.awsstatic.com,d1.awsstatic.com,images-na.ssl-images-amazon.com,m.media-amazon.com,dl.google.com,www.booking.com,www.visitcalifornia.com,www.nintendo.com,www.playstation.com,www.aniplex.co.jp,www.gundam.info,www.century21.com,www.sothebysrealty.com,arxiv.org,www.nature.com,www.stanford.edu,www.berkeley.edu,www.caltech.edu,www.python.org,react.dev,www.oracle.com,www.mongodb.com,redis.io,www.cisco.com,www.asus.com"
+        realityDestDomainList="gateway.icloud.com,download-installer.cdn.mozilla.net,addons.mozilla.org,dl.google.com,www.booking.com,www.visitcalifornia.com,www.kayak.com,www.nintendo.com,store.epicgames.com,www.aniplex.co.jp,www.gundam.info,www.crunchyroll.com,arxiv.org,www.nature.com,www.berkeley.edu,www.python.org,react.dev,redis.io,s0.awsstatic.com,d1.awsstatic.com,m.media-amazon.com,www.century21.com,www.sothebysrealty.com,www.caltech.edu,www.mongodb.com,www.asus.com,www.japan.travel,www.tripadvisor.com,www.zillow.com,www.redfin.com"
     elif [[ "${coreInstallType}" == "2" || "${selectCoreType}" == "2" ]]; then
-        realityDestDomainList="gateway.icloud.com,itunes.apple.com,download-installer.cdn.mozilla.net,addons.mozilla.org,s0.awsstatic.com,d1.awsstatic.com,images-na.ssl-images-amazon.com,m.media-amazon.com,dl.google.com,www.booking.com,www.visitcalifornia.com,www.nintendo.com,www.playstation.com,www.aniplex.co.jp,www.gundam.info,www.century21.com,www.sothebysrealty.com,arxiv.org,www.nature.com,www.stanford.edu,www.berkeley.edu,www.caltech.edu,www.python.org,react.dev,www.oracle.com,www.mongodb.com,redis.io,www.cisco.com,www.asus.com"
+        realityDestDomainList="gateway.icloud.com,download-installer.cdn.mozilla.net,addons.mozilla.org,dl.google.com,www.booking.com,www.visitcalifornia.com,www.kayak.com,www.nintendo.com,store.epicgames.com,www.aniplex.co.jp,www.gundam.info,www.crunchyroll.com,arxiv.org,www.nature.com,www.berkeley.edu,www.python.org,react.dev,redis.io,s0.awsstatic.com,d1.awsstatic.com,m.media-amazon.com,www.century21.com,www.sothebysrealty.com,www.caltech.edu,www.mongodb.com,www.asus.com,www.japan.travel,www.tripadvisor.com,www.zillow.com,www.redfin.com"
     fi
     if [[ -n "${realityServerName}" && -z "${lastInstallationConfig}" ]]; then
         if echo ${realityDestDomainList} | grep -q "${realityServerName}"; then
@@ -11024,6 +11022,7 @@ initRealityClientServersName() {
             echoContent skyBlue "\n================ 配置客户端可用的serverNames ===============\n"
             echoContent yellow "#注意事项"
             echoContent green "Reality 目标域名建议优先使用仓库整理过的一线域名池，并自行复测可达性\n"
+            echoContent green "默认随机池已优先保留当前复测支持X25519MLKEM768的域名\n"
             echoContent yellow "推荐文档: documents/reality_target_domains.md"
             echoContent yellow "录入示例:addons.mozilla.org:443\n"
             read -r -p "请输入目标域名，[回车]随机域名，默认端口443:" realityServerName
@@ -11314,7 +11313,7 @@ menu() {
     cd "$HOME" || exit
     echoContent red "\n=============================================================="
     echoContent green "维护：dodo258"
-    echoContent green "当前版本：v3.6.0"
+    echoContent green "当前版本：v3.6.1"
     echoContent green "项目：https://github.com/dodo258/sbox-deploy-tool"
     echoContent green "描述：多实例重构版管理脚本\c"
     showInstallStatus
