@@ -7903,7 +7903,7 @@ initRealityDest() {
         realityDestDomain=${domain}:${port}
     else
         local realityDestDomainList=
-        realityDestDomainList="gateway.icloud.com,download-installer.cdn.mozilla.net,addons.mozilla.org,www.mozilla.org,www.booking.com,www.kayak.com,www.japan.travel,www.nintendo.com,store.epicgames.com,www.aniplex.co.jp,www.gundam.info,arxiv.org,www.berkeley.edu,www.caltech.edu,www.princeton.edu,www.columbia.edu,www.ucla.edu,www.umich.edu,www.ox.ac.uk,www.cam.ac.uk,www.nyu.edu,www.python.org,redis.io,www.mongodb.com,www.asus.com,www.ibm.com,www.cloudflare.com,www.atlassian.com,www.jetbrains.com,www.postman.com,s0.awsstatic.com,d1.awsstatic.com,m.media-amazon.com,www.century21.com,www.sothebysrealty.com,www.zillow.com,www.redfin.com,www.realtor.com,www.ericsson.com,www.netgear.com,www.tp-link.com,www.synology.com,www.qnap.com,www.logitech.com,www.seagate.com,www.vmware.com,www.sennheiser.com"
+        realityDestDomainList="gateway.icloud.com,download-installer.cdn.mozilla.net,addons.mozilla.org,www.mozilla.org,www.booking.com,www.kayak.com,www.japan.travel,store.epicgames.com,www.aniplex.co.jp,www.gundam.info,www.berkeley.edu,www.caltech.edu,www.princeton.edu,www.columbia.edu,www.ucla.edu,www.umich.edu,www.ox.ac.uk,www.cam.ac.uk,www.nyu.edu,redis.io,www.mongodb.com,www.asus.com,www.ibm.com,www.cloudflare.com,www.atlassian.com,www.jetbrains.com,www.postman.com,s0.awsstatic.com,d1.awsstatic.com,m.media-amazon.com,www.century21.com,www.sothebysrealty.com,www.zillow.com,www.realtor.com,www.ericsson.com,www.netgear.com,www.tp-link.com,www.synology.com,www.qnap.com,www.logitech.com,www.seagate.com,www.vmware.com,www.sennheiser.com"
 
         echoContent skyBlue "\n====== Generate a domain name with fallback configuration , for example : [addons.mozilla.org:443] ======\n"
         echoContent green "Choose common TLS-enabled fallback domains and verify them yourself.\n"
@@ -8177,7 +8177,7 @@ menu() {
     cd "$HOME" || exit
     echoContent red "\n================================================ ================="
     echoContent green "Maintainer: dodo258"
-    echoContent green "Current version: v3.6.7"
+    echoContent green "Current version: v3.6.8"
     echoContent green "Project: https://github.com/dodo258/sbox-deploy-tool"
     echoContent green "Description: 8-in-1 customized management script\c"
     showInstallStatus
