@@ -3989,7 +3989,7 @@ managedMultiRealityMenu() {
     echoContent yellow "# 当前版本按当前已安装核心工作，不涉及双核心同时托管"
     echoContent yellow "1.部署新的独立节点"
     echoContent yellow "2.查看已部署节点"
-    echoContent yellow "3.查看某个节点账号"
+    echoMenuHint "3.查看某个节点账号" "多实例其他节点在这里看"
     echoContent yellow "4.给某个节点添加用户"
     echoContent yellow "5.删除某个节点用户"
     echoContent yellow "6.删除某个节点"
@@ -11623,7 +11623,7 @@ menu() {
     echoMenuHint "7.多实例Reality" "先装一个主节点再用这个"
 
     echoContent skyBlue "-------------------------工具管理-----------------------------"
-    echoContent yellow "8.账号/订阅管理"
+    echoMenuHint "8.账号/订阅管理" "主节点账号在这里看"
     echoContent yellow "9.伪装站管理"
     echoContent yellow "10.证书管理"
     echoContent yellow "11.CDN节点管理"
