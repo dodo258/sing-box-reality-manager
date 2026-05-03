@@ -2,7 +2,14 @@
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 
-这是一个 AGPL-3.0 魔改版分支仓库。它以稳定的 `dodo258-v2ray-agent` 单实例脚本为基线，单独演进“多实例 Reality 节点管理”能力，避免影响原仓库里已经稳定的单实例安装流程。
+这是一个 AGPL-3.0 魔改版分支仓库。它以稳定的 `dodo258-v2ray-agent` 单实例脚本为基线，单独演进 `sing-box` 优先的多实例 Reality 节点管理能力，避免影响原仓库里已经稳定的单实例安装流程。
+
+当前这版已经可以作为长期使用的稳定版：
+
+* 主节点部署、账号管理、节点管理可正常使用
+* 多实例 Reality 节点可独立部署、查看、删用户、删节点
+* `sing-box` 下主节点和多实例节点都支持节点级 DNS 分流
+* 服务由 `systemd` 托管，机器重启后会自动拉起
 
 ## 魔改说明
 
@@ -20,13 +27,14 @@
 *   提供菜单式安装、管理、订阅与分流配置
 *   保留域名黑名单、BT 下载限制等能力
 *   新增 `7.多实例Reality`，可在当前核心下部署多个独立端口的 Reality 节点
-*   `12.分流工具 -> 5.DNS分流` 新增多实例节点级 DNS 分流入口
+*   `12.分流工具 -> 5.DNS分流` 支持 `sing-box` 主节点和多实例节点的节点级 DNS 分流
 
 ## 当前建议
 
 *   多实例优先推荐 `sing-box`
 *   `Xray-core` 保留兼容旧功能时使用
 *   多实例 Reality 需要先安装一个主节点，再继续部署其他独立节点
+*   流媒体专用节点优先用 `sing-box + 节点级 DNS 分流`
 
 ## 多实例说明
 
@@ -38,9 +46,16 @@
 
 ## DNS 分流说明
 
-*   `12.分流工具 -> 5.DNS分流` 现在分成“全局”和“多实例节点”两类入口
-*   `sing-box` 多实例 Reality 支持先选节点，再只给该节点绑定 DNS 分流
+*   `12.分流工具 -> 5.DNS分流` 现在分成“全局”和“Reality 节点”两类入口
+*   `sing-box` 支持先选节点，再只给该节点绑定 DNS 分流
+*   可直接录入 `netflix,disney,hulu,openai` 这类关键词，脚本会自动转成对应规则集
 *   `Xray-core` 目前仍然只有核心级全局 DNS 分流，不支持在同一进程里按多个 Reality 节点分别指定不同上游 DNS
+
+## 已知边界
+
+*   `Xray-core` 不支持像 `sing-box` 那样按不同 Reality 节点分别指定不同上游 DNS
+*   Reality 目标域名、流媒体规则集、上游解锁 DNS 都依赖外部环境，后续若外部策略变化，仍可能需要调整域名池或 DNS
+*   `13.添加新端口` 是给已有节点补入口，不是新建独立节点
 
 ## 安装
 
@@ -71,6 +86,7 @@ vasma
 
 *   [Reality 目标域名推荐](documents/reality_target_domains.md)
 *   [多实例 Reality 使用说明](documents/multi_instance_reality.md)
+*   [备份与恢复说明](documents/backup_and_restore.md)
 
 ## 反馈
 
