@@ -3660,12 +3660,33 @@ writeManagedMultiRealitySingBoxDNSRoutingConfig() {
   },
   "route": {
     "default_domain_resolver": "local",
+    "rules": [
+      {
+        "inbound": [
+          "${inboundTag}"
+        ],
+        "rule_set": ${ruleSetTag},
+        "domain_regex": ${domainRules},
+        "action": "resolve",
+        "server": "${dnsTag}",
+        "strategy": "prefer_ipv4"
+      },
+      {
+        "inbound": [
+          "${inboundTag}"
+        ],
+        "action": "resolve",
+        "strategy": "prefer_ipv4"
+      }
+    ],
     "rule_set": ${ruleSet}
   }
 }
 EOF
     jq 'if .dns.rules[0].rule_set == [] then del(.dns.rules[0].rule_set) else . end |
         if .dns.rules[0].domain_regex == [] then del(.dns.rules[0].domain_regex) else . end |
+        if .route.rules[0].rule_set == [] then del(.route.rules[0].rule_set) else . end |
+        if .route.rules[0].domain_regex == [] then del(.route.rules[0].domain_regex) else . end |
         if .route.rule_set == [] then del(.route.rule_set) else . end' "${file}" >"${file}.tmp" && mv "${file}.tmp" "${file}"
 }
 
@@ -11599,7 +11620,7 @@ menu() {
     cd "$HOME" || exit
     echoContent red "\n=============================================================="
     echoContent green "维护：dodo258"
-    echoContent green "当前版本：v3.6.15"
+    echoContent green "当前版本：v3.6.16"
     echoContent green "项目：https://github.com/dodo258/sing-box-reality-manager"
     echoContent green "描述：多实例重构版管理脚本\c"
     showInstallStatus
