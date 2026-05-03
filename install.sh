@@ -3267,6 +3267,15 @@ managedMultiRealityNodeLabels=()
 managedMultiRealityNodePorts=()
 managedMultiRealityNodeTargets=()
 managedMultiRealityNodeUserCounts=()
+managedMultiRealitySelectedDisplayName=
+singBoxRealityDNSNodeFiles=()
+singBoxRealityDNSNodeIds=()
+singBoxRealityDNSNodeDisplayNames=()
+singBoxRealityDNSNodeLabels=()
+singBoxRealityDNSNodePorts=()
+singBoxRealityDNSNodeTargets=()
+singBoxRealityDNSNodeInboundTags=()
+singBoxRealityDNSNodeDNSFiles=()
 
 listManagedMultiRealityFiles() {
     if [[ "${coreInstallType}" == "1" ]]; then
@@ -3294,6 +3303,10 @@ getManagedMultiRealityDNSConfigFileById() {
     if [[ "${coreInstallType}" == "2" ]]; then
         echo "/etc/v2ray-agent/sing-box/conf/config/${managedMultiRealityDNSPrefix}${nodeId}.json"
     fi
+}
+
+getSingBoxMainRealityDNSConfigFile() {
+    echo "/etc/v2ray-agent/sing-box/conf/config/31_VLESS_vision_reality_dns_main.json"
 }
 
 getManagedMultiRealityInboundTag() {
@@ -3403,9 +3416,94 @@ selectManagedMultiRealityNode() {
     managedMultiRealityNodeIndex=$((managedMultiRealityNodeIndex - 1))
     managedMultiRealitySelectedFile="${managedMultiRealityNodeFiles[${managedMultiRealityNodeIndex}]}"
     managedMultiRealitySelectedId="${managedMultiRealityNodeIds[${managedMultiRealityNodeIndex}]}"
+    managedMultiRealitySelectedDisplayName="${managedMultiRealitySelectedId}"
     managedMultiRealitySelectedPort="${managedMultiRealityNodePorts[${managedMultiRealityNodeIndex}]}"
     managedMultiRealitySelectedTarget="${managedMultiRealityNodeTargets[${managedMultiRealityNodeIndex}]}"
     managedMultiRealitySelectedInboundTag="$(getManagedMultiRealityInboundTag "${managedMultiRealitySelectedFile}")"
+}
+
+buildSingBoxRealityDNSEntries() {
+    singBoxRealityDNSNodeFiles=()
+    singBoxRealityDNSNodeIds=()
+    singBoxRealityDNSNodeDisplayNames=()
+    singBoxRealityDNSNodeLabels=()
+    singBoxRealityDNSNodePorts=()
+    singBoxRealityDNSNodeTargets=()
+    singBoxRealityDNSNodeInboundTags=()
+    singBoxRealityDNSNodeDNSFiles=()
+
+    if [[ "${coreInstallType}" != "2" ]]; then
+        return
+    fi
+
+    local index=0
+    local mainFile="${singBoxConfigPath}07_VLESS_vision_reality_inbounds.json"
+    if [[ -f "${mainFile}" ]]; then
+        local dnsConfigFile=
+        local dnsServer=
+        local dnsSummary=
+        dnsConfigFile=$(getSingBoxMainRealityDNSConfigFile)
+        if [[ -f "${dnsConfigFile}" ]]; then
+            dnsServer=$(readManagedMultiRealityDNSServer "${dnsConfigFile}")
+            if [[ -n "${dnsServer}" ]]; then
+                dnsSummary=" DNS:${dnsServer}"
+            else
+                dnsSummary=" DNS:已配置"
+            fi
+        fi
+
+        singBoxRealityDNSNodeFiles[index]="${mainFile}"
+        singBoxRealityDNSNodeIds[index]="main_reality"
+        singBoxRealityDNSNodeDisplayNames[index]="主节点"
+        singBoxRealityDNSNodePorts[index]="$(jq -r '.inbounds[0].listen_port // ""' "${mainFile}")"
+        singBoxRealityDNSNodeTargets[index]="$(jq -r '.inbounds[0].tls.reality.handshake.server // ""' "${mainFile}")":"$(jq -r '.inbounds[0].tls.reality.handshake.server_port // ""' "${mainFile}")"
+        singBoxRealityDNSNodeInboundTags[index]="$(getManagedMultiRealityInboundTag "${mainFile}")"
+        singBoxRealityDNSNodeDNSFiles[index]="${dnsConfigFile}"
+        singBoxRealityDNSNodeLabels[index]="主节点 端口:${singBoxRealityDNSNodePorts[${index}]} 目标:${singBoxRealityDNSNodeTargets[${index}]} 用户:$(jq -r '.inbounds[0].users | length' "${mainFile}")${dnsSummary}"
+        index=$((index + 1))
+    fi
+
+    buildManagedMultiRealityEntries
+    local multiIndex=0
+    for multiIndex in "${!managedMultiRealityNodeFiles[@]}"; do
+        singBoxRealityDNSNodeFiles[index]="${managedMultiRealityNodeFiles[${multiIndex}]}"
+        singBoxRealityDNSNodeIds[index]="${managedMultiRealityNodeIds[${multiIndex}]}"
+        singBoxRealityDNSNodeDisplayNames[index]="${managedMultiRealityNodeIds[${multiIndex}]}"
+        singBoxRealityDNSNodeLabels[index]="${managedMultiRealityNodeLabels[${multiIndex}]}"
+        singBoxRealityDNSNodePorts[index]="${managedMultiRealityNodePorts[${multiIndex}]}"
+        singBoxRealityDNSNodeTargets[index]="${managedMultiRealityNodeTargets[${multiIndex}]}"
+        singBoxRealityDNSNodeInboundTags[index]="$(getManagedMultiRealityInboundTag "${managedMultiRealityNodeFiles[${multiIndex}]}")"
+        singBoxRealityDNSNodeDNSFiles[index]="$(getManagedMultiRealityDNSConfigFileById "${managedMultiRealityNodeIds[${multiIndex}]}")"
+        index=$((index + 1))
+    done
+}
+
+selectSingBoxRealityDNSNode() {
+    local actionLabel=$1
+    buildSingBoxRealityDNSEntries
+    if [[ ${#singBoxRealityDNSNodeFiles[@]} -eq 0 ]]; then
+        echoContent yellow " ---> 当前没有可配置节点级 DNS 分流的 sing-box Reality 节点"
+        exit 0
+    fi
+
+    echoContent yellow "\n请选择要${actionLabel}的 sing-box Reality 节点"
+    local index=0
+    for index in "${!singBoxRealityDNSNodeFiles[@]}"; do
+        echoContent green "$((index + 1)).${singBoxRealityDNSNodeLabels[${index}]}"
+    done
+    read -r -p "请选择节点编号:" managedMultiRealityNodeIndex
+    if ! [[ "${managedMultiRealityNodeIndex}" =~ ^[0-9]+$ ]] || ((managedMultiRealityNodeIndex < 1 || managedMultiRealityNodeIndex > ${#singBoxRealityDNSNodeFiles[@]})); then
+        echoContent red " ---> 选择错误"
+        exit 0
+    fi
+    managedMultiRealityNodeIndex=$((managedMultiRealityNodeIndex - 1))
+    managedMultiRealitySelectedFile="${singBoxRealityDNSNodeFiles[${managedMultiRealityNodeIndex}]}"
+    managedMultiRealitySelectedId="${singBoxRealityDNSNodeIds[${managedMultiRealityNodeIndex}]}"
+    managedMultiRealitySelectedDisplayName="${singBoxRealityDNSNodeDisplayNames[${managedMultiRealityNodeIndex}]}"
+    managedMultiRealitySelectedPort="${singBoxRealityDNSNodePorts[${managedMultiRealityNodeIndex}]}"
+    managedMultiRealitySelectedTarget="${singBoxRealityDNSNodeTargets[${managedMultiRealityNodeIndex}]}"
+    managedMultiRealitySelectedInboundTag="${singBoxRealityDNSNodeInboundTags[${managedMultiRealityNodeIndex}]}"
+    managedMultiRealitySelectedDNSConfigFile="${singBoxRealityDNSNodeDNSFiles[${managedMultiRealityNodeIndex}]}"
 }
 
 promptManagedMultiRealityPort() {
@@ -3692,42 +3790,44 @@ EOF
 
 selectManagedMultiRealityNodeWithDNS() {
     local actionLabel=$1
-    buildManagedMultiRealityEntries
-    if [[ ${#managedMultiRealityNodeFiles[@]} -eq 0 ]]; then
-        echoContent yellow " ---> 当前没有已部署的多实例 Reality 节点"
+    buildSingBoxRealityDNSEntries
+    if [[ ${#singBoxRealityDNSNodeFiles[@]} -eq 0 ]]; then
+        echoContent yellow " ---> 当前没有已部署的 sing-box Reality 节点"
         exit 0
     fi
 
     local matchedNodeFiles=()
     local matchedNodeIds=()
+    local matchedNodeDisplayNames=()
     local matchedNodeLabels=()
     local matchedNodePorts=()
     local matchedNodeTargets=()
     local matchedNodeInboundTags=()
     local matchedNodeDNSFiles=()
     local index=0
-    for index in "${!managedMultiRealityNodeFiles[@]}"; do
+    for index in "${!singBoxRealityDNSNodeFiles[@]}"; do
         local dnsConfigFile=
-        dnsConfigFile=$(getManagedMultiRealityDNSConfigFileById "${managedMultiRealityNodeIds[${index}]}")
+        dnsConfigFile="${singBoxRealityDNSNodeDNSFiles[${index}]}"
         if [[ -n "${dnsConfigFile}" && -f "${dnsConfigFile}" ]]; then
-            matchedNodeFiles+=("${managedMultiRealityNodeFiles[${index}]}")
-            matchedNodeIds+=("${managedMultiRealityNodeIds[${index}]}")
-            matchedNodeLabels+=("${managedMultiRealityNodeLabels[${index}]}")
-            matchedNodePorts+=("${managedMultiRealityNodePorts[${index}]}")
-            matchedNodeTargets+=("${managedMultiRealityNodeTargets[${index}]}")
-            matchedNodeInboundTags+=("$(getManagedMultiRealityInboundTag "${managedMultiRealityNodeFiles[${index}]}")")
+            matchedNodeFiles+=("${singBoxRealityDNSNodeFiles[${index}]}")
+            matchedNodeIds+=("${singBoxRealityDNSNodeIds[${index}]}")
+            matchedNodeDisplayNames+=("${singBoxRealityDNSNodeDisplayNames[${index}]}")
+            matchedNodeLabels+=("${singBoxRealityDNSNodeLabels[${index}]}")
+            matchedNodePorts+=("${singBoxRealityDNSNodePorts[${index}]}")
+            matchedNodeTargets+=("${singBoxRealityDNSNodeTargets[${index}]}")
+            matchedNodeInboundTags+=("${singBoxRealityDNSNodeInboundTags[${index}]}")
             matchedNodeDNSFiles+=("${dnsConfigFile}")
         fi
     done
 
     if [[ ${#matchedNodeFiles[@]} -eq 0 ]]; then
-        echoContent yellow " ---> 当前没有已配置节点级 DNS 分流的多实例 Reality 节点"
+        echoContent yellow " ---> 当前没有已配置节点级 DNS 分流的 sing-box Reality 节点"
         exit 0
     fi
 
-    echoContent yellow "\n请选择要${actionLabel}的多实例 Reality 节点"
+    echoContent yellow "\n请选择要${actionLabel}的 sing-box Reality 节点"
     for index in "${!matchedNodeFiles[@]}"; do
-        echoContent green "$((index + 1)).${matchedNodeIds[${index}]} ${matchedNodeLabels[${index}]}"
+        echoContent green "$((index + 1)).${matchedNodeLabels[${index}]}"
     done
     read -r -p "请选择节点编号:" managedMultiRealityNodeIndex
     if ! [[ "${managedMultiRealityNodeIndex}" =~ ^[0-9]+$ ]] || ((managedMultiRealityNodeIndex < 1 || managedMultiRealityNodeIndex > ${#matchedNodeFiles[@]})); then
@@ -3737,6 +3837,7 @@ selectManagedMultiRealityNodeWithDNS() {
     managedMultiRealityNodeIndex=$((managedMultiRealityNodeIndex - 1))
     managedMultiRealitySelectedFile="${matchedNodeFiles[${managedMultiRealityNodeIndex}]}"
     managedMultiRealitySelectedId="${matchedNodeIds[${managedMultiRealityNodeIndex}]}"
+    managedMultiRealitySelectedDisplayName="${matchedNodeDisplayNames[${managedMultiRealityNodeIndex}]}"
     managedMultiRealitySelectedPort="${matchedNodePorts[${managedMultiRealityNodeIndex}]}"
     managedMultiRealitySelectedTarget="${matchedNodeTargets[${managedMultiRealityNodeIndex}]}"
     managedMultiRealitySelectedInboundTag="${matchedNodeInboundTags[${managedMultiRealityNodeIndex}]}"
@@ -3745,12 +3846,12 @@ selectManagedMultiRealityNodeWithDNS() {
 
 setManagedMultiRealityDNSRouting() {
     if [[ "${coreInstallType}" != "2" ]]; then
-        echoContent red " ---> 当前仅支持 sing-box 多实例 Reality 节点按节点配置 DNS 分流"
+        echoContent red " ---> 当前仅支持 sing-box Reality 节点按节点配置 DNS 分流"
         echoContent yellow " ---> Xray-core 现阶段仍是核心级 DNS 分流，不支持同一进程内按多个 Reality 节点分别指定上游 DNS"
         exit 0
     fi
 
-    selectManagedMultiRealityNode "配置节点级 DNS 分流"
+    selectSingBoxRealityDNSNode "配置节点级 DNS 分流"
     if [[ -z "${managedMultiRealitySelectedInboundTag}" ]]; then
         echoContent red " ---> 节点入站标签读取失败"
         exit 0
@@ -3759,7 +3860,7 @@ setManagedMultiRealityDNSRouting() {
     local setDNS=
     local domainList=
     local dnsConfigFile=
-    dnsConfigFile=$(getManagedMultiRealityDNSConfigFileById "${managedMultiRealitySelectedId}")
+    dnsConfigFile="${managedMultiRealitySelectedDNSConfigFile}"
     if [[ -f "${dnsConfigFile}" ]]; then
         echoContent yellow " ---> 当前节点已存在节点级 DNS 分流配置，继续会直接覆盖"
         read -r -p "是否继续覆盖？[y/n]:" managedMultiRealityDNSOverwrite
@@ -3789,19 +3890,19 @@ setManagedMultiRealityDNSRouting() {
     addSingBoxOutbound 01_direct_outbound
     writeManagedMultiRealitySingBoxDNSRoutingConfig "${dnsConfigFile}" "${managedMultiRealitySelectedInboundTag}" "${setDNS}" "${domainList}" "${managedMultiRealitySelectedId}"
     handleSingBox restart
-    echoContent green " ---> 节点级 DNS 分流配置成功: ${managedMultiRealitySelectedId}"
+    echoContent green " ---> 节点级 DNS 分流配置成功: ${managedMultiRealitySelectedDisplayName}"
 }
 
 removeManagedMultiRealityDNSRouting() {
     if [[ "${coreInstallType}" != "2" ]]; then
-        echoContent red " ---> 当前仅支持 sing-box 多实例 Reality 节点按节点卸载 DNS 分流"
+        echoContent red " ---> 当前仅支持 sing-box Reality 节点按节点卸载 DNS 分流"
         exit 0
     fi
 
     selectManagedMultiRealityNodeWithDNS "卸载节点级 DNS 分流"
     rm -f "${managedMultiRealitySelectedDNSConfigFile}"
     handleSingBox restart
-    echoContent green " ---> 已卸载节点级 DNS 分流: ${managedMultiRealitySelectedId}"
+    echoContent green " ---> 已卸载节点级 DNS 分流: ${managedMultiRealitySelectedDisplayName}"
 }
 
 deployManagedMultiRealityNode() {
@@ -9652,15 +9753,15 @@ dnsRouting() {
     echoContent red "\n=============================================================="
     echoContent yellow "# 注意事项"
     echoContent yellow "# 使用说明：请参考仓库 README \n"
-    echoContent yellow "# 多实例节点级 DNS 分流当前仅支持 sing-box，多实例节点可单独指定上游 DNS\n"
+    echoContent yellow "# sing-box Reality 节点级 DNS 分流支持主节点和多实例节点，节点可单独指定上游 DNS\n"
     if [[ "${coreInstallType}" == "1" ]]; then
         echoContent yellow "# 当前核心为 Xray-core，节点级 DNS 分流暂不可用，仅支持全局 DNS 分流\n"
     fi
 
     echoContent yellow "1.全局添加"
     echoContent yellow "2.全局卸载"
-    echoContent yellow "3.多实例节点添加"
-    echoContent yellow "4.多实例节点卸载"
+    echoContent yellow "3.Reality节点添加"
+    echoContent yellow "4.Reality节点卸载"
     read -r -p "请选择:" selectType
 
     case ${selectType} in
@@ -11620,7 +11721,7 @@ menu() {
     cd "$HOME" || exit
     echoContent red "\n=============================================================="
     echoContent green "维护：dodo258"
-    echoContent green "当前版本：v3.6.16"
+    echoContent green "当前版本：v3.6.17"
     echoContent green "项目：https://github.com/dodo258/sing-box-reality-manager"
     echoContent green "描述：多实例重构版管理脚本\c"
     showInstallStatus
