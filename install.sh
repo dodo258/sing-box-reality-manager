@@ -738,12 +738,10 @@ allowPort() {
         type=tcp
     fi
     # 如果防火墙启动状态则添加相应的开放端口
-    if command -v dpkg >/dev/null 2>&1 && dpkg -l | grep -q "^[[:space:]]*ii[[:space:]]\+ufw"; then
-        if ufw status | grep -q "Status: active"; then
-            if ! ufw status | grep -q "$1/${type}"; then
-                sudo ufw allow "$1/${type}"
-                checkUFWAllowPort "$1"
-            fi
+    if command -v dpkg >/dev/null 2>&1 && dpkg -l | grep -q "^[[:space:]]*ii[[:space:]]\+ufw" && ufw status | grep -q "Status: active"; then
+        if ! ufw status | grep -q "$1/${type}"; then
+            sudo ufw allow "$1/${type}"
+            checkUFWAllowPort "$1"
         fi
     elif systemctl status firewalld 2>/dev/null | grep -q "active (running)"; then
         local updateFirewalldStatus=
@@ -760,12 +758,10 @@ allowPort() {
         if echo "${updateFirewalldStatus}" | grep -q "true"; then
             firewall-cmd --reload
         fi
-    elif rc-update show 2>/dev/null | grep -q ufw; then
-        if ufw status | grep -q "Status: active"; then
-            if ! ufw status | grep -q "$1/${type}"; then
-                sudo ufw allow "$1/${type}"
-                checkUFWAllowPort "$1"
-            fi
+    elif rc-update show 2>/dev/null | grep -q ufw && ufw status | grep -q "Status: active"; then
+        if ! ufw status | grep -q "$1/${type}"; then
+            sudo ufw allow "$1/${type}"
+            checkUFWAllowPort "$1"
         fi
     elif dpkg -l | grep -q "^[[:space:]]*ii[[:space:]]\+netfilter-persistent" && systemctl status netfilter-persistent 2>/dev/null | grep -q "active (exited)"; then
         local updateFirewalldStatus=
@@ -11603,7 +11599,7 @@ menu() {
     cd "$HOME" || exit
     echoContent red "\n=============================================================="
     echoContent green "维护：dodo258"
-    echoContent green "当前版本：v3.6.14"
+    echoContent green "当前版本：v3.6.15"
     echoContent green "项目：https://github.com/dodo258/sing-box-reality-manager"
     echoContent green "描述：多实例重构版管理脚本\c"
     showInstallStatus
