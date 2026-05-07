@@ -18,6 +18,12 @@ managedMultiRealityPrefix="30_VLESS_vision_reality_multi_"
 managedMultiRealityDNSPrefix="31_VLESS_vision_reality_multi_dns_"
 managedMultiRealityShortID="6ba85179e30d4fc2"
 managedMultiRealityKeySuffix=".key"
+websiteManagerRoot="/etc/v2ray-agent/website-manager"
+websiteMetadataFile="${websiteManagerRoot}/site.env"
+websiteActiveDomainFile="${websiteManagerRoot}/active_domain"
+websitePublishLog="${websiteManagerRoot}/publish.log"
+websiteCronTag="WebsitePublish"
+websiteNginxConfigName="website_manager.conf"
 
 echoContent() {
     case $1 in
@@ -167,6 +173,10 @@ initVar() {
 
     # 域名
     domain=
+    websiteDomain=
+    websiteType=
+    websiteTitle=
+    websiteDescription=
     # 安装总进度
     totalProgress=1
 
@@ -2357,6 +2367,1112 @@ nginxBlog() {
         echoContent green " ---> 添加伪装站点成功"
     fi
 
+}
+
+websiteSetPaths() {
+    if [[ -z "$1" ]]; then
+        return 1
+    fi
+    websiteDomain="$1"
+    websiteSiteRoot="${websiteManagerRoot}/sites/${websiteDomain}/public"
+    websiteContentRoot="${websiteManagerRoot}/sites/${websiteDomain}/content"
+    websitePendingRoot="${websiteContentRoot}/pending"
+    websitePublishedRoot="${websiteContentRoot}/published"
+    websiteNginxConfigPath="${nginxConfigPath}${websiteNginxConfigName}"
+}
+
+websiteEnsureManagerDirs() {
+    mkdir -p "${websiteManagerRoot}" >/dev/null 2>&1
+}
+
+websiteLoadMetadata() {
+    if [[ -f "${websiteMetadataFile}" ]]; then
+        # shellcheck disable=SC1090
+        . "${websiteMetadataFile}"
+        websiteSetPaths "${websiteDomain}"
+        return 0
+    fi
+    return 1
+}
+
+websiteSaveMetadata() {
+    websiteEnsureManagerDirs
+    cat <<EOF >"${websiteMetadataFile}"
+websiteDomain='${websiteDomain}'
+websiteType='${websiteType}'
+websiteTitle='${websiteTitle}'
+websiteDescription='${websiteDescription}'
+EOF
+    echo "${websiteDomain}" >"${websiteActiveDomainFile}"
+}
+
+websiteEnsureNginxInstalled() {
+    if ! command -v nginx >/dev/null 2>&1; then
+        echoContent yellow "\n ---> 未检测到Nginx，开始安装"
+        installNginxTools
+    fi
+}
+
+websiteCheckPortConflict() {
+    local conflictLog=
+    if command -v lsof >/dev/null 2>&1; then
+        conflictLog=$(lsof -nP -iTCP:80 -sTCP:LISTEN 2>/dev/null; lsof -nP -iTCP:443 -sTCP:LISTEN 2>/dev/null)
+        if echo "${conflictLog}" | grep -E "xray|sing-box|caddy" >/dev/null 2>&1; then
+            echoContent red "\n ---> 检测到80或443被xray/sing-box/caddy直接占用，当前网站管理无法安全接管"
+            echoContent yellow " ---> 请保持节点使用随机端口，或先手动释放80/443后再部署网站"
+            echoContent yellow "${conflictLog}"
+            exit 0
+        fi
+    elif command -v ss >/dev/null 2>&1; then
+        conflictLog=$(ss -ltnp 2>/dev/null | grep -E '(:80 |:443 )')
+        if echo "${conflictLog}" | grep -E "xray|sing-box|caddy" >/dev/null 2>&1; then
+            echoContent red "\n ---> 检测到80或443被xray/sing-box/caddy直接占用，当前网站管理无法安全接管"
+            echoContent yellow " ---> 请保持节点使用随机端口，或先手动释放80/443后再部署网站"
+            echoContent yellow "${conflictLog}"
+            exit 0
+        fi
+    fi
+}
+
+websitePromptDomain() {
+    local reuseStatus=
+    websiteLoadMetadata >/dev/null 2>&1
+    if [[ -n "${websiteDomain}" ]]; then
+        echoContent yellow "\n检测到当前网站域名：${websiteDomain}"
+        read -r -p "是否继续使用这个域名？[y/n]:" reuseStatus
+        if [[ "${reuseStatus}" == "y" ]]; then
+            return 0
+        fi
+    fi
+
+    echoContent yellow "\n# 网站部署引导"
+    echoContent yellow "1. 请提前把域名A记录解析到当前服务器"
+    echoContent yellow "2. 网站会使用真实HTTPS证书"
+    echoContent yellow "3. 节点请继续使用随机端口，网站使用80/443\n"
+    read -r -p "请输入网站域名[例: blog.example.com]:" websiteDomain
+    if [[ -z "${websiteDomain}" ]] || ! echo "${websiteDomain}" | grep -q "\."; then
+        echoContent red " ---> 域名格式不正确，请重新输入"
+        websitePromptDomain
+        return
+    fi
+    websiteSetPaths "${websiteDomain}"
+}
+
+websiteWriteFavicon() {
+    printf '%s' 'AAABAAEAEBAAAAEAIABpAAAAFgAAAIlQTkcNChoKAAAADUlIRFIAAAAQAAAAEAgGAAAAH/P/YQAAADBJREFUeJxjkLZL/E8JZqCaAaQCrAYQayvtDYjc9h8rHjWAngYMXDqgKClTnJnIxQA1WExzxDwlegAAAABJRU5ErkJggg==' | base64 -d >"${websiteSiteRoot}/favicon.ico"
+}
+
+websiteWriteRobots() {
+    cat <<EOF >"${websiteSiteRoot}/robots.txt"
+User-agent: *
+Allow: /
+
+Sitemap: https://${websiteDomain}/sitemap.xml
+EOF
+}
+
+websiteWriteCommonAssets() {
+    mkdir -p "${websiteSiteRoot}/assets" >/dev/null 2>&1
+    cat <<'EOF' >"${websiteSiteRoot}/assets/style.css"
+:root {
+  --bg: #f5f7fb;
+  --surface: #ffffff;
+  --line: #dbe3ef;
+  --text: #1f2d3d;
+  --muted: #5a6b7f;
+  --brand: #1565c0;
+  --brand-soft: #e8f1fb;
+  --accent: #0d9488;
+  --shadow: 0 12px 30px rgba(18, 40, 72, 0.08);
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); font: 16px/1.7 "PingFang SC","Microsoft YaHei","Noto Sans SC",sans-serif; }
+a { color: var(--brand); text-decoration: none; }
+a:hover { text-decoration: underline; }
+img { max-width: 100%; }
+.site-shell { max-width: 1080px; margin: 0 auto; padding: 0 24px 64px; }
+.site-header { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 28px 0; border-bottom: 1px solid var(--line); }
+.brand { font-size: 24px; font-weight: 700; color: var(--text); }
+.nav { display: flex; gap: 18px; flex-wrap: wrap; }
+.nav a { color: var(--muted); font-weight: 600; }
+.hero { padding: 56px 0 28px; }
+.hero h1 { margin: 0 0 12px; font-size: 40px; line-height: 1.2; }
+.hero p { margin: 0; color: var(--muted); max-width: 760px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 20px; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 20px; padding: 24px; box-shadow: var(--shadow); }
+.card h2, .card h3 { margin-top: 0; }
+.badge { display: inline-flex; align-items: center; padding: 6px 12px; border-radius: 999px; background: var(--brand-soft); color: var(--brand); font-size: 13px; font-weight: 700; }
+.section-title { margin: 40px 0 18px; font-size: 24px; }
+.post-list { display: grid; gap: 16px; }
+.post-item { background: var(--surface); border: 1px solid var(--line); border-radius: 18px; padding: 22px; box-shadow: var(--shadow); }
+.post-item h3 { margin: 0 0 8px; font-size: 22px; }
+.post-item p { margin: 0; color: var(--muted); }
+.meta { color: var(--muted); font-size: 14px; margin-bottom: 10px; }
+.article { background: var(--surface); border: 1px solid var(--line); border-radius: 22px; padding: 28px; box-shadow: var(--shadow); }
+.article h1 { margin-top: 0; font-size: 34px; }
+.article p, .article li { color: var(--text); }
+.article ul, .article ol { padding-left: 22px; }
+.tools { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 22px; }
+.tool-card textarea, .tool-card input { width: 100%; border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; font: inherit; background: #fff; color: var(--text); }
+.tool-card button { border: 0; background: var(--brand); color: #fff; border-radius: 12px; padding: 10px 16px; cursor: pointer; font-weight: 700; }
+.tool-card pre { white-space: pre-wrap; word-break: break-word; background: #0f172a; color: #dbeafe; padding: 16px; border-radius: 14px; overflow: auto; }
+.tool-actions { display: flex; gap: 10px; margin: 12px 0 0; flex-wrap: wrap; }
+.site-footer { margin-top: 40px; padding-top: 20px; border-top: 1px solid var(--line); color: var(--muted); font-size: 14px; }
+.note { color: var(--muted); font-size: 14px; }
+@media (max-width: 720px) {
+  .site-shell { padding: 0 18px 52px; }
+  .hero h1 { font-size: 30px; }
+  .site-header { padding: 20px 0; align-items: flex-start; flex-direction: column; }
+}
+EOF
+    cat <<'EOF' >"${websiteSiteRoot}/assets/site.js"
+function formatJsonInput() {
+  const input = document.getElementById('json-input');
+  const output = document.getElementById('json-output');
+  if (!input || !output) return;
+  try {
+    const parsed = JSON.parse(input.value);
+    output.textContent = JSON.stringify(parsed, null, 2);
+  } catch (error) {
+    output.textContent = 'JSON 解析失败：' + error.message;
+  }
+}
+
+function convertTimestamp() {
+  const input = document.getElementById('ts-input');
+  const output = document.getElementById('ts-output');
+  if (!input || !output) return;
+  const raw = input.value.trim();
+  if (!raw) {
+    output.textContent = '请输入时间戳';
+    return;
+  }
+  const value = raw.length === 13 ? Number(raw) : Number(raw) * 1000;
+  if (Number.isNaN(value)) {
+    output.textContent = '输入内容不是有效时间戳';
+    return;
+  }
+  const date = new Date(value);
+  output.textContent = isNaN(date.getTime()) ? '无法转换' : date.toLocaleString('zh-CN', { hour12: false });
+}
+
+function summarizeMarkdown() {
+  const input = document.getElementById('md-input');
+  const output = document.getElementById('md-output');
+  if (!input || !output) return;
+  const text = input.value.trim();
+  if (!text) {
+    output.textContent = '请输入 Markdown 文本';
+    return;
+  }
+  const lines = text.split(/\n+/).filter(Boolean);
+  output.textContent = '共 ' + lines.length + ' 行，首行：' + lines[0];
+}
+EOF
+}
+
+websiteWriteDefaultAboutPage() {
+    local title="$1"
+    local description="$2"
+    mkdir -p "${websiteSiteRoot}/about" >/dev/null 2>&1
+    cat <<EOF >"${websiteSiteRoot}/about/index.html"
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>关于本站 - ${title}</title>
+  <meta name="description" content="${description}">
+  <link rel="icon" href="/favicon.ico">
+  <link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+  <div class="site-shell">
+    <header class="site-header">
+      <a class="brand" href="/">${title}</a>
+      <nav class="nav">
+        <a href="/">首页</a>
+        <a href="/about/">关于</a>
+      </nav>
+    </header>
+    <section class="hero">
+      <span class="badge">关于本站</span>
+      <h1>${title}</h1>
+      <p>${description}</p>
+    </section>
+    <article class="article">
+      <p>这是一个部署在独立服务器上的中文静态站点，用于承载日常技术记录、工具页或个人内容。</p>
+      <p>本站保持正常的 HTTPS、网站结构、静态资源和页面访问行为，适合作为长期维护的轻量网站。</p>
+    </article>
+    <footer class="site-footer">© $(date +%Y) ${title}</footer>
+  </div>
+</body>
+</html>
+EOF
+}
+
+websiteRenderSitemap() {
+    local urlsFile="${websiteManagerRoot}/sitemap.urls"
+    : >"${urlsFile}"
+    echo "https://${websiteDomain}/" >>"${urlsFile}"
+    if [[ -f "${websiteSiteRoot}/about/index.html" ]]; then
+        echo "https://${websiteDomain}/about/" >>"${urlsFile}"
+    fi
+    if [[ "${websiteType}" == "blog" ]]; then
+        find "${websiteSiteRoot}/posts" -mindepth 2 -maxdepth 2 -name "index.html" 2>/dev/null | sort | while read -r postFile; do
+            local postSlug
+            postSlug=$(echo "${postFile}" | awk -F "/posts/" '{print $2}' | awk -F "/index.html" '{print $1}')
+            echo "https://${websiteDomain}/posts/${postSlug}/" >>"${urlsFile}"
+        done
+    elif [[ "${websiteType}" == "tools" ]]; then
+        find "${websiteSiteRoot}/tools" -mindepth 2 -maxdepth 2 -name "index.html" 2>/dev/null | sort | while read -r toolFile; do
+            local toolSlug
+            toolSlug=$(echo "${toolFile}" | awk -F "/tools/" '{print $2}' | awk -F "/index.html" '{print $1}')
+            echo "https://${websiteDomain}/tools/${toolSlug}/" >>"${urlsFile}"
+        done
+    fi
+
+    {
+        echo '<?xml version="1.0" encoding="UTF-8"?>'
+        echo '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+        while read -r item; do
+            [[ -z "${item}" ]] && continue
+            echo "  <url><loc>${item}</loc></url>"
+        done <"${urlsFile}"
+        echo '</urlset>'
+    } >"${websiteSiteRoot}/sitemap.xml"
+    rm -f "${urlsFile}"
+}
+
+websiteReadArticleField() {
+    local articleFile="$1"
+    local key="$2"
+    awk -F ': ' -v target="${key}" '$1 == target {sub($1 ": ", ""); print; exit}' "${articleFile}"
+}
+
+websiteReadArticleBody() {
+    local articleFile="$1"
+    awk 'found { print } /^---$/ { found=1 }' "${articleFile}"
+}
+
+websiteSeedBlogArticles() {
+    mkdir -p "${websitePendingRoot}" "${websitePublishedRoot}" >/dev/null 2>&1
+    if [[ -n $(find "${websitePendingRoot}" -type f -name "*.md" 2>/dev/null) || -n $(find "${websitePublishedRoot}" -type f -name "*.md" 2>/dev/null) ]]; then
+        return 0
+    fi
+
+    cat <<'EOF' >"${websitePendingRoot}/2026-05-01-linux-common-commands.md"
+TITLE: Linux 常用命令整理
+DATE: 2026-05-01
+SLUG: linux-common-commands
+SUMMARY: 记录日常服务器维护里最常用的系统检查、磁盘、网络与日志命令。
+---
+<p>这篇记录主要汇总日常运维里最常用的一组 Linux 命令，适合在登录服务器后快速确认系统状态。</p>
+<ul>
+  <li><code>uptime</code>：查看系统运行时长与负载</li>
+  <li><code>df -h</code>：查看磁盘使用情况</li>
+  <li><code>free -h</code>：查看内存情况</li>
+  <li><code>ss -lntp</code>：查看监听端口</li>
+  <li><code>journalctl -u 服务名 -n 100</code>：查看服务最近日志</li>
+</ul>
+<p>建议把这类高频命令整理成自己的速查页，后续排障会快很多。</p>
+EOF
+
+    cat <<'EOF' >"${websitePendingRoot}/2026-05-02-nginx-static-site-checklist.md"
+TITLE: 静态站点上线检查清单
+DATE: 2026-05-02
+SLUG: nginx-static-site-checklist
+SUMMARY: 静态网站上线前，重点检查 HTTPS、favicon、robots、sitemap 与错误页行为。
+---
+<p>静态站点本身很轻，但上线前最好还是做一轮清单式检查。</p>
+<ol>
+  <li>证书链是否正常，浏览器访问是否完整显示 HTTPS</li>
+  <li>根路径是否能稳定返回 <code>200</code></li>
+  <li><code>favicon.ico</code>、<code>robots.txt</code>、<code>sitemap.xml</code> 是否存在</li>
+  <li>静态资源路径是否正常，没有大量 <code>404</code></li>
+  <li>访问日志是否有持续写入</li>
+</ol>
+<p>这类站不需要复杂后端，但细节越完整，越像长期维护的正常网站。</p>
+EOF
+
+    cat <<'EOF' >"${websitePendingRoot}/2026-05-03-docker-routine-notes.md"
+TITLE: Docker 日常维护小记
+DATE: 2026-05-03
+SLUG: docker-routine-notes
+SUMMARY: 记录容器状态检查、日志查看、镜像清理和配置导出这几类高频动作。
+---
+<p>容器化服务越多，越需要形成一套统一的日常检查动作。</p>
+<ul>
+  <li><code>docker ps --format '{{.Names}}\t{{.Status}}'</code> 快速看服务状态</li>
+  <li><code>docker logs --tail 100 容器名</code> 快速看近端日志</li>
+  <li><code>docker inspect 容器名</code> 核对挂载、网络和启动参数</li>
+  <li><code>docker image prune -f</code> 定期清理无用镜像</li>
+</ul>
+<p>如果一台机器同时承担网站和代理入口，建议把容器和系统服务的端口规划写进单独文档，避免后续冲突。</p>
+EOF
+
+    cat <<'EOF' >"${websitePendingRoot}/2026-05-04-vps-firewall-notes.md"
+TITLE: VPS 防火墙规则排查
+DATE: 2026-05-04
+SLUG: vps-firewall-notes
+SUMMARY: 记录端口已监听但外网仍超时时，应该先排查的几类防火墙和持久化规则。
+---
+<p>端口明明监听了，但外网仍超时，最常见的问题其实不在服务本身，而在防火墙链路。</p>
+<ul>
+  <li>确认系统实际生效的是 <code>ufw</code>、<code>iptables</code>、<code>nftables</code> 还是云厂商防火墙</li>
+  <li>确认开放规则是否已经持久化</li>
+  <li>确认 IPv4 和 IPv6 是否都放行</li>
+  <li>确认不是运营商或上游 ACL 拦截</li>
+</ul>
+<p>排障时尽量把监听、放行、回连测试分开验证，定位会更快。</p>
+EOF
+}
+
+websiteWriteBlogShellPages() {
+    websiteWriteCommonAssets
+    websiteWriteFavicon
+    websiteWriteRobots
+    websiteWriteDefaultAboutPage "${websiteTitle}" "${websiteDescription}"
+}
+
+websiteRenderBlogArticlePage() {
+    local articleFile="$1"
+    local postTitle postDate postSlug postSummary
+    postTitle=$(websiteReadArticleField "${articleFile}" "TITLE")
+    postDate=$(websiteReadArticleField "${articleFile}" "DATE")
+    postSlug=$(websiteReadArticleField "${articleFile}" "SLUG")
+    postSummary=$(websiteReadArticleField "${articleFile}" "SUMMARY")
+
+    mkdir -p "${websiteSiteRoot}/posts/${postSlug}" >/dev/null 2>&1
+    cat <<EOF >"${websiteSiteRoot}/posts/${postSlug}/index.html"
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${postTitle} - ${websiteTitle}</title>
+  <meta name="description" content="${postSummary}">
+  <link rel="icon" href="/favicon.ico">
+  <link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+  <div class="site-shell">
+    <header class="site-header">
+      <a class="brand" href="/">${websiteTitle}</a>
+      <nav class="nav">
+        <a href="/">首页</a>
+        <a href="/about/">关于</a>
+      </nav>
+    </header>
+    <article class="article">
+      <span class="badge">技术记录</span>
+      <h1>${postTitle}</h1>
+      <div class="meta">发布时间：${postDate}</div>
+$(websiteReadArticleBody "${articleFile}")
+    </article>
+    <footer class="site-footer">返回 <a href="/">首页</a></footer>
+  </div>
+</body>
+</html>
+EOF
+}
+
+websiteRebuildBlogSite() {
+    websiteWriteBlogShellPages
+    mkdir -p "${websiteSiteRoot}/posts" >/dev/null 2>&1
+
+    local postCards=
+    local latestCards=
+    local articleFile=
+    local count=0
+    while read -r articleFile; do
+        [[ -z "${articleFile}" ]] && continue
+        websiteRenderBlogArticlePage "${articleFile}"
+        local postTitle postDate postSlug postSummary
+        postTitle=$(websiteReadArticleField "${articleFile}" "TITLE")
+        postDate=$(websiteReadArticleField "${articleFile}" "DATE")
+        postSlug=$(websiteReadArticleField "${articleFile}" "SLUG")
+        postSummary=$(websiteReadArticleField "${articleFile}" "SUMMARY")
+        local currentCard
+        currentCard=$(cat <<EOF
+<article class="post-item">
+  <div class="meta">${postDate}</div>
+  <h3><a href="/posts/${postSlug}/">${postTitle}</a></h3>
+  <p>${postSummary}</p>
+</article>
+EOF
+)
+        postCards="${postCards}
+${currentCard}"
+        if [[ ${count} -lt 3 ]]; then
+            latestCards="${latestCards}
+${currentCard}"
+        fi
+        count=$((count + 1))
+    done < <(find "${websitePublishedRoot}" -type f -name "*.md" | sort -r)
+
+    cat <<EOF >"${websiteSiteRoot}/index.html"
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${websiteTitle}</title>
+  <meta name="description" content="${websiteDescription}">
+  <link rel="icon" href="/favicon.ico">
+  <link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+  <div class="site-shell">
+    <header class="site-header">
+      <a class="brand" href="/">${websiteTitle}</a>
+      <nav class="nav">
+        <a href="/">首页</a>
+        <a href="/about/">关于</a>
+      </nav>
+    </header>
+    <section class="hero">
+      <span class="badge">中文技术博客</span>
+      <h1>日常运维与轻量开发记录</h1>
+      <p>${websiteDescription}</p>
+    </section>
+    <section>
+      <h2 class="section-title">最新内容</h2>
+      <div class="post-list">${latestCards}</div>
+    </section>
+    <section>
+      <h2 class="section-title">全部文章</h2>
+      <div class="post-list">${postCards}</div>
+    </section>
+    <footer class="site-footer">© $(date +%Y) ${websiteTitle} · 当前已发布 ${count} 篇内容</footer>
+  </div>
+</body>
+</html>
+EOF
+    websiteRenderSitemap
+}
+
+websitePublishNextPendingArticle() {
+    local quiet="$1"
+    local nextArticle=
+    nextArticle=$(find "${websitePendingRoot}" -type f -name "*.md" | sort | head -1)
+    if [[ -z "${nextArticle}" ]]; then
+        [[ "${quiet}" != "true" ]] && echoContent yellow " ---> 暂无待发布文章"
+        return 1
+    fi
+    mv "${nextArticle}" "${websitePublishedRoot}/"
+    websiteRebuildBlogSite
+    [[ "${quiet}" != "true" ]] && echoContent green " ---> 已发布一篇预置文章"
+    return 0
+}
+
+websitePublishArticleMenu() {
+    if ! websiteLoadMetadata || [[ "${websiteType}" != "blog" ]]; then
+        echoContent red "\n ---> 当前只有中文技术博客支持发布预置文章"
+        exit 0
+    fi
+
+    echoContent skyBlue "\n功能 1/1 : 发布预置文章"
+    echoContent red "=============================================================="
+    echoContent yellow "1.发布下一篇待发布文章"
+    echoContent yellow "2.发布全部待发布文章"
+    echoContent yellow "3.查看待发布文章"
+    echoContent red "=============================================================="
+    read -r -p "请选择:" websitePublishAction
+
+    if [[ "${websitePublishAction}" == "1" ]]; then
+        websitePublishNextPendingArticle
+    elif [[ "${websitePublishAction}" == "2" ]]; then
+        local publishedCount=0
+        while websitePublishNextPendingArticle true; do
+            publishedCount=$((publishedCount + 1))
+        done
+        if [[ ${publishedCount} -gt 0 ]]; then
+            echoContent green " ---> 已发布 ${publishedCount} 篇待发布文章"
+        else
+            echoContent yellow " ---> 暂无待发布文章"
+        fi
+    elif [[ "${websitePublishAction}" == "3" ]]; then
+        local articleIndex=1
+        find "${websitePendingRoot}" -type f -name "*.md" | sort | while read -r articleFile; do
+            local postTitle
+            postTitle=$(websiteReadArticleField "${articleFile}" "TITLE")
+            echoContent yellow "${articleIndex}. ${postTitle}"
+            articleIndex=$((articleIndex + 1))
+        done
+        if [[ ${articleIndex} -eq 1 ]]; then
+            echoContent yellow " ---> 暂无待发布文章"
+        fi
+    fi
+}
+
+websiteInstallPublishSchedule() {
+    local cronExpr="$1"
+    local backupCronFile="/etc/v2ray-agent/backup_crontab.cron"
+    if crontab -l 2>/dev/null | grep -q "${websiteCronTag}"; then
+        crontab -l 2>/dev/null | grep -v "${websiteCronTag}" >"${backupCronFile}" || true
+    else
+        crontab -l 2>/dev/null >"${backupCronFile}" || true
+    fi
+    if [[ -n "${cronExpr}" ]]; then
+        echo "${cronExpr} /bin/bash /etc/v2ray-agent/install.sh ${websiteCronTag} >> ${websitePublishLog} 2>&1" >>"${backupCronFile}"
+    fi
+    crontab "${backupCronFile}"
+    rm -f "${backupCronFile}"
+}
+
+websitePublishScheduleMenu() {
+    if ! websiteLoadMetadata || [[ "${websiteType}" != "blog" ]]; then
+        echoContent red "\n ---> 当前只有中文技术博客支持定时发布"
+        exit 0
+    fi
+
+    echoContent skyBlue "\n功能 1/1 : 配置定时发布"
+    echoContent red "=============================================================="
+    echoContent yellow "1.每周一凌晨发布一篇"
+    echoContent yellow "2.每月1号和15号凌晨各发布一篇"
+    echoContent yellow "3.关闭定时发布"
+    echoContent yellow "4.查看当前状态"
+    echoContent red "=============================================================="
+    read -r -p "请选择:" websiteScheduleAction
+    case "${websiteScheduleAction}" in
+    1)
+        websiteInstallPublishSchedule "15 4 * * 1"
+        echoContent green " ---> 已设置为每周一凌晨自动发布一篇"
+        ;;
+    2)
+        websiteInstallPublishSchedule "15 4 1,15 * *"
+        echoContent green " ---> 已设置为每月1号和15号凌晨自动发布一篇"
+        ;;
+    3)
+        websiteInstallPublishSchedule ""
+        echoContent green " ---> 已关闭定时发布"
+        ;;
+    4)
+        if crontab -l 2>/dev/null | grep -q "${websiteCronTag}"; then
+            crontab -l 2>/dev/null | grep "${websiteCronTag}"
+        else
+            echoContent yellow " ---> 当前未开启定时发布"
+        fi
+        ;;
+    esac
+}
+
+websiteRenderToolSite() {
+    websiteWriteCommonAssets
+    websiteWriteFavicon
+    websiteWriteRobots
+    websiteWriteDefaultAboutPage "${websiteTitle}" "${websiteDescription}"
+    mkdir -p "${websiteSiteRoot}/tools/markdown-summary" "${websiteSiteRoot}/tools/json-formatter" "${websiteSiteRoot}/tools/timestamp-converter" >/dev/null 2>&1
+
+    cat <<EOF >"${websiteSiteRoot}/index.html"
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${websiteTitle}</title>
+  <meta name="description" content="${websiteDescription}">
+  <link rel="icon" href="/favicon.ico">
+  <link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+  <div class="site-shell">
+    <header class="site-header">
+      <a class="brand" href="/">${websiteTitle}</a>
+      <nav class="nav">
+        <a href="/">首页</a>
+        <a href="/about/">关于</a>
+      </nav>
+    </header>
+    <section class="hero">
+      <span class="badge">中文小工具站</span>
+      <h1>轻量、直接、够用的在线工具页</h1>
+      <p>${websiteDescription}</p>
+    </section>
+    <section class="tools">
+      <article class="card">
+        <h2><a href="/tools/markdown-summary/">Markdown 内容概览</a></h2>
+        <p>快速看一段 Markdown 的行数和首行内容，适合写作前的简单检查。</p>
+      </article>
+      <article class="card">
+        <h2><a href="/tools/json-formatter/">JSON 格式化</a></h2>
+        <p>把压缩的 JSON 文本快速格式化成可读结构，方便排查接口返回。</p>
+      </article>
+      <article class="card">
+        <h2><a href="/tools/timestamp-converter/">时间戳转换</a></h2>
+        <p>快速把秒级或毫秒级时间戳转换为常见日期时间格式。</p>
+      </article>
+    </section>
+    <footer class="site-footer">© $(date +%Y) ${websiteTitle}</footer>
+  </div>
+</body>
+</html>
+EOF
+
+    cat <<EOF >"${websiteSiteRoot}/tools/markdown-summary/index.html"
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Markdown 内容概览 - ${websiteTitle}</title>
+  <meta name="description" content="快速查看 Markdown 文本的行数和首行内容。">
+  <link rel="icon" href="/favicon.ico">
+  <link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+  <div class="site-shell">
+    <header class="site-header">
+      <a class="brand" href="/">${websiteTitle}</a>
+      <nav class="nav">
+        <a href="/">首页</a>
+        <a href="/about/">关于</a>
+      </nav>
+    </header>
+    <section class="hero">
+      <span class="badge">Markdown 工具</span>
+      <h1>Markdown 内容概览</h1>
+      <p>输入一段 Markdown 文本，快速确认内容行数和首行标题。</p>
+    </section>
+    <article class="card tool-card">
+      <textarea id="md-input" rows="12" placeholder="# 标题&#10;&#10;这里写正文"></textarea>
+      <div class="tool-actions">
+        <button type="button" onclick="summarizeMarkdown()">生成概览</button>
+      </div>
+      <pre id="md-output">结果会显示在这里</pre>
+    </article>
+    <footer class="site-footer">返回 <a href="/">首页</a></footer>
+  </div>
+  <script src="/assets/site.js"></script>
+</body>
+</html>
+EOF
+
+    cat <<EOF >"${websiteSiteRoot}/tools/json-formatter/index.html"
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>JSON 格式化 - ${websiteTitle}</title>
+  <meta name="description" content="快速格式化 JSON 字符串。">
+  <link rel="icon" href="/favicon.ico">
+  <link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+  <div class="site-shell">
+    <header class="site-header">
+      <a class="brand" href="/">${websiteTitle}</a>
+      <nav class="nav">
+        <a href="/">首页</a>
+        <a href="/about/">关于</a>
+      </nav>
+    </header>
+    <section class="hero">
+      <span class="badge">JSON 工具</span>
+      <h1>JSON 格式化</h1>
+      <p>适合接口调试时快速查看返回结构。</p>
+    </section>
+    <article class="card tool-card">
+      <textarea id="json-input" rows="12" placeholder='{"status":"ok","items":[1,2,3]}'></textarea>
+      <div class="tool-actions">
+        <button type="button" onclick="formatJsonInput()">格式化</button>
+      </div>
+      <pre id="json-output">结果会显示在这里</pre>
+    </article>
+    <footer class="site-footer">返回 <a href="/">首页</a></footer>
+  </div>
+  <script src="/assets/site.js"></script>
+</body>
+</html>
+EOF
+
+    cat <<EOF >"${websiteSiteRoot}/tools/timestamp-converter/index.html"
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>时间戳转换 - ${websiteTitle}</title>
+  <meta name="description" content="秒级和毫秒级时间戳转换工具。">
+  <link rel="icon" href="/favicon.ico">
+  <link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+  <div class="site-shell">
+    <header class="site-header">
+      <a class="brand" href="/">${websiteTitle}</a>
+      <nav class="nav">
+        <a href="/">首页</a>
+        <a href="/about/">关于</a>
+      </nav>
+    </header>
+    <section class="hero">
+      <span class="badge">时间工具</span>
+      <h1>时间戳转换</h1>
+      <p>支持常见秒级和毫秒级 Unix 时间戳。</p>
+    </section>
+    <article class="card tool-card">
+      <input id="ts-input" placeholder="例如 1715000000 或 1715000000000">
+      <div class="tool-actions">
+        <button type="button" onclick="convertTimestamp()">转换</button>
+      </div>
+      <pre id="ts-output">结果会显示在这里</pre>
+    </article>
+    <footer class="site-footer">返回 <a href="/">首页</a></footer>
+  </div>
+  <script src="/assets/site.js"></script>
+</body>
+</html>
+EOF
+
+    websiteRenderSitemap
+}
+
+websiteEnsureCustomCommonFiles() {
+    mkdir -p "${websiteSiteRoot}" >/dev/null 2>&1
+    [[ -f "${websiteSiteRoot}/favicon.ico" ]] || websiteWriteFavicon
+    [[ -f "${websiteSiteRoot}/robots.txt" ]] || websiteWriteRobots
+    if [[ ! -f "${websiteSiteRoot}/about.html" && ! -f "${websiteSiteRoot}/about/index.html" ]]; then
+        websiteWriteDefaultAboutPage "${websiteTitle}" "${websiteDescription}"
+    fi
+    [[ -f "${websiteSiteRoot}/sitemap.xml" ]] || websiteRenderSitemap
+}
+
+websitePrepareTLS() {
+    local oldDomain="${domain}"
+    local oldCurrentHost="${currentHost}"
+    domain="${websiteDomain}"
+    currentHost=""
+    allowPort 80
+    allowPort 443
+    checkDNSIP "${websiteDomain}"
+    if [[ ! -s "/etc/v2ray-agent/tls/${websiteDomain}.crt" || ! -s "/etc/v2ray-agent/tls/${websiteDomain}.key" ]]; then
+        echoContent yellow "\n ---> 未检测到 ${websiteDomain} 的证书，开始申请"
+        installTLS 2
+    else
+        echoContent green " ---> 已检测到 ${websiteDomain} 的证书，直接复用"
+    fi
+    domain="${oldDomain}"
+    currentHost="${oldCurrentHost}"
+}
+
+websiteWriteNginxConfig() {
+    mkdir -p "${websiteSiteRoot}" >/dev/null 2>&1
+    cat <<EOF >"${websiteNginxConfigPath}"
+server {
+    listen 80;
+    listen [::]:80;
+    server_name ${websiteDomain};
+    root ${websiteSiteRoot};
+    index index.html;
+
+    location /.well-known/acme-challenge/ {
+        root ${websiteSiteRoot};
+    }
+
+    location / {
+        return 301 https://\$host\$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name ${websiteDomain};
+    root ${websiteSiteRoot};
+    index index.html;
+
+    ssl_certificate /etc/v2ray-agent/tls/${websiteDomain}.crt;
+    ssl_certificate_key /etc/v2ray-agent/tls/${websiteDomain}.key;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers on;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 10m;
+
+    add_header X-Content-Type-Options nosniff always;
+    add_header X-Frame-Options SAMEORIGIN always;
+    add_header Referrer-Policy no-referrer-when-downgrade always;
+
+    location / {
+        try_files \$uri \$uri/ /index.html;
+    }
+}
+EOF
+}
+
+websiteReloadNginx() {
+    nginx -t >/etc/v2ray-agent/nginx_error.log 2>&1
+    if [[ "$?" != "0" ]]; then
+        echoContent red "\n ---> Nginx配置校验失败"
+        cat /etc/v2ray-agent/nginx_error.log
+        exit 0
+    fi
+    if pgrep -f "nginx" >/dev/null 2>&1; then
+        nginx -s reload >/etc/v2ray-agent/nginx_error.log 2>&1 || true
+    fi
+    handleNginx start
+}
+
+websitePrepareShell() {
+    websiteEnsureManagerDirs
+    websiteEnsureNginxInstalled
+    websiteCheckPortConflict
+    websiteSetPaths "${websiteDomain}"
+    rm -rf "${websiteSiteRoot}"
+    mkdir -p "${websiteSiteRoot}" "${websiteContentRoot}" "${websitePendingRoot}" "${websitePublishedRoot}" >/dev/null 2>&1
+    websitePrepareTLS
+}
+
+websiteDeployBlog() {
+    websiteTitle="技术笔记与运维记录"
+    websiteDescription="记录 Linux、Docker、Nginx、VPS 运维和轻量开发相关的日常笔记。"
+    websiteType="blog"
+    websitePromptDomain
+    websitePrepareShell
+    websiteSeedBlogArticles
+    websitePublishNextPendingArticle true >/dev/null 2>&1 || true
+    websitePublishNextPendingArticle true >/dev/null 2>&1 || true
+    websiteRebuildBlogSite
+    websiteWriteNginxConfig
+    websiteSaveMetadata
+    websiteReloadNginx
+    echoContent green "\n ---> 中文技术博客部署成功"
+    echoContent yellow " ---> 域名: https://${websiteDomain}"
+}
+
+websiteDeployToolSite() {
+    websiteTitle="常用开发与文本小工具"
+    websiteDescription="一个轻量、直接、够用的中文小工具站，适合承载 Markdown、JSON 与时间相关的常用工具页。"
+    websiteType="tools"
+    websitePromptDomain
+    websitePrepareShell
+    websiteRenderToolSite
+    websiteWriteNginxConfig
+    websiteSaveMetadata
+    websiteReloadNginx
+    echoContent green "\n ---> 中文小工具站部署成功"
+    echoContent yellow " ---> 域名: https://${websiteDomain}"
+}
+
+websiteExtractCustomStaticArchive() {
+    local archivePath="$1"
+    if [[ ! -f "${archivePath}" ]]; then
+        echoContent red " ---> 文件不存在：${archivePath}"
+        exit 0
+    fi
+
+    if echo "${archivePath}" | grep -qE "\.zip$"; then
+        unzip -o "${archivePath}" -d "${websiteSiteRoot}" >/dev/null
+    elif echo "${archivePath}" | grep -qE "\.(tar\.gz|tgz)$"; then
+        tar -xzf "${archivePath}" -C "${websiteSiteRoot}"
+    else
+        echoContent red " ---> 仅支持 .zip / .tar.gz / .tgz"
+        exit 0
+    fi
+
+    if [[ ! -f "${websiteSiteRoot}/index.html" ]] && [[ ! -f "${websiteSiteRoot}/index.htm" ]]; then
+        if [[ -n $(find "${websiteSiteRoot}" -mindepth 1 -maxdepth 1 -type d | head -1) ]]; then
+            local nestedRoot
+            nestedRoot=$(find "${websiteSiteRoot}" -mindepth 1 -maxdepth 1 -type d | head -1)
+            if [[ -f "${nestedRoot}/index.html" || -f "${nestedRoot}/index.htm" ]]; then
+                find "${nestedRoot}" -mindepth 1 -maxdepth 1 -exec mv {} "${websiteSiteRoot}/" \;
+                rmdir "${nestedRoot}" >/dev/null 2>&1 || true
+            fi
+        fi
+    fi
+
+    if [[ ! -f "${websiteSiteRoot}/index.html" ]] && [[ ! -f "${websiteSiteRoot}/index.htm" ]]; then
+        echoContent red " ---> 压缩包解压后未检测到 index.html/index.htm"
+        exit 0
+    fi
+}
+
+websiteDeployCustomStaticSite() {
+    websiteTitle="自定义静态站点"
+    websiteDescription="用户自定义上传的静态站点内容。"
+    websiteType="custom"
+    websitePromptDomain
+    websitePrepareShell
+    echoContent yellow "\n请先把静态站压缩包上传到服务器，例如：/root/site.zip"
+    read -r -p "请输入压缩包路径:" websiteArchivePath
+    websiteExtractCustomStaticArchive "${websiteArchivePath}"
+    websiteEnsureCustomCommonFiles
+    websiteWriteNginxConfig
+    websiteSaveMetadata
+    websiteReloadNginx
+    echoContent green "\n ---> 自定义静态站部署成功"
+    echoContent yellow " ---> 域名: https://${websiteDomain}"
+}
+
+websiteDeployArchivedTemplate() {
+    local templateId="$1"
+    websiteType="archived"
+    case "${templateId}" in
+    2)
+        websiteTitle="归档模板：中文企业站"
+        websiteDescription="旧版兼容模板，保留用于快速占位。"
+        ;;
+    4)
+        websiteTitle="归档模板：企业展示站"
+        websiteDescription="旧版兼容模板，保留用于快速占位。"
+        ;;
+    7)
+        websiteTitle="归档模板：中文企业站二"
+        websiteDescription="旧版兼容模板，保留用于快速占位。"
+        ;;
+    8)
+        websiteTitle="归档模板：个人主页"
+        websiteDescription="旧版兼容模板，保留用于快速占位。"
+        ;;
+    *)
+        echoContent red " ---> 当前仅保留 2/4/7/8 这四套归档模板"
+        exit 0
+        ;;
+    esac
+    websitePromptDomain
+    websitePrepareShell
+    if [[ "${release}" == "alpine" ]]; then
+        wget -q -P "${websiteSiteRoot}" "https://raw.githubusercontent.com/dodo258/sing-box-reality-manager/main/fodder/blog/unable/html${templateId}.zip"
+    else
+        wget -q "${wgetShowProgressStatus}" -P "${websiteSiteRoot}" "https://raw.githubusercontent.com/dodo258/sing-box-reality-manager/main/fodder/blog/unable/html${templateId}.zip"
+    fi
+    unzip -o "${websiteSiteRoot}/html${templateId}.zip" -d "${websiteSiteRoot}" >/dev/null
+    rm -f "${websiteSiteRoot}/html${templateId}.zip"*
+    websiteEnsureCustomCommonFiles
+    websiteWriteNginxConfig
+    websiteSaveMetadata
+    websiteReloadNginx
+    echoContent green "\n ---> 归档模板部署成功"
+}
+
+websiteCompatibilityTemplateMenu() {
+    echoContent skyBlue "\n功能 1/1 : 归档伪装模板"
+    echoContent red "=============================================================="
+    echoContent yellow "# 这里保留旧模板作兼容项，主推荐仍是中文技术博客/小工具站\n"
+    echoContent yellow "1.中文企业站 01"
+    echoContent yellow "2.企业展示站"
+    echoContent yellow "3.中文企业站 02"
+    echoContent yellow "4.个人主页"
+    echoContent red "=============================================================="
+    read -r -p "请选择:" websiteArchivedChoice
+    case "${websiteArchivedChoice}" in
+    1) websiteDeployArchivedTemplate 2 ;;
+    2) websiteDeployArchivedTemplate 4 ;;
+    3) websiteDeployArchivedTemplate 7 ;;
+    4) websiteDeployArchivedTemplate 8 ;;
+    *) echoContent red " ---> 选择错误" ;;
+    esac
+}
+
+websiteShowStatus() {
+    if ! websiteLoadMetadata; then
+        echoContent red "\n ---> 当前未部署网站"
+        exit 0
+    fi
+    local certStatus="未检测到"
+    local pendingCount=0
+    local publishedCount=0
+    if [[ -s "/etc/v2ray-agent/tls/${websiteDomain}.crt" && -s "/etc/v2ray-agent/tls/${websiteDomain}.key" ]]; then
+        certStatus="已就绪"
+    fi
+    [[ -d "${websitePendingRoot}" ]] && pendingCount=$(find "${websitePendingRoot}" -type f -name "*.md" | wc -l | tr -d ' ')
+    [[ -d "${websitePublishedRoot}" ]] && publishedCount=$(find "${websitePublishedRoot}" -type f -name "*.md" | wc -l | tr -d ' ')
+    echoContent skyBlue "\n功能 1/1 : 网站状态"
+    echoContent red "=============================================================="
+    echoContent yellow "网站类型: ${websiteType}"
+    echoContent yellow "网站域名: ${websiteDomain}"
+    echoContent yellow "网站标题: ${websiteTitle}"
+    echoContent yellow "站点目录: ${websiteSiteRoot}"
+    echoContent yellow "证书状态: ${certStatus}"
+    echoContent yellow "待发文章: ${pendingCount}"
+    echoContent yellow "已发文章: ${publishedCount}"
+    if crontab -l 2>/dev/null | grep -q "${websiteCronTag}"; then
+        echoContent yellow "定时发布: 已开启"
+        crontab -l 2>/dev/null | grep "${websiteCronTag}"
+    else
+        echoContent yellow "定时发布: 未开启"
+    fi
+    echoContent red "=============================================================="
+}
+
+websiteUpdateTemplate() {
+    if ! websiteLoadMetadata; then
+        echoContent red "\n ---> 当前未部署网站"
+        exit 0
+    fi
+    case "${websiteType}" in
+    blog)
+        websiteRebuildBlogSite
+        websiteWriteNginxConfig
+        websiteReloadNginx
+        echoContent green " ---> 中文技术博客已更新"
+        ;;
+    tools)
+        websiteRenderToolSite
+        websiteWriteNginxConfig
+        websiteReloadNginx
+        echoContent green " ---> 中文小工具站已更新"
+        ;;
+    archived)
+        echoContent yellow " ---> 当前使用的是归档模板，请通过兼容模板入口重新选择模板"
+        ;;
+    custom)
+        echoContent yellow " ---> 自定义静态站不提供模板更新，请手动替换站点内容"
+        ;;
+    *)
+        echoContent red " ---> 未识别的网站类型"
+        ;;
+    esac
+}
+
+websiteUninstall() {
+    if ! websiteLoadMetadata; then
+        echoContent red "\n ---> 当前未部署网站"
+        exit 0
+    fi
+    read -r -p "是否确认卸载网站内容？[y/n]:" websiteRemoveStatus
+    if [[ "${websiteRemoveStatus}" != "y" ]]; then
+        echoContent yellow " ---> 已取消"
+        exit 0
+    fi
+    rm -rf "${websiteSiteRoot}" "${websiteContentRoot}" "${websiteMetadataFile}" "${websiteActiveDomainFile}" "${websiteNginxConfigPath}" >/dev/null 2>&1
+    websiteInstallPublishSchedule ""
+    websiteReloadNginx
+    echoContent green " ---> 网站内容与配置已卸载"
+}
+
+websiteManagementMenu() {
+    echoContent skyBlue "\n功能 1/1 : 网站管理"
+    echoContent red "=============================================================="
+    echoContent yellow "# 注意事项"
+    echoContent yellow "# 网站功能与节点功能解耦，网站使用80/443，Reality等节点继续使用随机端口"
+    echoContent yellow "# 建议使用真实域名、正常解析和可信HTTPS证书"
+    echoContent yellow "# 旧伪装模板只保留兼容入口，主推荐是中文技术博客和中文小工具站\n"
+    echoContent yellow "1.部署中文技术博客"
+    echoContent yellow "2.部署中文小工具站"
+    echoContent yellow "3.上传自定义静态站"
+    echoContent yellow "4.发布预置文章"
+    echoContent yellow "5.配置定时发布"
+    echoContent yellow "6.更新网站模板"
+    echoContent yellow "7.兼容旧伪装模板"
+    echoContent yellow "8.查看网站状态"
+    echoContent yellow "9.卸载网站"
+    echoContent red "=============================================================="
+    read -r -p "请选择:" websiteManageType
+    case "${websiteManageType}" in
+    1) websiteDeployBlog ;;
+    2) websiteDeployToolSite ;;
+    3) websiteDeployCustomStaticSite ;;
+    4) websitePublishArticleMenu ;;
+    5) websitePublishScheduleMenu ;;
+    6) websiteUpdateTemplate ;;
+    7) websiteCompatibilityTemplateMenu ;;
+    8) websiteShowStatus ;;
+    9) websiteUninstall ;;
+    *) echoContent red " ---> 选择错误" ;;
+    esac
 }
 
 # 修改http_port_t端口
@@ -10421,6 +11537,11 @@ cronFunction() {
         updateGeoSite >>/etc/v2ray-agent/crontab_updateGeoSite.log
         echoContent green " ---> geo更新日期:$(date "+%F %H:%M:%S")" >>/etc/v2ray-agent/crontab_updateGeoSite.log
         exit 0
+    elif [[ "${cronName}" == "${websiteCronTag}" ]]; then
+        if websiteLoadMetadata && [[ "${websiteType}" == "blog" ]]; then
+            websitePublishNextPendingArticle true >>"${websitePublishLog}" 2>&1 || true
+        fi
+        exit 0
     fi
 }
 # 账号管理
@@ -11721,7 +12842,7 @@ menu() {
     cd "$HOME" || exit
     echoContent red "\n=============================================================="
     echoContent green "维护：dodo258"
-    echoContent green "当前版本：v3.6.17"
+    echoContent green "当前版本：v3.7.0"
     echoContent green "项目：https://github.com/dodo258/sing-box-reality-manager"
     echoContent green "描述：多实例重构版管理脚本\c"
     showInstallStatus
@@ -11742,7 +12863,7 @@ menu() {
 
     echoContent skyBlue "-------------------------工具管理-----------------------------"
     echoMenuHint "8.账号/订阅管理" "主节点账号在这里看"
-    echoContent yellow "9.伪装站管理"
+    echoContent yellow "9.网站管理"
     echoContent yellow "10.证书管理"
     echoContent yellow "11.CDN节点管理"
     echoContent yellow "12.分流工具"
@@ -11786,7 +12907,7 @@ menu() {
         manageAccount 1
         ;;
     9)
-        updateNginxBlog 1
+        websiteManagementMenu
         ;;
     10)
         renewalTLS 1
