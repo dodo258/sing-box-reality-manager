@@ -8177,7 +8177,7 @@ menu() {
     cd "$HOME" || exit
     echoContent red "\n================================================ ================="
     echoContent green "Maintainer: dodo258"
-    echoContent green "Current version: v3.7.1"
+    echoContent green "Current version: v3.7.2"
     echoContent green "Project: https://github.com/dodo258/sing-box-reality-manager"
     echoContent green "Description: 8-in-1 customized management script\c"
     showInstallStatus

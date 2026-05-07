@@ -177,6 +177,7 @@ initVar() {
     websiteType=
     websiteTitle=
     websiteDescription=
+    websiteTLSAutoMode=false
     # 安装总进度
     totalProgress=1
 
@@ -2218,15 +2219,26 @@ installTLS() {
         fi
 
     elif [[ -d "$HOME/.acme.sh" ]] && [[ ! -f "$HOME/.acme.sh/${tlsDomain}_ecc/${tlsDomain}.cer" || ! -f "$HOME/.acme.sh/${tlsDomain}_ecc/${tlsDomain}.key" ]]; then
-        switchDNSAPI
-        if [[ -z "${dnsAPIType}" ]]; then
-            echoContent yellow "\n ---> 不采用API申请证书"
-            echoContent green " ---> 安装TLS证书，需要依赖80端口"
+        if [[ "${websiteTLSAutoMode}" == "true" ]]; then
+            dnsAPIStatus="n"
+            dnsAPIType=""
+            installedDNSAPIStatus=
+            sslType="letsencrypt"
+            echoContent yellow "\n ---> 网站模式默认使用 Let's Encrypt 免费证书"
+            echoContent green " ---> 网站证书申请依赖80端口，当前不启用DNS API流程"
             allowPort 80
+        else
+            switchDNSAPI
+            if [[ -z "${dnsAPIType}" ]]; then
+                echoContent yellow "\n ---> 不采用API申请证书"
+                echoContent green " ---> 安装TLS证书，需要依赖80端口"
+                allowPort 80
+            fi
+
+            switchSSLType
+            customSSLEmail
         fi
 
-        switchSSLType
-        customSSLEmail
         selectAcmeInstallSSL
 
         if [[ "${installedDNSAPIStatus}" == "true" ]]; then
@@ -3303,6 +3315,7 @@ websiteEnsureCustomCommonFiles() {
 websitePrepareTLS() {
     local oldDomain="${domain}"
     local oldCurrentHost="${currentHost}"
+    local oldWebsiteTLSAutoMode="${websiteTLSAutoMode}"
     domain="${websiteDomain}"
     currentHost=""
     allowPort 80
@@ -3311,11 +3324,13 @@ websitePrepareTLS() {
     if [[ ! -s "/etc/v2ray-agent/tls/${websiteDomain}.crt" || ! -s "/etc/v2ray-agent/tls/${websiteDomain}.key" ]]; then
         echoContent yellow "\n ---> 未检测到 ${websiteDomain} 的证书，开始申请"
         echoContent skyBlue " ---> 网站管理沿用 10.证书管理 的 acme.sh 免费证书与自动续期链路"
+        websiteTLSAutoMode=true
         installTLS 2
     else
         echoContent green " ---> 已检测到 ${websiteDomain} 的证书，直接复用"
         echoContent skyBlue " ---> 当前网站证书与 10.证书管理 共用同一套续期机制"
     fi
+    websiteTLSAutoMode="${oldWebsiteTLSAutoMode}"
     domain="${oldDomain}"
     currentHost="${oldCurrentHost}"
 }
@@ -13005,7 +13020,7 @@ menu() {
     cd "$HOME" || exit
     echoContent red "\n=============================================================="
     echoContent green "维护：dodo258"
-    echoContent green "当前版本：v3.7.1"
+    echoContent green "当前版本：v3.7.2"
     echoContent green "项目：https://github.com/dodo258/sing-box-reality-manager"
     echoContent green "描述：多实例重构版管理脚本\c"
     showInstallStatus
