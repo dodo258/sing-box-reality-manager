@@ -2,6 +2,8 @@
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 
+语言: [简体中文](README.md) | [English](README_EN.md)
+
 这是一个 AGPL-3.0 魔改版分支仓库。它以稳定的 `dodo258-v2ray-agent` 单实例脚本为基线，单独演进 `sing-box` 优先的多实例 Reality 节点管理能力，避免影响原仓库里已经稳定的单实例安装流程。
 
 当前这版已经可以作为长期使用的稳定版：
@@ -60,6 +62,7 @@
 *   网站默认使用真实域名、正常 `80/443` 和可信 HTTPS 证书
 *   网站证书沿用 `10.证书管理` 同一套 `acme.sh` 免费证书与自动续期链路
 *   网站场景默认走 `Let's Encrypt` 免费证书，不再要求选择 DNS API 提供商
+*   当前主推中文技术博客和中文小工具站，旧伪装模板只作兼容入口
 
 ## 已知边界
 
