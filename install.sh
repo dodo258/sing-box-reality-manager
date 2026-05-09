@@ -13083,9 +13083,9 @@ checkRealityDest() {
 initRealityClientServersName() {
     local realityDestDomainList=
     if [[ "${coreInstallType}" == "1" || "${selectCoreType}" == "1" ]]; then
-        realityDestDomainList="gateway.icloud.com,download-installer.cdn.mozilla.net,addons.mozilla.org,www.mozilla.org,www.booking.com,www.kayak.com,www.japan.travel,store.epicgames.com,www.aniplex.co.jp,www.gundam.info,www.berkeley.edu,www.caltech.edu,www.princeton.edu,www.columbia.edu,www.ucla.edu,www.umich.edu,www.ox.ac.uk,www.cam.ac.uk,www.nyu.edu,redis.io,www.mongodb.com,www.asus.com,www.ibm.com,www.cloudflare.com,www.atlassian.com,www.jetbrains.com,www.postman.com,s0.awsstatic.com,d1.awsstatic.com,m.media-amazon.com,www.century21.com,www.sothebysrealty.com,www.zillow.com,www.realtor.com,www.ericsson.com,www.netgear.com,www.tp-link.com,www.synology.com,www.qnap.com,www.logitech.com,www.seagate.com,www.vmware.com,www.sennheiser.com"
+        realityDestDomainList="www.japan.travel,www.aniplex.co.jp,www.caltech.edu,www.princeton.edu,www.columbia.edu,www.ucla.edu,www.umich.edu,www.ox.ac.uk,www.nyu.edu,www.asus.com,www.ibm.com,www.ericsson.com,www.tp-link.com,www.synology.com,www.logitech.com,www.seagate.com,www.vmware.com,www.sennheiser.com,www.sothebysrealty.com,www.century21.com"
     elif [[ "${coreInstallType}" == "2" || "${selectCoreType}" == "2" ]]; then
-        realityDestDomainList="gateway.icloud.com,download-installer.cdn.mozilla.net,addons.mozilla.org,www.mozilla.org,www.booking.com,www.kayak.com,www.japan.travel,store.epicgames.com,www.aniplex.co.jp,www.gundam.info,www.berkeley.edu,www.caltech.edu,www.princeton.edu,www.columbia.edu,www.ucla.edu,www.umich.edu,www.ox.ac.uk,www.cam.ac.uk,www.nyu.edu,redis.io,www.mongodb.com,www.asus.com,www.ibm.com,www.cloudflare.com,www.atlassian.com,www.jetbrains.com,www.postman.com,s0.awsstatic.com,d1.awsstatic.com,m.media-amazon.com,www.century21.com,www.sothebysrealty.com,www.zillow.com,www.realtor.com,www.ericsson.com,www.netgear.com,www.tp-link.com,www.synology.com,www.qnap.com,www.logitech.com,www.seagate.com,www.vmware.com,www.sennheiser.com"
+        realityDestDomainList="www.japan.travel,www.aniplex.co.jp,www.caltech.edu,www.princeton.edu,www.columbia.edu,www.ucla.edu,www.umich.edu,www.ox.ac.uk,www.nyu.edu,www.asus.com,www.ibm.com,www.ericsson.com,www.tp-link.com,www.synology.com,www.logitech.com,www.seagate.com,www.vmware.com,www.sennheiser.com,www.sothebysrealty.com,www.century21.com"
     fi
     if [[ -n "${realityServerName}" && -z "${lastInstallationConfig}" ]]; then
         if echo ${realityDestDomainList} | grep -q "${realityServerName}"; then
@@ -13135,7 +13135,7 @@ initRealityClientServersName() {
             echoContent skyBlue "\n================ 配置客户端可用的serverNames ===============\n"
             echoContent yellow "#注意事项"
             echoContent green "Reality 目标域名建议优先使用仓库整理过的一线域名池，并自行复测可达性\n"
-            echoContent green "默认随机池已收紧为更保守的高置信直连域名组\n"
+            echoContent green "默认随机池已收紧为国内机严格复测后的低时延白名单域名组\n"
             echoContent yellow "推荐文档: documents/reality_target_domains.md"
             echoContent yellow "录入示例:addons.mozilla.org:443\n"
             read -r -p "请输入目标域名，[回车]随机域名，默认端口443:" realityServerName
