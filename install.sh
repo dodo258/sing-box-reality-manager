@@ -2546,20 +2546,23 @@ websiteEnsureNginxInstalled() {
 
 websiteCheckPortConflict() {
     local conflictLog=
+    local blockingLog=
     if command -v lsof >/dev/null 2>&1; then
         conflictLog=$(lsof -nP -iTCP:80 -sTCP:LISTEN 2>/dev/null; lsof -nP -iTCP:443 -sTCP:LISTEN 2>/dev/null)
-        if echo "${conflictLog}" | grep -E "xray|sing-box|caddy" >/dev/null 2>&1; then
-            echoContent red "\n ---> 检测到80或443被xray/sing-box/caddy直接占用，当前网站管理无法安全接管"
+        blockingLog=$(echo "${conflictLog}" | awk 'NR > 1 && $1 != "nginx"')
+        if [[ -n "${blockingLog}" ]]; then
+            echoContent red "\n ---> 检测到80或443被非Nginx进程占用，当前网站管理无法安全接管"
             echoContent yellow " ---> 请保持节点使用随机端口，或先手动释放80/443后再部署网站"
-            echoContent yellow "${conflictLog}"
+            echoContent yellow "${blockingLog}"
             exit 0
         fi
     elif command -v ss >/dev/null 2>&1; then
         conflictLog=$(ss -ltnp 2>/dev/null | grep -E '(:80 |:443 )')
-        if echo "${conflictLog}" | grep -E "xray|sing-box|caddy" >/dev/null 2>&1; then
-            echoContent red "\n ---> 检测到80或443被xray/sing-box/caddy直接占用，当前网站管理无法安全接管"
+        blockingLog=$(echo "${conflictLog}" | grep -v "nginx" || true)
+        if [[ -n "${blockingLog}" ]]; then
+            echoContent red "\n ---> 检测到80或443被非Nginx进程占用，当前网站管理无法安全接管"
             echoContent yellow " ---> 请保持节点使用随机端口，或先手动释放80/443后再部署网站"
-            echoContent yellow "${conflictLog}"
+            echoContent yellow "${blockingLog}"
             exit 0
         fi
     fi
