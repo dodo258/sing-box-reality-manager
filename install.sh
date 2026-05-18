@@ -6015,7 +6015,7 @@ promptManagedMultiAnyTLSDomain() {
     fi
     domain="${managedMultiAnyTLSDomain}"
     dnsTLSDomain=$(echo "${managedMultiAnyTLSDomain}" | awk -F "." '{$1="";print $0}' | sed 's/^[[:space:]]*//' | sed 's/ /./g')
-    checkDNSIP
+    checkDNSIP "${managedMultiAnyTLSDomain}"
 }
 
 ensureManagedMultiAnyTLSCert() {
