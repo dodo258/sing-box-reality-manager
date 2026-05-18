@@ -4,83 +4,59 @@
 
 语言: [简体中文](README.md) | [English](README_EN.md)
 
-这是一个 AGPL-3.0 魔改版分支仓库。它以稳定的 `dodo258-v2ray-agent` 单实例脚本为基线，单独演进 `sing-box` 优先的多实例 Reality 节点管理能力，避免影响原仓库里已经稳定的单实例安装流程。
+这是一个 AGPL-3.0 魔改版分支仓库。它以 `sing-box` 优先，围绕 Reality、AnyTLS、Snell+ShadowTLS 多实例节点管理、节点级 DNS 分流和轻量网站管理做了整理。
 
-当前这版已经可以作为长期使用的稳定版：
+## 推荐用法
 
-* 主节点部署、账号管理、节点管理可正常使用
-* 多实例 Reality 节点可独立部署、查看、删用户、删节点
-* Snell v4/v5 + Shadow-TLS v3 可按独立端口部署和管理
-* `sing-box` 下主节点和多实例节点都支持节点级 DNS 分流
-* `12.网站管理` 可部署中文静态站，网站与节点功能解耦
-* 服务由 `systemd` 托管，机器重启后会自动拉起
+新手或日常稳定使用，优先走：
 
-## 魔改说明
+```text
+3.一键无域名Reality
+```
 
-*   当前维护: [dodo258](https://github.com/dodo258)
-*   基线来源: `dodo258-v2ray-agent` 当前稳定版本副本
-*   改造方向: 多实例 Reality 节点管理、按节点 DNS 分流、自更新地址切换、新仓库文档与菜单文案
-*   保持不变: 原有单实例主流程继续保留，方便回退和对照
-*   合规说明: 原项目出处与许可证说明见 [NOTICE.md](NOTICE.md)
+需要多个独立节点时，再用：
 
-## 功能
+```text
+6.多实例Reality
+7.多实例AnyTLS
+8.多实例Snell+ShadowTLS
+```
 
-*   支持 Xray-core 和 sing-box
-*   支持 VLESS、VMess、Trojan、Hysteria2、Tuic、NaiveProxy 等协议
-*   自动申请与续订 TLS 证书
-*   提供菜单式安装、管理、订阅与分流配置
-*   保留域名黑名单、BT 下载限制等能力
-*   `6.多实例Reality` 可在当前核心下部署多个独立端口的 Reality 节点
-*   `8.多实例Snell+ShadowTLS` 可部署多个独立 Snell v4/v5 + Shadow-TLS v3 节点
-*   `11.分流工具 -> 5.DNS分流` 支持 `sing-box` 主节点和多实例节点的节点级 DNS 分流
-*   `12.网站管理` 支持中文技术博客、中文小工具站、自定义静态站和旧模板兼容入口
+常用管理入口：
 
-## 当前建议
+```text
+9.账号/订阅管理      查看主节点账号
+10.节点管理          查看和管理节点
+11.分流工具          配置 DNS / 流媒体分流
+12.网站管理          部署普通静态网站
+15.更新脚本          更新到最新版
+18.卸载脚本
+```
 
-*   多实例优先推荐 `sing-box`
-*   `Xray-core` 保留兼容旧功能时使用
-*   多实例 Reality 需要先安装一个主节点，再继续部署其他独立节点
-*   Snell+ShadowTLS 默认使用随机公网端口，443 只在端口空闲时使用
-*   流媒体专用节点优先用 `sing-box + 节点级 DNS 分流`
-*   网站功能按需使用即可，默认走正常 `80/443 + HTTPS`
+## 怎么选
 
-## 多实例说明
+* 稳定优先：选 `Reality`，默认随机端口，不需要自备域名。
+* 需要自备域名证书：选 `AnyTLS`。
+* 想用 Snell：选 `Snell+ShadowTLS`，默认随机公网端口，443 只在空闲时使用。
+* 流媒体分流：优先使用 `sing-box + 11.分流工具 -> DNS分流`。
+* 普通网站：用 `12.网站管理`，网站走正常 `80/443 + HTTPS`，节点继续走随机端口。
 
-*   这里的“多实例”是独立节点，不是给已有节点补入口
-*   当前版本覆盖 `VLESS+Reality+Vision`、`AnyTLS`、`Snell+ShadowTLS` 的多实例管理
-*   按当前已安装核心工作：你装的是 Xray，就管理 Xray 多实例；你装的是 sing-box，就管理 sing-box 多实例
-*   不引入双核心同时托管逻辑，优先保证稳定性
-*   `6.多实例Reality` 只负责独立节点，不和旧的 `9.账号/订阅管理` 混用
+## 当前能力
 
-## Snell+ShadowTLS 说明
+* 支持 `sing-box` 优先部署，也保留 `Xray-core` 兼容入口。
+* 支持 VLESS Reality、AnyTLS、Snell v4/v5 + Shadow-TLS v3。
+* 支持 Reality / AnyTLS / Snell+ShadowTLS 多实例独立节点。
+* `sing-box` 下支持主节点和多实例节点的节点级 DNS 分流。
+* 网站管理支持中文技术博客、中文小工具站、自定义静态站和旧模板兼容入口。
+* 服务由 `systemd` 托管，机器重启后会自动拉起。
 
-*   `5.一键Snell+ShadowTLS` 和 `8.多实例Snell+ShadowTLS` 使用同一套独立部署逻辑
-*   Shadow-TLS v3 对外监听，Snell 后端只监听 `127.0.0.1` 随机端口
-*   支持选择 Snell v4 或 v5，默认推荐 v5
-*   默认随机公网端口；如果手动填 `443`，脚本会先检查是否被 Nginx、网站或旧节点占用
-*   Shadow-TLS 目标域名参考 [Shadow-TLS 目标域名池](documents/shadowtls_target_domains.md)
-*   Snell 节点 DNS 是全节点上游 DNS，不等同 `sing-box` 的 geosite 按域名分流
+## 关键边界
 
-## DNS 分流说明
-
-*   `11.分流工具 -> 5.DNS分流` 现在分成“全局”和“Reality 节点”两类入口
-*   `sing-box` 支持先选节点，再只给该节点绑定 DNS 分流
-*   可直接录入 `netflix,disney,hulu,openai` 这类关键词，脚本会自动转成对应规则集
-*   `Xray-core` 目前仍然只有核心级全局 DNS 分流，不支持在同一进程里按多个 Reality 节点分别指定不同上游 DNS
-
-## 网站管理说明
-
-*   `12.网站管理` 面向正常静态站部署，和节点功能解耦
-*   网站默认使用真实域名、正常 `80/443` 和可信 HTTPS 证书
-*   网站证书沿用 `13.证书管理` 同一套 `acme.sh` 免费证书与自动续期链路
-*   网站场景默认走 `Let's Encrypt` 免费证书，不再要求选择 DNS API 提供商
-*   当前主推中文技术博客和中文小工具站，旧伪装模板只作兼容入口
-
-## 已知边界
-
-*   `Xray-core` 不支持像 `sing-box` 那样按不同 Reality 节点分别指定不同上游 DNS
-*   Reality 目标域名、流媒体规则集、上游解锁 DNS 都依赖外部环境，后续若外部策略变化，仍可能需要调整域名池或 DNS
-*   Snell+ShadowTLS 的节点级 DNS 会影响整个 Snell 节点，不做按域名规则拆分
+* 多实例是“独立节点”，不是给旧节点补入口。
+* `Xray-core` 目前只保留兼容能力，按节点 DNS 分流优先使用 `sing-box`。
+* AnyTLS 需要域名，证书走免费 `acme.sh` 自动续期链路。
+* Snell+ShadowTLS 中 Shadow-TLS 对外监听，Snell 只监听本机后端端口。
+* Reality / Shadow-TLS 目标域名依赖外部网络环境，必要时需要重新筛选。
 
 ## 安装
 
@@ -88,40 +64,24 @@
 wget -P /root -N --no-check-certificate "https://raw.githubusercontent.com/dodo258/sing-box-reality-manager/main/install.sh" && chmod 700 /root/install.sh && /root/install.sh
 ```
 
-## 使用
-
-安装完成后执行:
+安装完成后执行：
 
 ```bash
 vasma
 ```
 
-常用入口:
+## 文档
 
-```text
-3.一键无域名Reality
-4.一键AnyTLS
-5.一键Snell+ShadowTLS
-6.多实例Reality
-7.多实例AnyTLS
-8.多实例Snell+ShadowTLS
-9.账号/订阅管理
-10.节点管理
-11.分流工具
-12.网站管理
-```
+* [Reality 目标域名推荐](documents/reality_target_domains.md)
+* [Shadow-TLS 目标域名池](documents/shadowtls_target_domains.md)
+* [多实例 Reality 使用说明](documents/multi_instance_reality.md)
+* [备份与恢复说明](documents/backup_and_restore.md)
 
-## 附加文档
+## 魔改说明
 
-*   [Reality 目标域名推荐](documents/reality_target_domains.md)
-*   [Shadow-TLS 目标域名池](documents/shadowtls_target_domains.md)
-*   [多实例 Reality 使用说明](documents/multi_instance_reality.md)
-*   [备份与恢复说明](documents/backup_and_restore.md)
-
-## 反馈
-
-*   仓库: [github.com/dodo258/sing-box-reality-manager](https://github.com/dodo258/sing-box-reality-manager)
-*   问题反馈: [提交 issue](https://github.com/dodo258/sing-box-reality-manager/issues)
+* 当前维护: [dodo258](https://github.com/dodo258)
+* 基线来源: `dodo258-v2ray-agent` 稳定版本副本
+* 合规说明: 原项目出处与许可证说明见 [NOTICE.md](NOTICE.md)
 
 ## 许可证
 
