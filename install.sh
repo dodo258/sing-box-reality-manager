@@ -16,6 +16,8 @@ xrayOpenrcServicePath="/etc/init.d/${xrayServiceName}"
 singBoxOpenrcServicePath="/etc/init.d/${singBoxServiceName}"
 managedMultiRealityPrefix="30_VLESS_vision_reality_multi_"
 managedMultiRealityDNSPrefix="31_VLESS_vision_reality_multi_dns_"
+managedMultiAnyTLSPrefix="32_anytls_multi_"
+managedMultiAnyTLSDNSPrefix="33_anytls_multi_dns_"
 managedMultiRealityShortID="6ba85179e30d4fc2"
 managedMultiRealityKeySuffix=".key"
 websiteManagerRoot="/etc/v2ray-agent/website-manager"
@@ -1199,6 +1201,11 @@ showInstallStatus() {
         managedMultiRealityCount=$(countManagedMultiRealityNodes)
         if [[ "${managedMultiRealityCount}" != "0" ]]; then
             echoMenuHint "\n多实例Reality节点" "${managedMultiRealityCount}个"
+        fi
+        local managedMultiAnyTLSCount=
+        managedMultiAnyTLSCount=$(countManagedMultiAnyTLSNodes)
+        if [[ "${managedMultiAnyTLSCount}" != "0" ]]; then
+            echoMenuHint "\n多实例AnyTLS节点" "${managedMultiAnyTLSCount}个"
         fi
     fi
 }
@@ -4971,6 +4978,18 @@ singBoxRealityDNSNodePorts=()
 singBoxRealityDNSNodeTargets=()
 singBoxRealityDNSNodeInboundTags=()
 singBoxRealityDNSNodeDNSFiles=()
+managedMultiAnyTLSNodeFiles=()
+managedMultiAnyTLSNodeIds=()
+managedMultiAnyTLSNodeLabels=()
+managedMultiAnyTLSNodePorts=()
+managedMultiAnyTLSNodeDomains=()
+managedMultiAnyTLSNodeUserCounts=()
+managedMultiAnyTLSSelectedFile=
+managedMultiAnyTLSSelectedId=
+managedMultiAnyTLSSelectedPort=
+managedMultiAnyTLSSelectedDomain=
+managedMultiAnyTLSSelectedInboundTag=
+managedMultiAnyTLSSelectedDNSConfigFile=
 
 listManagedMultiRealityFiles() {
     if [[ "${coreInstallType}" == "1" ]]; then
@@ -4978,6 +4997,104 @@ listManagedMultiRealityFiles() {
     elif [[ "${coreInstallType}" == "2" ]]; then
         find /etc/v2ray-agent/sing-box/conf/config -maxdepth 1 -type f -name "${managedMultiRealityPrefix}*.json" 2>/dev/null | sort
     fi
+}
+
+listManagedMultiAnyTLSFiles() {
+    if [[ "${coreInstallType}" == "2" ]]; then
+        find /etc/v2ray-agent/sing-box/conf/config -maxdepth 1 -type f -name "${managedMultiAnyTLSPrefix}*.json" 2>/dev/null | sort
+    fi
+}
+
+countManagedMultiAnyTLSNodes() {
+    local count=0
+    while read -r _file; do
+        count=$((count + 1))
+    done < <(listManagedMultiAnyTLSFiles)
+    echo "${count}"
+}
+
+getManagedMultiAnyTLSDNSConfigFileById() {
+    local nodeId=$1
+    if [[ "${coreInstallType}" == "2" ]]; then
+        echo "/etc/v2ray-agent/sing-box/conf/config/${managedMultiAnyTLSDNSPrefix}${nodeId}.json"
+    fi
+}
+
+getSingBoxMainAnyTLSDNSConfigFile() {
+    echo "/etc/v2ray-agent/sing-box/conf/config/33_anytls_dns_main.json"
+}
+
+buildManagedMultiAnyTLSEntries() {
+    managedMultiAnyTLSNodeFiles=()
+    managedMultiAnyTLSNodeIds=()
+    managedMultiAnyTLSNodeLabels=()
+    managedMultiAnyTLSNodePorts=()
+    managedMultiAnyTLSNodeDomains=()
+    managedMultiAnyTLSNodeUserCounts=()
+
+    local file=
+    local index=0
+    while read -r file; do
+        [[ -z "${file}" ]] && continue
+        local nodeId=
+        local port=
+        local domain=
+        local userCount=
+        local dnsConfigFile=
+        local dnsServer=
+        local dnsSummary=
+
+        nodeId=$(basename "${file}" .json)
+        nodeId=${nodeId#${managedMultiAnyTLSPrefix}}
+        port=$(jq -r '.inbounds[0].listen_port // ""' "${file}")
+        domain=$(jq -r '.inbounds[0].tls.server_name // ""' "${file}")
+        userCount=$(jq -r '.inbounds[0].users | length' "${file}")
+
+        dnsConfigFile=$(getManagedMultiAnyTLSDNSConfigFileById "${nodeId}")
+        if [[ -n "${dnsConfigFile}" && -f "${dnsConfigFile}" ]]; then
+            dnsServer=$(readManagedMultiRealityDNSServer "${dnsConfigFile}")
+            if [[ -n "${dnsServer}" ]]; then
+                dnsSummary=" DNS:${dnsServer}"
+            else
+                dnsSummary=" DNS:已配置"
+            fi
+        fi
+
+        managedMultiAnyTLSNodeFiles[index]="${file}"
+        managedMultiAnyTLSNodeIds[index]="${nodeId}"
+        managedMultiAnyTLSNodePorts[index]="${port}"
+        managedMultiAnyTLSNodeDomains[index]="${domain}"
+        managedMultiAnyTLSNodeUserCounts[index]="${userCount}"
+        managedMultiAnyTLSNodeLabels[index]="端口:${port} 域名:${domain} 用户:${userCount}${dnsSummary}"
+        index=$((index + 1))
+    done < <(listManagedMultiAnyTLSFiles)
+}
+
+selectManagedMultiAnyTLSNode() {
+    local actionLabel=$1
+    buildManagedMultiAnyTLSEntries
+    if [[ ${#managedMultiAnyTLSNodeFiles[@]} -eq 0 ]]; then
+        echoContent yellow " ---> 当前没有已部署的多实例 AnyTLS 节点"
+        exit 0
+    fi
+
+    echoContent yellow "\n请选择要${actionLabel}的多实例 AnyTLS 节点"
+    local index=0
+    for index in "${!managedMultiAnyTLSNodeFiles[@]}"; do
+        echoContent green "$((index + 1)).${managedMultiAnyTLSNodeIds[${index}]} ${managedMultiAnyTLSNodeLabels[${index}]}"
+    done
+    read -r -p "请选择节点编号:" managedMultiAnyTLSNodeIndex
+    if ! [[ "${managedMultiAnyTLSNodeIndex}" =~ ^[0-9]+$ ]] || ((managedMultiAnyTLSNodeIndex < 1 || managedMultiAnyTLSNodeIndex > ${#managedMultiAnyTLSNodeFiles[@]})); then
+        echoContent red " ---> 选择错误"
+        exit 0
+    fi
+    managedMultiAnyTLSNodeIndex=$((managedMultiAnyTLSNodeIndex - 1))
+    managedMultiAnyTLSSelectedFile="${managedMultiAnyTLSNodeFiles[${managedMultiAnyTLSNodeIndex}]}"
+    managedMultiAnyTLSSelectedId="${managedMultiAnyTLSNodeIds[${managedMultiAnyTLSNodeIndex}]}"
+    managedMultiAnyTLSSelectedPort="${managedMultiAnyTLSNodePorts[${managedMultiAnyTLSNodeIndex}]}"
+    managedMultiAnyTLSSelectedDomain="${managedMultiAnyTLSNodeDomains[${managedMultiAnyTLSNodeIndex}]}"
+    managedMultiAnyTLSSelectedInboundTag="$(getManagedMultiRealityInboundTag "${managedMultiAnyTLSSelectedFile}")"
+    managedMultiAnyTLSSelectedDNSConfigFile="$(getManagedMultiAnyTLSDNSConfigFileById "${managedMultiAnyTLSSelectedId}")"
 }
 
 countManagedMultiRealityNodes() {
@@ -5171,17 +5288,56 @@ buildSingBoxRealityDNSEntries() {
         singBoxRealityDNSNodeDNSFiles[index]="$(getManagedMultiRealityDNSConfigFileById "${managedMultiRealityNodeIds[${multiIndex}]}")"
         index=$((index + 1))
     done
+
+    local anyTLSMainFile="${singBoxConfigPath}13_anytls_inbounds.json"
+    if [[ -f "${anyTLSMainFile}" ]]; then
+        local anyTLSDNSConfigFile=
+        local anyTLSDNSServer=
+        local anyTLSDNSSummary=
+        anyTLSDNSConfigFile=$(getSingBoxMainAnyTLSDNSConfigFile)
+        if [[ -f "${anyTLSDNSConfigFile}" ]]; then
+            anyTLSDNSServer=$(readManagedMultiRealityDNSServer "${anyTLSDNSConfigFile}")
+            if [[ -n "${anyTLSDNSServer}" ]]; then
+                anyTLSDNSSummary=" DNS:${anyTLSDNSServer}"
+            else
+                anyTLSDNSSummary=" DNS:已配置"
+            fi
+        fi
+        singBoxRealityDNSNodeFiles[index]="${anyTLSMainFile}"
+        singBoxRealityDNSNodeIds[index]="main_anytls"
+        singBoxRealityDNSNodeDisplayNames[index]="AnyTLS主节点"
+        singBoxRealityDNSNodePorts[index]="$(jq -r '.inbounds[0].listen_port // ""' "${anyTLSMainFile}")"
+        singBoxRealityDNSNodeTargets[index]="$(jq -r '.inbounds[0].tls.server_name // ""' "${anyTLSMainFile}")"
+        singBoxRealityDNSNodeInboundTags[index]="$(getManagedMultiRealityInboundTag "${anyTLSMainFile}")"
+        singBoxRealityDNSNodeDNSFiles[index]="${anyTLSDNSConfigFile}"
+        singBoxRealityDNSNodeLabels[index]="AnyTLS主节点 端口:${singBoxRealityDNSNodePorts[${index}]} 域名:${singBoxRealityDNSNodeTargets[${index}]} 用户:$(jq -r '.inbounds[0].users | length' "${anyTLSMainFile}")${anyTLSDNSSummary}"
+        index=$((index + 1))
+    fi
+
+    buildManagedMultiAnyTLSEntries
+    local anyTLSIndex=0
+    for anyTLSIndex in "${!managedMultiAnyTLSNodeFiles[@]}"; do
+        singBoxRealityDNSNodeFiles[index]="${managedMultiAnyTLSNodeFiles[${anyTLSIndex}]}"
+        singBoxRealityDNSNodeIds[index]="${managedMultiAnyTLSNodeIds[${anyTLSIndex}]}"
+        singBoxRealityDNSNodeDisplayNames[index]="${managedMultiAnyTLSNodeIds[${anyTLSIndex}]}"
+        singBoxRealityDNSNodeLabels[index]="AnyTLS ${managedMultiAnyTLSNodeLabels[${anyTLSIndex}]}"
+        singBoxRealityDNSNodePorts[index]="${managedMultiAnyTLSNodePorts[${anyTLSIndex}]}"
+        singBoxRealityDNSNodeTargets[index]="${managedMultiAnyTLSNodeDomains[${anyTLSIndex}]}"
+        singBoxRealityDNSNodeInboundTags[index]="$(getManagedMultiRealityInboundTag "${managedMultiAnyTLSNodeFiles[${anyTLSIndex}]}")"
+        singBoxRealityDNSNodeDNSFiles[index]="$(getManagedMultiAnyTLSDNSConfigFileById "${managedMultiAnyTLSNodeIds[${anyTLSIndex}]}")"
+        index=$((index + 1))
+    done
 }
 
 selectSingBoxRealityDNSNode() {
     local actionLabel=$1
     buildSingBoxRealityDNSEntries
     if [[ ${#singBoxRealityDNSNodeFiles[@]} -eq 0 ]]; then
-        echoContent yellow " ---> 当前没有可配置节点级 DNS 分流的 sing-box Reality 节点"
+        echoContent yellow " ---> 当前没有可配置节点级 DNS 分流的 sing-box 节点"
         exit 0
     fi
 
-    echoContent yellow "\n请选择要${actionLabel}的 sing-box Reality 节点"
+    echoContent yellow "\n请选择要${actionLabel}的 sing-box 节点"
     local index=0
     for index in "${!singBoxRealityDNSNodeFiles[@]}"; do
         echoContent green "$((index + 1)).${singBoxRealityDNSNodeLabels[${index}]}"
@@ -5487,7 +5643,7 @@ selectManagedMultiRealityNodeWithDNS() {
     local actionLabel=$1
     buildSingBoxRealityDNSEntries
     if [[ ${#singBoxRealityDNSNodeFiles[@]} -eq 0 ]]; then
-        echoContent yellow " ---> 当前没有已部署的 sing-box Reality 节点"
+        echoContent yellow " ---> 当前没有已部署的 sing-box 节点"
         exit 0
     fi
 
@@ -5516,11 +5672,11 @@ selectManagedMultiRealityNodeWithDNS() {
     done
 
     if [[ ${#matchedNodeFiles[@]} -eq 0 ]]; then
-        echoContent yellow " ---> 当前没有已配置节点级 DNS 分流的 sing-box Reality 节点"
+        echoContent yellow " ---> 当前没有已配置节点级 DNS 分流的 sing-box 节点"
         exit 0
     fi
 
-    echoContent yellow "\n请选择要${actionLabel}的 sing-box Reality 节点"
+    echoContent yellow "\n请选择要${actionLabel}的 sing-box 节点"
     for index in "${!matchedNodeFiles[@]}"; do
         echoContent green "$((index + 1)).${matchedNodeLabels[${index}]}"
     done
@@ -5541,7 +5697,7 @@ selectManagedMultiRealityNodeWithDNS() {
 
 setManagedMultiRealityDNSRouting() {
     if [[ "${coreInstallType}" != "2" ]]; then
-        echoContent red " ---> 当前仅支持 sing-box Reality 节点按节点配置 DNS 分流"
+        echoContent red " ---> 当前仅支持 sing-box 节点按节点配置 DNS 分流"
         echoContent yellow " ---> Xray-core 现阶段仍是核心级 DNS 分流，不支持同一进程内按多个 Reality 节点分别指定上游 DNS"
         exit 0
     fi
@@ -5590,7 +5746,7 @@ setManagedMultiRealityDNSRouting() {
 
 removeManagedMultiRealityDNSRouting() {
     if [[ "${coreInstallType}" != "2" ]]; then
-        echoContent red " ---> 当前仅支持 sing-box Reality 节点按节点卸载 DNS 分流"
+        echoContent red " ---> 当前仅支持 sing-box 节点按节点卸载 DNS 分流"
         exit 0
     fi
 
@@ -5826,6 +5982,249 @@ managedMultiRealityMenu() {
         ;;
     6)
         deleteManagedMultiRealityNode
+        ;;
+    *)
+        echoContent red " ---> 选择错误"
+        exit 0
+        ;;
+    esac
+}
+
+promptManagedMultiAnyTLSPort() {
+    echoContent yellow "请输入多实例 AnyTLS 端口[回车随机10000-30000]"
+    read -r -p "端口:" managedMultiAnyTLSPort
+    if [[ -z "${managedMultiAnyTLSPort}" ]]; then
+        managedMultiAnyTLSPort=$((RANDOM % 20001 + 10000))
+    fi
+    if ! [[ "${managedMultiAnyTLSPort}" =~ ^[0-9]+$ ]] || ((managedMultiAnyTLSPort < 1 || managedMultiAnyTLSPort > 65535)); then
+        echoContent red " ---> 端口不合法"
+        promptManagedMultiAnyTLSPort
+        return
+    fi
+    checkPort "${managedMultiAnyTLSPort}"
+    allowPort "${managedMultiAnyTLSPort}"
+    echoContent yellow "\n ---> 端口: ${managedMultiAnyTLSPort}"
+}
+
+promptManagedMultiAnyTLSDomain() {
+    read -r -p "请输入该 AnyTLS 节点独立域名[例: anytls.example.com]:" managedMultiAnyTLSDomain
+    if [[ -z "${managedMultiAnyTLSDomain}" ]]; then
+        echoContent red " ---> 域名不可为空"
+        promptManagedMultiAnyTLSDomain
+        return
+    fi
+    domain="${managedMultiAnyTLSDomain}"
+    dnsTLSDomain=$(echo "${managedMultiAnyTLSDomain}" | awk -F "." '{$1="";print $0}' | sed 's/^[[:space:]]*//' | sed 's/ /./g')
+    checkDNSIP
+}
+
+ensureManagedMultiAnyTLSCert() {
+    echoContent skyBlue "\n进度  1/${totalProgress} : 申请 AnyTLS 节点证书"
+    installTLS 1
+    if [[ ! -f "/etc/v2ray-agent/tls/${managedMultiAnyTLSDomain}.crt" || ! -f "/etc/v2ray-agent/tls/${managedMultiAnyTLSDomain}.key" ]]; then
+        echoContent red " ---> 未检测到 ${managedMultiAnyTLSDomain} 证书，无法继续"
+        exit 0
+    fi
+    installCronTLS 1
+}
+
+generateManagedMultiAnyTLSUserIdentity() {
+    local defaultPassword=
+    defaultPassword=$("${singBoxBinaryPath}" generate uuid)
+    read -r -p "请输入自定义 AnyTLS 密码[需合法]，[回车]随机密码:" managedMultiAnyTLSPassword
+    if [[ -z "${managedMultiAnyTLSPassword}" ]]; then
+        managedMultiAnyTLSPassword="${defaultPassword}"
+    fi
+    local defaultName="${managedMultiAnyTLSPassword:0:8}-anytls"
+    read -r -p "请输入自定义用户名[需合法]，[回车]随机用户名:" managedMultiAnyTLSUserName
+    if [[ -z "${managedMultiAnyTLSUserName}" ]]; then
+        managedMultiAnyTLSUserName="${defaultName}"
+    fi
+}
+
+buildManagedMultiAnyTLSUsersJson() {
+    local password="$1"
+    local userName="$2"
+    jq -n --arg password "${password}" --arg name "${userName}" '[{"password":$password,"name":$name}]'
+}
+
+writeManagedMultiAnyTLSConfig() {
+    local file="$1"
+    local port="$2"
+    local domainName="$3"
+    local usersJson="$4"
+    jq -n \
+        --argjson port "${port}" \
+        --arg tag "AnyTLSMulti${port}" \
+        --arg domain "${domainName}" \
+        --arg cert "/etc/v2ray-agent/tls/${domainName}.crt" \
+        --arg key "/etc/v2ray-agent/tls/${domainName}.key" \
+        --argjson users "${usersJson}" \
+        '{
+          inbounds: [
+            {
+              type: "anytls",
+              listen: "::",
+              tag: $tag,
+              listen_port: $port,
+              users: $users,
+              tls: {
+                enabled: true,
+                server_name: $domain,
+                certificate_path: $cert,
+                key_path: $key
+              }
+            }
+          ]
+        }' >"${file}"
+}
+
+deployManagedMultiAnyTLSNode() {
+    if [[ "${coreInstallType}" != "2" ]]; then
+        echoContent red " ---> 多实例 AnyTLS 仅支持 sing-box 核心"
+        echoContent yellow " ---> 请先安装一个 sing-box 主节点后再使用该功能"
+        exit 0
+    fi
+    totalProgress=1
+    promptManagedMultiAnyTLSPort
+    promptManagedMultiAnyTLSDomain
+    ensureManagedMultiAnyTLSCert
+    generateManagedMultiAnyTLSUserIdentity
+
+    local nodeId=
+    local file=
+    local usersJson=
+    nodeId="$(date +%Y%m%d%H%M%S)-${managedMultiAnyTLSPort}"
+    file="${singBoxConfigPath}${managedMultiAnyTLSPrefix}${nodeId}.json"
+    usersJson=$(buildManagedMultiAnyTLSUsersJson "${managedMultiAnyTLSPassword}" "${managedMultiAnyTLSUserName}")
+    writeManagedMultiAnyTLSConfig "${file}" "${managedMultiAnyTLSPort}" "${managedMultiAnyTLSDomain}" "${usersJson}"
+    handleSingBox restart
+    echoContent green " ---> sing-box 多实例 AnyTLS 节点部署成功"
+    managedMultiAnyTLSSelectedFile="${file}"
+    managedMultiAnyTLSSelectedId="${nodeId}"
+    showManagedMultiAnyTLSAccounts true
+}
+
+showManagedMultiAnyTLSNodes() {
+    buildManagedMultiAnyTLSEntries
+    if [[ ${#managedMultiAnyTLSNodeFiles[@]} -eq 0 ]]; then
+        echoContent yellow " ---> 当前没有已部署的多实例 AnyTLS 节点"
+        exit 0
+    fi
+    echoContent skyBlue "\n====================== 多实例 AnyTLS 节点 ======================\n"
+    for i in "${!managedMultiAnyTLSNodeLabels[@]}"; do
+        echoContent green "$((i + 1)).${managedMultiAnyTLSNodeLabels[$i]}"
+    done
+}
+
+showManagedMultiAnyTLSAccounts() {
+    local skipSelect="$1"
+    if [[ "${skipSelect}" != "true" ]]; then
+        selectManagedMultiAnyTLSNode "查看账号"
+    fi
+    local file="${managedMultiAnyTLSSelectedFile}"
+    local port=
+    local domainName=
+    port=$(jq -r '.inbounds[0].listen_port' "${file}")
+    domainName=$(jq -r '.inbounds[0].tls.server_name' "${file}")
+    echoContent skyBlue "\n====================== 多实例 AnyTLS 账号 ======================\n"
+    jq -c '.inbounds[0].users[]' "${file}" | while read -r user; do
+        local userName=
+        local password=
+        userName=$(echo "${user}" | jq -r '.name')
+        password=$(echo "${user}" | jq -r '.password')
+        echoContent skyBlue "\n ---> 节点:${managedMultiAnyTLSSelectedId}"
+        echoContent skyBlue " ---> 账号:${userName}"
+        echo
+        echoContent yellow " ---> 通用格式(AnyTLS)"
+        echoContent green "    anytls://${password}@${domainName}:${port}?peer=${domainName}&insecure=0&sni=${domainName}#${userName}\n"
+        echoContent yellow " ---> 格式化明文(AnyTLS)"
+        echoContent green "协议类型:AnyTLS，地址:${domainName}，端口:${port}，SNI:${domainName}，账户名:${userName}\n"
+    done
+}
+
+addManagedMultiAnyTLSUser() {
+    selectManagedMultiAnyTLSNode "添加用户"
+    local file="${managedMultiAnyTLSSelectedFile}"
+    local usersJson=
+    generateManagedMultiAnyTLSUserIdentity
+    if jq -e --arg password "${managedMultiAnyTLSPassword}" '.inbounds[0].users[] | select(.password == $password)' "${file}" >/dev/null; then
+        echoContent red " ---> AnyTLS 密码不可重复"
+        exit 0
+    fi
+    usersJson=$(buildManagedMultiAnyTLSUsersJson "${managedMultiAnyTLSPassword}" "${managedMultiAnyTLSUserName}")
+    jq --argjson users "${usersJson}" '.inbounds[0].users += $users' "${file}" | jq . >"${file}"
+    handleSingBox restart
+    echoContent green " ---> 添加完成"
+}
+
+removeManagedMultiAnyTLSUser() {
+    selectManagedMultiAnyTLSNode "删除用户"
+    local file="${managedMultiAnyTLSSelectedFile}"
+    local userCount=
+    userCount=$(jq -r '.inbounds[0].users | length' "${file}")
+    if ((userCount <= 1)); then
+        echoContent red " ---> 当前节点只剩最后一个用户，如需删除请直接删除整个节点"
+        exit 0
+    fi
+    jq -r '.inbounds[0].users[].name' "${file}" | awk '{print NR":"$0}'
+    read -r -p "请选择要删除的用户编号:" managedMultiAnyTLSDeleteUserIndex
+    if ! [[ "${managedMultiAnyTLSDeleteUserIndex}" =~ ^[0-9]+$ ]] || ((managedMultiAnyTLSDeleteUserIndex < 1 || managedMultiAnyTLSDeleteUserIndex > userCount)); then
+        echoContent red " ---> 选择错误"
+        exit 0
+    fi
+    managedMultiAnyTLSDeleteUserIndex=$((managedMultiAnyTLSDeleteUserIndex - 1))
+    jq "del(.inbounds[0].users[${managedMultiAnyTLSDeleteUserIndex}])" "${file}" | jq . >"${file}"
+    handleSingBox restart
+    echoContent green " ---> 删除完成"
+}
+
+deleteManagedMultiAnyTLSNode() {
+    selectManagedMultiAnyTLSNode "删除"
+    rm -f "${managedMultiAnyTLSSelectedFile}"
+    rm -f "$(getManagedMultiAnyTLSDNSConfigFileById "${managedMultiAnyTLSSelectedId}")"
+    handleSingBox restart
+    echoContent green " ---> 已删除多实例 AnyTLS 节点: ${managedMultiAnyTLSSelectedId}"
+}
+
+managedMultiAnyTLSMenu() {
+    if [[ "${coreInstallType}" != "2" ]]; then
+        echoContent red " ---> 多实例 AnyTLS 仅支持 sing-box 核心"
+        echoContent yellow " ---> 请先安装一个 sing-box 主节点后再使用该功能"
+        exit 0
+    fi
+
+    echoContent skyBlue "\n功能 1/1 : 多实例 AnyTLS 管理"
+    echoContent red "\n=============================================================="
+    echoContent yellow "# 注意事项"
+    echoContent yellow "# 这里只部署独立 AnyTLS 节点，每个节点使用自己的域名和证书"
+    echoContent yellow "# 可与 sing-box 托管的 Reality 节点同时运行"
+    echoContent yellow "1.部署新的独立节点"
+    echoContent yellow "2.查看已部署节点"
+    echoContent yellow "3.查看某个节点账号"
+    echoContent yellow "4.给某个节点添加用户"
+    echoContent yellow "5.删除某个节点用户"
+    echoContent yellow "6.删除某个节点"
+    echoContent red "=============================================================="
+    read -r -p "请选择:" managedMultiAnyTLSAction
+    case "${managedMultiAnyTLSAction}" in
+    1)
+        deployManagedMultiAnyTLSNode
+        ;;
+    2)
+        showManagedMultiAnyTLSNodes
+        ;;
+    3)
+        showManagedMultiAnyTLSAccounts
+        ;;
+    4)
+        addManagedMultiAnyTLSUser
+        ;;
+    5)
+        removeManagedMultiAnyTLSUser
+        ;;
+    6)
+        deleteManagedMultiAnyTLSNode
         ;;
     *)
         echoContent red " ---> 选择错误"
@@ -11453,15 +11852,15 @@ dnsRouting() {
     echoContent red "\n=============================================================="
     echoContent yellow "# 注意事项"
     echoContent yellow "# 使用说明：请参考仓库 README \n"
-    echoContent yellow "# sing-box Reality 节点级 DNS 分流支持主节点和多实例节点，节点可单独指定上游 DNS\n"
+    echoContent yellow "# sing-box 节点级 DNS 分流支持 Reality/AnyTLS 主节点和多实例节点，节点可单独指定上游 DNS\n"
     if [[ "${coreInstallType}" == "1" ]]; then
         echoContent yellow "# 当前核心为 Xray-core，节点级 DNS 分流暂不可用，仅支持全局 DNS 分流\n"
     fi
 
     echoContent yellow "1.全局添加"
     echoContent yellow "2.全局卸载"
-    echoContent yellow "3.Reality节点添加"
-    echoContent yellow "4.Reality节点卸载"
+    echoContent yellow "3.节点添加"
+    echoContent yellow "4.节点卸载"
     read -r -p "请选择:" selectType
 
     case ${selectType} in
@@ -11782,7 +12181,7 @@ customSingBoxInstall() {
     echoContent yellow "9.Tuic"
     echoContent yellow "10.Naive"
     echoContent yellow "11.VMess+TLS+HTTPUpgrade"
-    echoContent yellow "13.anytls"
+    echoMenuHint "13.AnyTLS" "sing-box/需自备域名"
 
     read -r -p "请选择[多选]，[例如:1,2,3]:" selectCustomInstallType
     echoContent skyBlue "--------------------------------------------------------------"
@@ -11873,6 +12272,33 @@ installSingBoxReality() {
     checkGFWStatue 5
     showAccounts 6
 }
+
+# 一键 AnyTLS，使用 sing-box 托管，可与 sing-box Reality 配置并存
+installSingBoxAnyTLS() {
+
+    selectCustomInstallType=",13,"
+    selectCoreType="2"
+    unInstallSubscribe
+    totalProgress=9
+    installTools 1
+
+    initTLSNginxConfig 2
+    installTLS 3
+    handleNginx stop
+    installSingBox 4
+    installSingBoxService 5
+    initSingBoxConfig custom 6 keep
+    if [[ "${coreInstallType}" != "2" ]]; then
+        cleanUp xrayDel
+    fi
+    installCronTLS 7
+    handleSingBox restart
+    handleNginx stop
+    handleNginx start
+    checkGFWStatue 8
+    showAccounts 9
+}
+
 # Xray-core个性化安装
 customXrayInstall() {
     echoContent skyBlue "\n========================个性化安装============================"
@@ -13372,6 +13798,45 @@ EOF
     handleSingBox restart
 }
 
+advancedCompatibilityMenu() {
+    echoContent skyBlue "\n功能 1/1 : 高级/兼容功能"
+    echoContent red "\n=============================================================="
+    echoContent yellow "# 注意事项"
+    echoContent yellow "# 这里保留低频功能和旧兼容入口，日常部署优先使用主菜单推荐项"
+    echoContent yellow "1.Hysteria2管理"
+    echoContent yellow "2.REALITY管理"
+    echoContent yellow "3.Tuic管理"
+    echoContent yellow "4.CDN节点管理"
+    echoContent yellow "5.BT下载管理"
+    echoContent yellow "6.域名黑名单"
+    echoContent red "=============================================================="
+    read -r -p "请选择:" advancedCompatibilityAction
+    case "${advancedCompatibilityAction}" in
+    1)
+        manageHysteria
+        ;;
+    2)
+        manageReality 1
+        ;;
+    3)
+        manageTuic
+        ;;
+    4)
+        manageCDN 1
+        ;;
+    5)
+        btTools 1
+        ;;
+    6)
+        blacklist 1
+        ;;
+    *)
+        echoContent red " ---> 选择错误"
+        exit 0
+        ;;
+    esac
+}
+
 # sing-box 版本管理
 singBoxVersionManageMenu() {
     echoContent skyBlue "\n进度  $1/${totalProgress} : sing-box 版本管理"
@@ -13438,29 +13903,26 @@ menu() {
         echoContent yellow "1.安装"
     fi
 
-    echoContent yellow "2.任意组合安装"
+    echoContent yellow "2.高级组合安装"
     echoMenuHint "3.一键无域名Reality" "只装推荐VLESS，新手最推荐" "覆盖当前Reality节点并全新安装"
-    echoContent yellow "4.Hysteria2管理"
-    echoContent yellow "5.REALITY管理"
-    echoContent yellow "6.Tuic管理"
-    echoMenuHint "7.多实例Reality" "先装一个主节点再用这个"
+    echoMenuHint "4.一键AnyTLS" "sing-box/需自备域名"
+    echoMenuHint "5.多实例Reality" "先装一个主节点再用这个"
+    echoMenuHint "6.多实例AnyTLS" "sing-box/每节点独立域名"
 
     echoContent skyBlue "-------------------------工具管理-----------------------------"
-    echoMenuHint "8.账号/订阅管理" "主节点账号在这里看"
-    echoContent yellow "9.网站管理"
-    echoContent yellow "10.证书管理"
-    echoContent yellow "11.CDN节点管理"
-    echoContent yellow "12.分流工具"
-    echoContent yellow "13.添加新端口"
-    echoContent yellow "14.BT下载管理"
-    echoContent yellow "15.节点管理"
-    echoContent yellow "16.域名黑名单"
+    echoMenuHint "7.账号/订阅管理" "主节点账号在这里看"
+    echoContent yellow "8.节点管理"
+    echoContent yellow "9.分流工具"
+    echoContent yellow "10.网站管理"
+    echoContent yellow "11.证书管理"
+    echoContent yellow "12.添加新端口"
     echoContent skyBlue "-------------------------版本管理-----------------------------"
-    echoContent yellow "17.core管理"
-    echoContent yellow "18.更新脚本"
-    echoContent yellow "19.安装BBR、DD脚本"
+    echoContent yellow "13.core管理"
+    echoContent yellow "14.更新脚本"
+    echoContent yellow "15.安装BBR、DD脚本"
     echoContent skyBlue "-------------------------脚本管理-----------------------------"
-    echoContent yellow "20.卸载脚本"
+    echoContent yellow "16.高级/兼容功能"
+    echoContent yellow "17.卸载脚本"
     echoContent red "=============================================================="
     mkdirTools
     aliasInstall
@@ -13476,54 +13938,45 @@ menu() {
         selectCoreInstall
         ;;
     4)
-        manageHysteria
+        installSingBoxAnyTLS
         ;;
     5)
-        manageReality 1
-        ;;
-    6)
-        manageTuic
-        ;;
-    7)
         managedMultiRealityMenu
         ;;
-    8)
+    6)
+        managedMultiAnyTLSMenu
+        ;;
+    7)
         manageAccount 1
         ;;
-    9)
-        websiteManagementMenu
-        ;;
-    10)
-        renewalTLS 1
-        ;;
-    11)
-        manageCDN 1
-        ;;
-    12)
-        routingToolsMenu 1
-        ;;
-    13)
-        addCorePort 1
-        ;;
-    14)
-        btTools 1
-        ;;
-    15)
+    8)
         manageInstalledNodes
         ;;
-    16)
-        blacklist 1
+    9)
+        routingToolsMenu 1
         ;;
-    17)
+    10)
+        websiteManagementMenu
+        ;;
+    11)
+        renewalTLS 1
+        ;;
+    12)
+        addCorePort 1
+        ;;
+    13)
         coreVersionManageMenu 1
         ;;
-    18)
+    14)
         updateV2RayAgent 1
         ;;
-    19)
+    15)
         bbrInstall
         ;;
-    20)
+    16)
+        advancedCompatibilityMenu
+        ;;
+    17)
         unInstall 1
         ;;
     esac
