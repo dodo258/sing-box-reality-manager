@@ -13809,6 +13809,7 @@ advancedCompatibilityMenu() {
     echoContent yellow "4.CDN节点管理"
     echoContent yellow "5.BT下载管理"
     echoContent yellow "6.域名黑名单"
+    echoContent yellow "7.添加新端口"
     echoContent red "=============================================================="
     read -r -p "请选择:" advancedCompatibilityAction
     case "${advancedCompatibilityAction}" in
@@ -13829,6 +13830,9 @@ advancedCompatibilityMenu() {
         ;;
     6)
         blacklist 1
+        ;;
+    7)
+        addCorePort 1
         ;;
     *)
         echoContent red " ---> 选择错误"
@@ -13915,14 +13919,13 @@ menu() {
     echoContent yellow "9.分流工具"
     echoContent yellow "10.网站管理"
     echoContent yellow "11.证书管理"
-    echoContent yellow "12.添加新端口"
     echoContent skyBlue "-------------------------版本管理-----------------------------"
-    echoContent yellow "13.core管理"
-    echoContent yellow "14.更新脚本"
-    echoContent yellow "15.安装BBR、DD脚本"
+    echoContent yellow "12.core管理"
+    echoContent yellow "13.更新脚本"
+    echoContent yellow "14.安装BBR、DD脚本"
     echoContent skyBlue "-------------------------脚本管理-----------------------------"
-    echoContent yellow "16.高级/兼容功能"
-    echoContent yellow "17.卸载脚本"
+    echoContent yellow "15.高级/兼容功能"
+    echoContent yellow "16.卸载脚本"
     echoContent red "=============================================================="
     mkdirTools
     aliasInstall
@@ -13962,21 +13965,18 @@ menu() {
         renewalTLS 1
         ;;
     12)
-        addCorePort 1
-        ;;
-    13)
         coreVersionManageMenu 1
         ;;
-    14)
+    13)
         updateV2RayAgent 1
         ;;
-    15)
+    14)
         bbrInstall
         ;;
-    16)
+    15)
         advancedCompatibilityMenu
         ;;
-    17)
+    16)
         unInstall 1
         ;;
     esac
