@@ -20,6 +20,13 @@ managedMultiAnyTLSPrefix="32_anytls_multi_"
 managedMultiAnyTLSDNSPrefix="33_anytls_multi_dns_"
 managedMultiRealityShortID="6ba85179e30d4fc2"
 managedMultiRealityKeySuffix=".key"
+snellShadowTLSRoot="/etc/v2ray-agent/snell-shadowtls"
+snellShadowTLSNodeRoot="${snellShadowTLSRoot}/nodes"
+snellBinaryRoot="${snellShadowTLSRoot}/bin"
+snellConfigRoot="${snellShadowTLSRoot}/conf"
+snellServicePrefix="dodo258-snell"
+shadowTLSServicePrefix="dodo258-shadowtls"
+shadowTLSBinaryPath="${snellBinaryRoot}/shadow-tls"
 websiteManagerRoot="/etc/v2ray-agent/website-manager"
 websiteMetadataFile="${websiteManagerRoot}/site.env"
 websiteActiveDomainFile="${websiteManagerRoot}/active_domain"
@@ -3744,12 +3751,12 @@ websitePrepareTLS() {
     checkDNSIP "${websiteDomain}"
     if [[ ! -s "/etc/v2ray-agent/tls/${websiteDomain}.crt" || ! -s "/etc/v2ray-agent/tls/${websiteDomain}.key" ]]; then
         echoContent yellow "\n ---> 未检测到 ${websiteDomain} 的证书，开始申请"
-        echoContent skyBlue " ---> 网站管理沿用 11.证书管理 的 acme.sh 免费证书与自动续期链路"
+        echoContent skyBlue " ---> 网站管理沿用 13.证书管理 的 acme.sh 免费证书与自动续期链路"
         websiteTLSAutoMode=true
         installTLS 2
     else
         echoContent green " ---> 已检测到 ${websiteDomain} 的证书，直接复用"
-        echoContent skyBlue " ---> 当前网站证书与 11.证书管理 共用同一套续期机制"
+        echoContent skyBlue " ---> 当前网站证书与 13.证书管理 共用同一套续期机制"
     fi
     websiteTLSAutoMode="${oldWebsiteTLSAutoMode}"
     domain="${oldDomain}"
@@ -4055,7 +4062,7 @@ websiteManagementMenu() {
     echoContent yellow "# 注意事项"
     echoContent yellow "# 网站功能与节点功能解耦，网站使用80/443，Reality等节点继续使用随机端口"
     echoContent yellow "# 建议使用真实域名、正常解析和可信HTTPS证书"
-    echoContent yellow "# 网站证书沿用11.证书管理同一套免费证书与自动续期逻辑"
+    echoContent yellow "# 网站证书沿用13.证书管理同一套免费证书与自动续期逻辑"
     echoContent yellow "# 旧伪装模板只保留兼容入口，主推荐是中文技术博客和中文小工具站\n"
     echoContent yellow "1.部署中文技术博客[可选简洁版/文档版]"
     echoContent yellow "2.部署中文小工具站[可选开发/文本/运维版]"
@@ -6252,6 +6259,474 @@ managedMultiAnyTLSMenu() {
         exit 0
         ;;
     esac
+}
+
+# Snell + Shadow-TLS v3 管理
+shadowTLSTargetDomains=(
+    "www.apple.com:443"
+    "www.microsoft.com:443"
+    "www.bing.com:443"
+    "www.nvidia.com:443"
+    "www.intel.com:443"
+    "www.oracle.com:443"
+    "www.cisco.com:443"
+    "www.samsung.com:443"
+    "www.asus.com:443"
+    "www.dell.com:443"
+    "www.hp.com:443"
+    "www.ibm.com:443"
+    "www.adobe.com:443"
+    "www.cloudflare.com:443"
+    "www.cloudflarestatus.com:443"
+    "www.mozilla.org:443"
+    "addons.mozilla.org:443"
+    "www.python.org:443"
+    "www.java.com:443"
+    "www.mysql.com:443"
+    "www.mongodb.com:443"
+    "redis.io:443"
+    "www.booking.com:443"
+    "www.trip.com:443"
+    "www.marriott.com:443"
+    "www.hyatt.com:443"
+    "www.hilton.com:443"
+    "www.ritzcarlton.com:443"
+    "www.nintendo.com:443"
+    "www.playstation.com:443"
+    "www.xbox.com:443"
+    "www.unrealengine.com:443"
+    "www.autodesk.com:443"
+    "www.vmware.com:443"
+    "www.salesforce.com:443"
+    "www.sap.com:443"
+    "www.umich.edu:443"
+    "www.caltech.edu:443"
+    "www.stanford.edu:443"
+)
+
+snellShadowTLSNodeFiles=()
+snellShadowTLSNodeIds=()
+snellShadowTLSNodeLabels=()
+snellShadowTLSSelectedFile=
+snellShadowTLSSelectedId=
+
+ensureSnellShadowTLSDirs() {
+    mkdir -p "${snellShadowTLSNodeRoot}" "${snellBinaryRoot}" "${snellConfigRoot}" >/dev/null 2>&1
+}
+
+randomSafeString() {
+    local length="$1"
+    [[ -n "${length}" ]] || length=24
+    LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c "${length}"
+}
+
+getSnellBinaryPath() {
+    echo "${snellBinaryRoot}/snell-server-v$1"
+}
+
+getSnellArch() {
+    case "$(uname -m)" in
+    amd64 | x86_64) echo "amd64" ;;
+    armv8 | aarch64) echo "aarch64" ;;
+    *)
+        echoContent red " ---> Snell 暂不支持当前CPU架构: $(uname -m)"
+        exit 0
+        ;;
+    esac
+}
+
+getShadowTLSArch() {
+    case "$(uname -m)" in
+    amd64 | x86_64) echo "x86_64-unknown-linux-musl" ;;
+    armv8 | aarch64) echo "aarch64-unknown-linux-musl" ;;
+    *)
+        echoContent red " ---> Shadow-TLS 暂不支持当前CPU架构: $(uname -m)"
+        exit 0
+        ;;
+    esac
+}
+
+installSnellBinary() {
+    local version="$1"
+    local binaryPath=
+    local arch=
+    local downloadVersion=
+    local downloadUrl=
+    binaryPath="$(getSnellBinaryPath "${version}")"
+    if [[ -x "${binaryPath}" ]]; then
+        echoContent green " ---> Snell v${version} 已安装"
+        return
+    fi
+    ensureSnellShadowTLSDirs
+    arch="$(getSnellArch)"
+    case "${version}" in
+    4) downloadVersion="v4.1.1" ;;
+    5) downloadVersion="v5.0.0" ;;
+    *)
+        echoContent red " ---> Snell 版本只支持 v4 或 v5"
+        exit 0
+        ;;
+    esac
+    downloadUrl="https://dl.nssurge.com/snell/snell-server-${downloadVersion}-linux-${arch}.zip"
+    echoContent green " ---> 下载 Snell ${downloadVersion}"
+    wget -q "${wgetShowProgressStatus}" -O "${snellBinaryRoot}/snell-server-${downloadVersion}.zip" "${downloadUrl}"
+    if [[ ! -f "${snellBinaryRoot}/snell-server-${downloadVersion}.zip" ]]; then
+        echoContent red " ---> Snell 下载失败: ${downloadUrl}"
+        exit 0
+    fi
+    unzip -o "${snellBinaryRoot}/snell-server-${downloadVersion}.zip" -d "${snellBinaryRoot}/snell-${downloadVersion}" >/dev/null
+    if [[ ! -f "${snellBinaryRoot}/snell-${downloadVersion}/snell-server" ]]; then
+        echoContent red " ---> Snell 解压失败"
+        exit 0
+    fi
+    mv "${snellBinaryRoot}/snell-${downloadVersion}/snell-server" "${binaryPath}"
+    chmod 755 "${binaryPath}"
+    rm -rf "${snellBinaryRoot}/snell-${downloadVersion}" "${snellBinaryRoot}/snell-server-${downloadVersion}.zip"
+}
+
+installShadowTLSBinary() {
+    if [[ -x "${shadowTLSBinaryPath}" ]]; then
+        echoContent green " ---> Shadow-TLS 已安装"
+        return
+    fi
+    ensureSnellShadowTLSDirs
+    local arch=
+    local version=
+    local assetName=
+    arch="$(getShadowTLSArch)"
+    version=$(curl -s https://api.github.com/repos/ihciah/shadow-tls/releases/latest | jq -r '.tag_name')
+    if [[ -z "${version}" || "${version}" == "null" ]]; then
+        echoContent red " ---> 获取 Shadow-TLS 最新版本失败"
+        exit 0
+    fi
+    assetName="shadow-tls-${arch}"
+    echoContent green " ---> 下载 Shadow-TLS ${version}"
+    wget -q "${wgetShowProgressStatus}" -O "${shadowTLSBinaryPath}" "https://github.com/ihciah/shadow-tls/releases/download/${version}/${assetName}"
+    if [[ ! -s "${shadowTLSBinaryPath}" ]]; then
+        echoContent red " ---> Shadow-TLS 下载失败"
+        exit 0
+    fi
+    chmod 755 "${shadowTLSBinaryPath}"
+}
+
+promptSnellShadowTLSPublicPort() {
+    echoContent yellow "请输入 Snell+ShadowTLS 对外端口[回车随机10000-30000，可手动填443]"
+    read -r -p "端口:" snellShadowTLSPort
+    [[ -n "${snellShadowTLSPort}" ]] || snellShadowTLSPort=$((RANDOM % 20001 + 10000))
+    if ! [[ "${snellShadowTLSPort}" =~ ^[0-9]+$ ]] || ((snellShadowTLSPort < 1 || snellShadowTLSPort > 65535)); then
+        echoContent red " ---> 端口不合法"
+        promptSnellShadowTLSPublicPort
+        return
+    fi
+    checkPort "${snellShadowTLSPort}"
+    allowPort "${snellShadowTLSPort}" tcp
+    echoContent yellow "\n ---> 对外端口: ${snellShadowTLSPort}"
+}
+
+pickSnellLocalPort() {
+    local port=
+    while true; do
+        port=$((RANDOM % 18001 + 31000))
+        if ! ss -lnt 2>/dev/null | awk '{print $4}' | grep -qE "[:.]${port}$"; then
+            echo "${port}"
+            return
+        fi
+    done
+}
+
+selectSnellVersion() {
+    echoContent yellow "\n请选择 Snell 协议版本"
+    echoContent yellow "1.Snell v5[默认]"
+    echoContent yellow "2.Snell v4"
+    read -r -p "请选择[回车默认1]:" snellVersionChoice
+    case "${snellVersionChoice}" in
+    2) snellVersion="4" ;;
+    *) snellVersion="5" ;;
+    esac
+}
+
+normalizeHostPort() {
+    if [[ "$1" == *":"* ]]; then
+        echo "$1"
+    else
+        echo "$1:$2"
+    fi
+}
+
+selectShadowTLSTarget() {
+    local defaultTarget=
+    defaultTarget="${shadowTLSTargetDomains[$((RANDOM % ${#shadowTLSTargetDomains[@]}))]}"
+    echoContent skyBlue "\n================= 配置 Shadow-TLS v3 目标域名 ================="
+    echoContent yellow "# 目标域名要求：国内可直连、TLS1.3、SNI匹配；默认池优先选择大厂正常站点"
+    echoContent yellow "# 推荐文档：documents/shadowtls_target_domains.md"
+    read -r -p "请输入目标域名，[回车]随机域名，默认端口443:" shadowTLSTargetInput
+    if [[ -z "${shadowTLSTargetInput}" ]]; then
+        shadowTLSTarget="${defaultTarget}"
+    else
+        shadowTLSTarget="$(normalizeHostPort "${shadowTLSTargetInput}" 443)"
+    fi
+    shadowTLSTargetDomain="${shadowTLSTarget%:*}"
+    shadowTLSTargetPort="${shadowTLSTarget##*:}"
+    echoContent yellow "\n ---> Shadow-TLS 目标: ${shadowTLSTargetDomain}:${shadowTLSTargetPort}"
+    if command -v openssl >/dev/null 2>&1 && command -v timeout >/dev/null 2>&1; then
+        if timeout 8 openssl s_client -tls1_3 -servername "${shadowTLSTargetDomain}" -connect "${shadowTLSTargetDomain}:${shadowTLSTargetPort}" </dev/null >/dev/null 2>&1; then
+            echoContent green " ---> 目标域名 TLS1.3 探测通过"
+        else
+            echoContent yellow " ---> 目标域名 TLS1.3 探测未通过或超时，建议换一个目标"
+        fi
+    fi
+}
+
+promptSnellShadowTLSUser() {
+    snellPSK="$(randomSafeString 28)"
+    shadowTLSPassword="$(randomSafeString 24)"
+    read -r -p "请输入自定义 Snell PSK[回车随机]:" inputSnellPSK
+    [[ -z "${inputSnellPSK}" ]] || snellPSK="${inputSnellPSK}"
+    read -r -p "请输入自定义 Shadow-TLS 密码[回车随机]:" inputShadowTLSPassword
+    [[ -z "${inputShadowTLSPassword}" ]] || shadowTLSPassword="${inputShadowTLSPassword}"
+    snellShadowTLSUserName="${snellPSK:0:8}-snell"
+    read -r -p "请输入自定义用户名[回车随机]:" inputSnellName
+    [[ -z "${inputSnellName}" ]] || snellShadowTLSUserName="${inputSnellName}"
+}
+
+writeSnellShadowTLSNodeFiles() {
+    local nodeId="$1"
+    local snellConf="${snellConfigRoot}/${nodeId}.snell.conf"
+    local metaFile="${snellShadowTLSNodeRoot}/${nodeId}.env"
+    cat <<EOF >"${snellConf}"
+[snell-server]
+listen = 127.0.0.1:${snellLocalPort}
+psk = ${snellPSK}
+ipv6 = true
+reuse = true
+EOF
+    [[ -z "${snellNodeDNS}" ]] || echo "dns = ${snellNodeDNS}" >>"${snellConf}"
+    cat <<EOF >"${metaFile}"
+nodeId='${nodeId}'
+nodeType='${snellShadowTLSNodeType}'
+snellVersion='${snellVersion}'
+publicPort='${snellShadowTLSPort}'
+localPort='${snellLocalPort}'
+targetDomain='${shadowTLSTargetDomain}'
+targetPort='${shadowTLSTargetPort}'
+snellPSK='${snellPSK}'
+shadowTLSPassword='${shadowTLSPassword}'
+userName='${snellShadowTLSUserName}'
+snellNodeDNS='${snellNodeDNS}'
+EOF
+}
+
+writeSnellShadowTLSSystemd() {
+    local nodeId="$1"
+    local snellService="/etc/systemd/system/${snellServicePrefix}-${nodeId}.service"
+    local shadowService="/etc/systemd/system/${shadowTLSServicePrefix}-${nodeId}.service"
+    local snellBinary=
+    snellBinary="$(getSnellBinaryPath "${snellVersion}")"
+    cat <<EOF >"${snellService}"
+[Unit]
+Description=dodo258 Snell v${snellVersion} backend ${nodeId}
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=${snellBinary} -c ${snellConfigRoot}/${nodeId}.snell.conf
+Restart=on-failure
+RestartSec=3
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    cat <<EOF >"${shadowService}"
+[Unit]
+Description=dodo258 Shadow-TLS v3 for Snell ${nodeId}
+After=network.target ${snellServicePrefix}-${nodeId}.service
+Requires=${snellServicePrefix}-${nodeId}.service
+
+[Service]
+Type=simple
+ExecStart=${shadowTLSBinaryPath} --v3 server --listen [::]:${snellShadowTLSPort} --server 127.0.0.1:${snellLocalPort} --tls ${shadowTLSTargetDomain}:${shadowTLSTargetPort} --password ${shadowTLSPassword}
+Restart=on-failure
+RestartSec=3
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    systemctl daemon-reload
+    systemctl enable --now "${snellServicePrefix}-${nodeId}.service" >/dev/null 2>&1
+    systemctl enable --now "${shadowTLSServicePrefix}-${nodeId}.service" >/dev/null 2>&1
+}
+
+loadSnellShadowTLSNodes() {
+    snellShadowTLSNodeFiles=()
+    snellShadowTLSNodeIds=()
+    snellShadowTLSNodeLabels=()
+    ensureSnellShadowTLSDirs
+    local index=0
+    local file=
+    for file in "${snellShadowTLSNodeRoot}"/*.env; do
+        [[ -f "${file}" ]] || continue
+        nodeId=
+        nodeType=
+        snellVersion=
+        publicPort=
+        targetDomain=
+        targetPort=
+        userName=
+        snellNodeDNS=
+        # shellcheck disable=SC1090
+        . "${file}"
+        snellShadowTLSNodeFiles[index]="${file}"
+        snellShadowTLSNodeIds[index]="${nodeId}"
+        snellShadowTLSNodeLabels[index]="端口:${publicPort} 版本:v${snellVersion} 目标:${targetDomain}:${targetPort} 用户:${userName}${snellNodeDNS:+ DNS:${snellNodeDNS}}"
+        index=$((index + 1))
+    done
+}
+
+selectSnellShadowTLSNode() {
+    local action="$1"
+    loadSnellShadowTLSNodes
+    if [[ ${#snellShadowTLSNodeFiles[@]} -eq 0 ]]; then
+        echoContent yellow " ---> 当前没有已部署的 Snell+ShadowTLS 节点"
+        exit 0
+    fi
+    echoContent skyBlue "\n请选择要${action}的 Snell+ShadowTLS 节点"
+    local i=
+    for i in "${!snellShadowTLSNodeLabels[@]}"; do
+        echoContent green "$((i + 1)).${snellShadowTLSNodeIds[$i]} ${snellShadowTLSNodeLabels[$i]}"
+    done
+    read -r -p "请选择节点编号:" snellShadowTLSNodeIndex
+    if ! [[ "${snellShadowTLSNodeIndex}" =~ ^[0-9]+$ ]] || ((snellShadowTLSNodeIndex < 1 || snellShadowTLSNodeIndex > ${#snellShadowTLSNodeFiles[@]})); then
+        echoContent red " ---> 选择错误"
+        exit 0
+    fi
+    snellShadowTLSNodeIndex=$((snellShadowTLSNodeIndex - 1))
+    snellShadowTLSSelectedFile="${snellShadowTLSNodeFiles[${snellShadowTLSNodeIndex}]}"
+    snellShadowTLSSelectedId="${snellShadowTLSNodeIds[${snellShadowTLSNodeIndex}]}"
+}
+
+deploySnellShadowTLSNode() {
+    snellShadowTLSNodeType="$1"
+    totalProgress=1
+    echoContent skyBlue "\n功能 1/1 : 部署 Snell+ShadowTLS v3 节点"
+    installTools 1
+    ensureSnellShadowTLSDirs
+    selectSnellVersion
+    installSnellBinary "${snellVersion}"
+    installShadowTLSBinary
+    promptSnellShadowTLSPublicPort
+    snellLocalPort="$(pickSnellLocalPort)"
+    selectShadowTLSTarget
+    promptSnellShadowTLSUser
+    snellNodeDNS=
+    local nodeId=
+    nodeId="$(date +%Y%m%d%H%M%S)-${snellShadowTLSPort}"
+    writeSnellShadowTLSNodeFiles "${nodeId}"
+    writeSnellShadowTLSSystemd "${nodeId}"
+    if systemctl is-active --quiet "${shadowTLSServicePrefix}-${nodeId}.service"; then
+        echoContent green " ---> Snell+ShadowTLS 节点部署成功"
+        snellShadowTLSSelectedFile="${snellShadowTLSNodeRoot}/${nodeId}.env"
+        snellShadowTLSSelectedId="${nodeId}"
+        showSnellShadowTLSAccounts true
+    else
+        echoContent red " ---> Shadow-TLS 启动失败，请执行 journalctl -u ${shadowTLSServicePrefix}-${nodeId}.service -n 80 --no-pager 查看日志"
+        exit 0
+    fi
+}
+
+showSnellShadowTLSNodes() {
+    loadSnellShadowTLSNodes
+    if [[ ${#snellShadowTLSNodeFiles[@]} -eq 0 ]]; then
+        echoContent yellow " ---> 当前没有已部署的 Snell+ShadowTLS 节点"
+        exit 0
+    fi
+    echoContent skyBlue "\n==================== Snell+ShadowTLS 节点 ====================\n"
+    local i=
+    for i in "${!snellShadowTLSNodeLabels[@]}"; do
+        echoContent green "$((i + 1)).${snellShadowTLSNodeIds[$i]} ${snellShadowTLSNodeLabels[$i]}"
+    done
+}
+
+showSnellShadowTLSAccounts() {
+    local skipSelect="$1"
+    if [[ "${skipSelect}" != "true" ]]; then
+        selectSnellShadowTLSNode "查看账号"
+    fi
+    # shellcheck disable=SC1090
+    . "${snellShadowTLSSelectedFile}"
+    local host=
+    host="$(getPublicIP)"
+    echoContent skyBlue "\n==================== Snell+ShadowTLS 账号 ====================\n"
+    echoContent skyBlue " ---> 节点:${nodeId}"
+    echoContent skyBlue " ---> 账号:${userName}"
+    echoContent yellow "\n ---> Surge/Loon 常用写法"
+    echoContent green "    ${userName} = snell, ${host}, ${publicPort}, psk=${snellPSK}, version=${snellVersion}, reuse=true, shadow-tls-password=${shadowTLSPassword}, shadow-tls-sni=${targetDomain}, shadow-tls-version=3\n"
+    echoContent yellow " ---> 格式化明文"
+    echoContent green "协议类型:Snell v${snellVersion}+ShadowTLS v3，地址:${host}，端口:${publicPort}，PSK:${snellPSK}，ShadowTLS密码:${shadowTLSPassword}，SNI:${targetDomain}\n"
+}
+
+setSnellShadowTLSDNS() {
+    selectSnellShadowTLSNode "配置DNS"
+    # shellcheck disable=SC1090
+    . "${snellShadowTLSSelectedFile}"
+    echoContent yellow "# Snell 节点 DNS 是全节点上游 DNS，不是 sing-box 的 geosite 按域名分流"
+    read -r -p "请输入该节点上游DNS IP[留空表示卸载DNS]:" newSnellDNS
+    snellNodeDNS="${newSnellDNS}"
+    snellShadowTLSNodeType="${nodeType}"
+    snellShadowTLSPort="${publicPort}"
+    snellLocalPort="${localPort}"
+    shadowTLSTargetDomain="${targetDomain}"
+    shadowTLSTargetPort="${targetPort}"
+    snellShadowTLSUserName="${userName}"
+    writeSnellShadowTLSNodeFiles "${nodeId}"
+    systemctl restart "${snellServicePrefix}-${nodeId}.service" "${shadowTLSServicePrefix}-${nodeId}.service"
+    echoContent green " ---> Snell+ShadowTLS 节点 DNS 配置已更新"
+}
+
+deleteSnellShadowTLSNode() {
+    selectSnellShadowTLSNode "删除"
+    read -r -p "确认删除该 Snell+ShadowTLS 节点？[y/n]:" confirmDeleteSnell
+    [[ "${confirmDeleteSnell}" == "y" ]] || exit 0
+    # shellcheck disable=SC1090
+    . "${snellShadowTLSSelectedFile}"
+    systemctl disable --now "${shadowTLSServicePrefix}-${nodeId}.service" >/dev/null 2>&1
+    systemctl disable --now "${snellServicePrefix}-${nodeId}.service" >/dev/null 2>&1
+    rm -f "/etc/systemd/system/${shadowTLSServicePrefix}-${nodeId}.service" "/etc/systemd/system/${snellServicePrefix}-${nodeId}.service"
+    rm -f "${snellConfigRoot}/${nodeId}.snell.conf" "${snellShadowTLSSelectedFile}"
+    systemctl daemon-reload
+    echoContent green " ---> 已删除 Snell+ShadowTLS 节点: ${nodeId}"
+}
+
+snellShadowTLSMenu() {
+    echoContent skyBlue "\n功能 1/1 : Snell+ShadowTLS 管理"
+    echoContent red "\n=============================================================="
+    echoContent yellow "# 注意事项"
+    echoContent yellow "# Shadow-TLS v3 对外监听，Snell 后端只监听本机随机端口"
+    echoContent yellow "# 默认使用随机公网端口；443 只有在未被 Nginx/旧节点占用时才允许使用"
+    echoContent yellow "# Snell 节点 DNS 是全节点 DNS，不等同 sing-box 的节点级 geosite 分流"
+    echoContent yellow "1.部署新的 Snell+ShadowTLS 节点"
+    echoContent yellow "2.查看已部署节点"
+    echoContent yellow "3.查看某个节点账号"
+    echoContent yellow "4.配置某个节点DNS"
+    echoContent yellow "5.删除某个节点"
+    echoContent red "=============================================================="
+    read -r -p "请选择:" snellShadowTLSAction
+    case "${snellShadowTLSAction}" in
+    1) deploySnellShadowTLSNode "multi" ;;
+    2) showSnellShadowTLSNodes ;;
+    3) showSnellShadowTLSAccounts ;;
+    4) setSnellShadowTLSDNS ;;
+    5) deleteSnellShadowTLSNode ;;
+    *)
+        echoContent red " ---> 选择错误"
+        exit 0
+        ;;
+    esac
+}
+
+installSnellShadowTLS() {
+    deploySnellShadowTLSNode "main"
 }
 
 # 初始化hysteria端口
@@ -9085,7 +9560,7 @@ deleteInstalledNode() {
     if removeInstalledNodeConfig "${selectedCoreType}" "${selectedProtocolType}"; then
         reloadInstalledNodeCores
         echoContent green " ---> 节点删除完成: ${selectedLabel}"
-        echoContent yellow " ---> 建议顺手执行一次 8.账号/订阅管理 -> 查看订阅，确认客户端节点列表已同步"
+        echoContent yellow " ---> 建议顺手执行一次 9.账号/订阅管理 -> 查看订阅，确认客户端节点列表已同步"
     fi
 }
 
@@ -12424,8 +12899,8 @@ selectCoreInstall() {
     echoContent skyBlue "\n功能 1/${totalProgress} : 选择核心安装"
     if [[ "${selectInstallType}" == "3" ]]; then
         echoContent yellow "# 注意：该功能会覆盖当前Reality节点并全新安装"
-        echoContent yellow "# 已有节点想继续加用户/看订阅，请返回主菜单选 8.账号/订阅管理"
-        echoContent yellow "# 同机想再加一个不同端口的节点，请返回主菜单选 13.添加新端口\n"
+        echoContent yellow "# 已有节点想继续加用户/看订阅，请返回主菜单选 9.账号/订阅管理"
+        echoContent yellow "# 同机想再加独立节点，请返回主菜单选 6/7/8 多实例入口\n"
     fi
     echoContent red "\n=============================================================="
     echoMenuHint "1.Xray-core" "兼容旧功能时选这个"
@@ -13918,7 +14393,7 @@ menu() {
     cd "$HOME" || exit
     echoContent red "\n=============================================================="
     echoContent green "维护：dodo258"
-    echoContent green "当前版本：v3.7.2"
+    echoContent green "当前版本：v3.8.0"
     echoContent green "项目：https://github.com/dodo258/sing-box-reality-manager"
     echoContent green "描述：多实例重构版管理脚本\c"
     showInstallStatus
@@ -13933,22 +14408,24 @@ menu() {
     echoContent yellow "2.高级组合安装"
     echoMenuHint "3.一键无域名Reality" "只装推荐VLESS，新手最推荐" "覆盖当前Reality节点并全新安装"
     echoMenuHint "4.一键AnyTLS" "sing-box/需自备域名"
-    echoMenuHint "5.多实例Reality" "先装一个主节点再用这个"
-    echoMenuHint "6.多实例AnyTLS" "sing-box/每节点独立域名"
+    echoMenuHint "5.一键Snell+ShadowTLS" "Snell v4/v5 + Shadow-TLS v3"
+    echoMenuHint "6.多实例Reality" "先装一个主节点再用这个"
+    echoMenuHint "7.多实例AnyTLS" "sing-box/每节点独立域名"
+    echoMenuHint "8.多实例Snell+ShadowTLS" "独立端口/可多节点"
 
     echoContent skyBlue "-------------------------工具管理-----------------------------"
-    echoMenuHint "7.账号/订阅管理" "主节点账号在这里看"
-    echoContent yellow "8.节点管理"
-    echoContent yellow "9.分流工具"
-    echoContent yellow "10.网站管理"
-    echoContent yellow "11.证书管理"
+    echoMenuHint "9.账号/订阅管理" "主节点账号在这里看"
+    echoContent yellow "10.节点管理"
+    echoContent yellow "11.分流工具"
+    echoContent yellow "12.网站管理"
+    echoContent yellow "13.证书管理"
     echoContent skyBlue "-------------------------版本管理-----------------------------"
-    echoContent yellow "12.core管理"
-    echoContent yellow "13.更新脚本"
-    echoContent yellow "14.安装BBR、DD脚本"
+    echoContent yellow "14.core管理"
+    echoContent yellow "15.更新脚本"
+    echoContent yellow "16.安装BBR、DD脚本"
     echoContent skyBlue "-------------------------脚本管理-----------------------------"
-    echoContent yellow "15.高级/兼容功能"
-    echoContent yellow "16.卸载脚本"
+    echoContent yellow "17.高级/兼容功能"
+    echoContent yellow "18.卸载脚本"
     echoContent red "=============================================================="
     mkdirTools
     aliasInstall
@@ -13967,39 +14444,45 @@ menu() {
         installSingBoxAnyTLS
         ;;
     5)
-        managedMultiRealityMenu
+        installSnellShadowTLS
         ;;
     6)
-        managedMultiAnyTLSMenu
+        managedMultiRealityMenu
         ;;
     7)
-        manageAccount 1
+        managedMultiAnyTLSMenu
         ;;
     8)
-        manageInstalledNodes
+        snellShadowTLSMenu
         ;;
     9)
-        routingToolsMenu 1
+        manageAccount 1
         ;;
     10)
-        websiteManagementMenu
+        manageInstalledNodes
         ;;
     11)
-        renewalTLS 1
+        routingToolsMenu 1
         ;;
     12)
-        coreVersionManageMenu 1
+        websiteManagementMenu
         ;;
     13)
-        updateV2RayAgent 1
+        renewalTLS 1
         ;;
     14)
-        bbrInstall
+        coreVersionManageMenu 1
         ;;
     15)
-        advancedCompatibilityMenu
+        updateV2RayAgent 1
         ;;
     16)
+        bbrInstall
+        ;;
+    17)
+        advancedCompatibilityMenu
+        ;;
+    18)
         unInstall 1
         ;;
     esac
