@@ -3744,12 +3744,12 @@ websitePrepareTLS() {
     checkDNSIP "${websiteDomain}"
     if [[ ! -s "/etc/v2ray-agent/tls/${websiteDomain}.crt" || ! -s "/etc/v2ray-agent/tls/${websiteDomain}.key" ]]; then
         echoContent yellow "\n ---> 未检测到 ${websiteDomain} 的证书，开始申请"
-        echoContent skyBlue " ---> 网站管理沿用 10.证书管理 的 acme.sh 免费证书与自动续期链路"
+        echoContent skyBlue " ---> 网站管理沿用 11.证书管理 的 acme.sh 免费证书与自动续期链路"
         websiteTLSAutoMode=true
         installTLS 2
     else
         echoContent green " ---> 已检测到 ${websiteDomain} 的证书，直接复用"
-        echoContent skyBlue " ---> 当前网站证书与 10.证书管理 共用同一套续期机制"
+        echoContent skyBlue " ---> 当前网站证书与 11.证书管理 共用同一套续期机制"
     fi
     websiteTLSAutoMode="${oldWebsiteTLSAutoMode}"
     domain="${oldDomain}"
@@ -4055,7 +4055,7 @@ websiteManagementMenu() {
     echoContent yellow "# 注意事项"
     echoContent yellow "# 网站功能与节点功能解耦，网站使用80/443，Reality等节点继续使用随机端口"
     echoContent yellow "# 建议使用真实域名、正常解析和可信HTTPS证书"
-    echoContent yellow "# 网站证书沿用10.证书管理同一套免费证书与自动续期逻辑"
+    echoContent yellow "# 网站证书沿用11.证书管理同一套免费证书与自动续期逻辑"
     echoContent yellow "# 旧伪装模板只保留兼容入口，主推荐是中文技术博客和中文小工具站\n"
     echoContent yellow "1.部署中文技术博客[可选简洁版/文档版]"
     echoContent yellow "2.部署中文小工具站[可选开发/文本/运维版]"
