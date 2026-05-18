@@ -2575,6 +2575,7 @@ websitePromptDomain() {
     local selectedWebsiteTitle="${websiteTitle}"
     local selectedWebsiteDescription="${websiteDescription}"
     local existingWebsiteDomain=
+    local inputWebsiteDomain=
 
     if websiteLoadMetadata >/dev/null 2>&1; then
         existingWebsiteDomain="${websiteDomain}"
@@ -2591,20 +2592,29 @@ websitePromptDomain() {
         if [[ "${reuseStatus}" == "y" ]]; then
             websiteSetPaths "${existingWebsiteDomain}"
             return 0
+        elif [[ -n "${reuseStatus}" && "${reuseStatus}" != "n" && "${reuseStatus}" == *.* ]]; then
+            websiteDomain="${reuseStatus}"
+            websiteSetPaths "${websiteDomain}"
+            return 0
         fi
     fi
 
-    echoContent yellow "\n# 网站部署引导"
-    echoContent yellow "1. 请提前把域名A记录解析到当前服务器"
-    echoContent yellow "2. 网站会使用真实HTTPS证书"
-    echoContent yellow "3. 节点请继续使用随机端口，网站使用80/443\n"
-    read -r -p "请输入网站域名[例: blog.example.com]:" websiteDomain
-    if [[ -z "${websiteDomain}" ]] || ! echo "${websiteDomain}" | grep -q "\."; then
+    while true; do
+        echoContent yellow "\n# 网站部署引导"
+        echoContent yellow "1. 请提前把域名A记录解析到当前服务器"
+        echoContent yellow "2. 网站会使用真实HTTPS证书"
+        echoContent yellow "3. 节点请继续使用随机端口，网站使用80/443\n"
+        if ! read -r -p "请输入网站域名[例: blog.example.com]:" inputWebsiteDomain; then
+            echoContent red " ---> 未输入网站域名，已取消"
+            exit 0
+        fi
+        if [[ -n "${inputWebsiteDomain}" && "${inputWebsiteDomain}" == *.* ]]; then
+            websiteDomain="${inputWebsiteDomain}"
+            websiteSetPaths "${websiteDomain}"
+            return 0
+        fi
         echoContent red " ---> 域名格式不正确，请重新输入"
-        websitePromptDomain
-        return
-    fi
-    websiteSetPaths "${websiteDomain}"
+    done
 }
 
 websiteWriteFavicon() {
