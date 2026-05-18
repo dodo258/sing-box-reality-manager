@@ -2115,6 +2115,7 @@ selectAcmeInstallSSL() {
 # 安装SSL证书
 acmeInstallSSL() {
     local dnsAPIDomain="${tlsDomain}"
+    local nginxWasRunning=
     if [[ "${dnsAPIStatus}" == "y" ]]; then
         dnsAPIDomain="*.${dnsTLSDomain}"
     fi
@@ -2127,7 +2128,14 @@ acmeInstallSSL() {
         sudo Ali_Key="${aliKey}" Ali_Secret="${aliSecret}" "$HOME/.acme.sh/acme.sh" --issue -d "${dnsAPIDomain}" -d "${dnsTLSDomain}" --dns dns_ali -k ec-256 --server "${sslType}" ${sslIPv6} 2>&1 | tee -a /etc/v2ray-agent/tls/acme.log >/dev/null
     else
         echoContent green " ---> 生成证书中"
+        if pgrep -f "nginx" >/dev/null 2>&1; then
+            nginxWasRunning="true"
+            handleNginx stop
+        fi
         sudo "$HOME/.acme.sh/acme.sh" --issue -d "${tlsDomain}" --standalone -k ec-256 --server "${sslType}" ${sslIPv6} 2>&1 | tee -a /etc/v2ray-agent/tls/acme.log >/dev/null
+        if [[ "${nginxWasRunning}" == "true" ]]; then
+            handleNginx start
+        fi
     fi
 }
 # 自定义端口
