@@ -8874,27 +8874,29 @@ buildInstalledNodeEntries() {
     readInstallProtocolType
     readConfigHostPathUUID
 
-    local xrayTlsPort=
-    local xrayTlsDomain=
-    if [[ -f "${configPath}02_VLESS_TCP_inbounds.json" ]]; then
-        xrayTlsPort=$(jq -r '.inbounds[0].port // ""' "${configPath}02_VLESS_TCP_inbounds.json")
-        xrayTlsDomain=$(jq -r '.inbounds[0].streamSettings.tlsSettings.certificates[0].certificateFile // ""' "${configPath}02_VLESS_TCP_inbounds.json" | awk -F '[t][l][s][/]' '{print $2}' | awk -F '[.][c][r][t]' '{print $1}')
-        appendInstalledNodeEntry "1" "0" "VLESS+TLS_Vision+TCP" "${xrayTlsPort}" "$(jq -r '.inbounds[0].settings.clients | length' "${configPath}02_VLESS_TCP_inbounds.json")" "域名:${xrayTlsDomain}"
-    fi
-    if [[ -f "${configPath}03_VLESS_WS_inbounds.json" ]]; then
-        appendInstalledNodeEntry "1" "1" "VLESS+TLS+WS" "${xrayTlsPort}" "$(jq -r '.inbounds[0].settings.clients | length' "${configPath}03_VLESS_WS_inbounds.json")" "域名:${xrayTlsDomain} 路径:$(jq -r '.inbounds[0].streamSettings.wsSettings.path // ""' "${configPath}03_VLESS_WS_inbounds.json")"
-    fi
-    if [[ -f "${configPath}05_VMess_WS_inbounds.json" ]]; then
-        appendInstalledNodeEntry "1" "3" "VMess+TLS+WS" "${xrayTlsPort}" "$(jq -r '.inbounds[0].settings.clients | length' "${configPath}05_VMess_WS_inbounds.json")" "域名:${xrayTlsDomain} 路径:$(jq -r '.inbounds[0].streamSettings.wsSettings.path // ""' "${configPath}05_VMess_WS_inbounds.json")"
-    fi
-    if [[ -f "${configPath}04_trojan_TCP_inbounds.json" ]]; then
-        appendInstalledNodeEntry "1" "4" "Trojan+TLS" "${xrayTlsPort}" "$(jq -r '.inbounds[0].settings.clients | length' "${configPath}04_trojan_TCP_inbounds.json")" "域名:${xrayTlsDomain}"
-    fi
-    if [[ -f "${configPath}07_VLESS_vision_reality_inbounds.json" ]]; then
-        appendInstalledNodeEntry "1" "7" "VLESS+Reality+Vision" "$(jq -r '.inbounds[0].port // ""' "${configPath}07_VLESS_vision_reality_inbounds.json")" "$(jq -r '.inbounds[1].settings.clients | length' "${configPath}07_VLESS_vision_reality_inbounds.json")" "目标:$(jq -r '.inbounds[1].streamSettings.realitySettings.dest // .inbounds[1].streamSettings.realitySettings.target // ""' "${configPath}07_VLESS_vision_reality_inbounds.json")"
-    fi
-    if [[ -f "${configPath}12_VLESS_XHTTP_inbounds.json" ]]; then
-        appendInstalledNodeEntry "1" "12" "VLESS+Reality+XHTTP" "$(jq -r '.inbounds[0].port // ""' "${configPath}12_VLESS_XHTTP_inbounds.json")" "$(jq -r '.inbounds[0].settings.clients | length' "${configPath}12_VLESS_XHTTP_inbounds.json")" "目标:$(jq -r '.inbounds[0].streamSettings.realitySettings.dest // .inbounds[0].streamSettings.realitySettings.target // ""' "${configPath}12_VLESS_XHTTP_inbounds.json") 路径:$(jq -r '.inbounds[0].streamSettings.xhttpSettings.path // ""' "${configPath}12_VLESS_XHTTP_inbounds.json")"
+    if [[ "${coreInstallType}" == "1" ]]; then
+        local xrayTlsPort=
+        local xrayTlsDomain=
+        if [[ -f "${configPath}02_VLESS_TCP_inbounds.json" ]]; then
+            xrayTlsPort=$(jq -r '.inbounds[0].port // ""' "${configPath}02_VLESS_TCP_inbounds.json")
+            xrayTlsDomain=$(jq -r '.inbounds[0].streamSettings.tlsSettings.certificates[0].certificateFile // ""' "${configPath}02_VLESS_TCP_inbounds.json" | awk -F '[t][l][s][/]' '{print $2}' | awk -F '[.][c][r][t]' '{print $1}')
+            appendInstalledNodeEntry "1" "0" "VLESS+TLS_Vision+TCP" "${xrayTlsPort}" "$(jq -r '.inbounds[0].settings.clients | length' "${configPath}02_VLESS_TCP_inbounds.json")" "域名:${xrayTlsDomain}"
+        fi
+        if [[ -f "${configPath}03_VLESS_WS_inbounds.json" ]]; then
+            appendInstalledNodeEntry "1" "1" "VLESS+TLS+WS" "${xrayTlsPort}" "$(jq -r '.inbounds[0].settings.clients | length' "${configPath}03_VLESS_WS_inbounds.json")" "域名:${xrayTlsDomain} 路径:$(jq -r '.inbounds[0].streamSettings.wsSettings.path // ""' "${configPath}03_VLESS_WS_inbounds.json")"
+        fi
+        if [[ -f "${configPath}05_VMess_WS_inbounds.json" ]]; then
+            appendInstalledNodeEntry "1" "3" "VMess+TLS+WS" "${xrayTlsPort}" "$(jq -r '.inbounds[0].settings.clients | length' "${configPath}05_VMess_WS_inbounds.json")" "域名:${xrayTlsDomain} 路径:$(jq -r '.inbounds[0].streamSettings.wsSettings.path // ""' "${configPath}05_VMess_WS_inbounds.json")"
+        fi
+        if [[ -f "${configPath}04_trojan_TCP_inbounds.json" ]]; then
+            appendInstalledNodeEntry "1" "4" "Trojan+TLS" "${xrayTlsPort}" "$(jq -r '.inbounds[0].settings.clients | length' "${configPath}04_trojan_TCP_inbounds.json")" "域名:${xrayTlsDomain}"
+        fi
+        if [[ -f "${configPath}07_VLESS_vision_reality_inbounds.json" ]]; then
+            appendInstalledNodeEntry "1" "7" "VLESS+Reality+Vision" "$(jq -r '.inbounds[0].port // ""' "${configPath}07_VLESS_vision_reality_inbounds.json")" "$(jq -r '.inbounds[1].settings.clients | length' "${configPath}07_VLESS_vision_reality_inbounds.json")" "目标:$(jq -r '.inbounds[1].streamSettings.realitySettings.dest // .inbounds[1].streamSettings.realitySettings.target // ""' "${configPath}07_VLESS_vision_reality_inbounds.json")"
+        fi
+        if [[ -f "${configPath}12_VLESS_XHTTP_inbounds.json" ]]; then
+            appendInstalledNodeEntry "1" "12" "VLESS+Reality+XHTTP" "$(jq -r '.inbounds[0].port // ""' "${configPath}12_VLESS_XHTTP_inbounds.json")" "$(jq -r '.inbounds[0].settings.clients | length' "${configPath}12_VLESS_XHTTP_inbounds.json")" "目标:$(jq -r '.inbounds[0].streamSettings.realitySettings.dest // .inbounds[0].streamSettings.realitySettings.target // ""' "${configPath}12_VLESS_XHTTP_inbounds.json") 路径:$(jq -r '.inbounds[0].streamSettings.xhttpSettings.path // ""' "${configPath}12_VLESS_XHTTP_inbounds.json")"
+        fi
     fi
 
     if [[ -f "${singBoxConfigPath}02_VLESS_TCP_inbounds.json" ]]; then
