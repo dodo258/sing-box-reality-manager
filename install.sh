@@ -2422,6 +2422,7 @@ prepareHysteria2TLS() {
         initTLSNginxConfig "$((1 + $1))"
         installTLS "$((2 + $1))"
         handleNginx stop
+        restoreWebsiteNginxIfConfigured
         hysteria2TLSMode="acme"
     fi
 }
@@ -2658,6 +2659,20 @@ websiteEnsureNginxInstalled() {
     if ! command -v nginx >/dev/null 2>&1; then
         echoContent yellow "\n ---> 未检测到Nginx，开始安装"
         installNginxTools
+    fi
+}
+
+websiteEnsureAcmeInstalled() {
+    mkdir -p /etc/v2ray-agent/tls >/dev/null 2>&1
+    if [[ ! -d "$HOME/.acme.sh" ]] || [[ -d "$HOME/.acme.sh" && -z $(find "$HOME/.acme.sh/acme.sh" 2>/dev/null) ]]; then
+        echoContent green " ---> 安装acme.sh"
+        curl -s https://get.acme.sh | sh >/etc/v2ray-agent/tls/acme.log 2>&1
+
+        if [[ ! -d "$HOME/.acme.sh" ]] || [[ -z $(find "$HOME/.acme.sh/acme.sh" 2>/dev/null) ]]; then
+            echoContent red "  acme安装失败--->"
+            tail -n 100 /etc/v2ray-agent/tls/acme.log
+            exit 0
+        fi
     fi
 }
 
@@ -3862,6 +3877,7 @@ websitePrepareTLS() {
     if [[ ! -s "/etc/v2ray-agent/tls/${websiteDomain}.crt" || ! -s "/etc/v2ray-agent/tls/${websiteDomain}.key" ]]; then
         echoContent yellow "\n ---> 未检测到 ${websiteDomain} 的证书，开始申请"
         echoContent skyBlue " ---> 网站管理沿用 14.证书管理 的 acme.sh 免费证书与自动续期链路"
+        websiteEnsureAcmeInstalled
         websiteTLSAutoMode=true
         installTLS 2
     else
@@ -3924,10 +3940,44 @@ websiteReloadNginx() {
         cat /etc/v2ray-agent/nginx_error.log
         exit 0
     fi
-    if pgrep -f "nginx" >/dev/null 2>&1; then
-        nginx -s reload >/etc/v2ray-agent/nginx_error.log 2>&1 || true
+    if [[ "${release}" == "alpine" ]]; then
+        rc-service nginx restart >/etc/v2ray-agent/nginx_error.log 2>&1 || rc-service nginx start >/etc/v2ray-agent/nginx_error.log 2>&1
+    else
+        systemctl enable nginx >/dev/null 2>&1 || true
+        if ! systemctl restart nginx >/etc/v2ray-agent/nginx_error.log 2>&1; then
+            nginx -s stop >/dev/null 2>&1 || true
+            sleep 0.5
+            if pgrep -x nginx >/dev/null 2>&1; then
+                pgrep -x nginx | xargs kill -9 >/dev/null 2>&1 || true
+            fi
+            systemctl restart nginx >/etc/v2ray-agent/nginx_error.log 2>&1
+        fi
     fi
-    handleNginx start
+    sleep 0.5
+    if ! pgrep -x nginx >/dev/null 2>&1 || ! (ss -ltn 2>/dev/null | grep -Eq '(:443\s|:443$|\*:443\s|\[::\]:443\s)'); then
+        echoContent red "\n ---> Nginx启动或443监听失败"
+        echoContent red " ---> 请将下方日志反馈给开发者"
+        cat /etc/v2ray-agent/nginx_error.log
+        if command -v journalctl >/dev/null 2>&1; then
+            journalctl -u nginx -n 30 --no-pager 2>/dev/null
+        fi
+        exit 0
+    fi
+    echoContent green " ---> Nginx重载成功"
+}
+
+restoreWebsiteNginxIfConfigured() {
+    local activeWebsiteNginxConfig="${websiteNginxConfigPath}"
+    if [[ -z "${activeWebsiteNginxConfig}" ]]; then
+        activeWebsiteNginxConfig="${nginxConfigPath}${websiteNginxConfigName}"
+    fi
+    if [[ -z "${activeWebsiteNginxConfig}" ]]; then
+        activeWebsiteNginxConfig="/etc/nginx/conf.d/${websiteNginxConfigName}"
+    fi
+    if [[ -s "${activeWebsiteNginxConfig}" ]]; then
+        echoContent skyBlue " ---> 检测到网站管理配置，恢复网站Nginx"
+        websiteReloadNginx
+    fi
 }
 
 websitePrepareShell() {
@@ -6178,6 +6228,7 @@ prepareManagedMultiAnyTLSCertificate() {
     installTLS 2
     installCronTLS 3
     handleNginx stop
+    restoreWebsiteNginxIfConfigured
 
     domain="${savedDomain}"
     dnsTLSDomain="${savedDnsTLSDomain}"
@@ -9279,6 +9330,17 @@ EOF
 EOF
 
         echoContent yellow " ---> mihomo/Clash.Meta YAML(AnyTLS+TLS证书)"
+        cat <<EOF
+  - name: "${email}"
+    type: anytls
+    server: ${anyTLSServerName}
+    port: ${port}
+    password: "${id}"
+    sni: ${anyTLSServerName}
+    client-fingerprint: chrome
+    skip-cert-verify: false
+    udp: true
+EOF
         cat <<EOF >>"/etc/v2ray-agent/subscribe_local/clashMeta/${user}"
   - name: "${email}"
     type: anytls
@@ -13076,6 +13138,7 @@ installSingBoxAnyTLS() {
     initTLSNginxConfig 2
     installTLS 3
     handleNginx stop
+    restoreWebsiteNginxIfConfigured
     installSingBox 4
     installSingBoxService 5
     initSingBoxConfig custom 6 keep
