@@ -37,6 +37,7 @@ Common management entries:
 
 * Stability first: use `Reality`. It uses a random port by default and does not require your own domain.
 * Want AnyTLS: use `AnyTLS+Reality`. It no longer requests your own domain certificate and is recommended only for `sing-box` clients.
+* Need Hysteria2: install it from Advanced / Compatibility; use a real certificate with a domain, or self-signed certificate + `pinSHA256` without a domain.
 * Need Snell: use `Snell+ShadowTLS`. It uses a random public port by default; use 443 only when it is free.
 * Streaming routing: prefer `sing-box + 11. Routing Tools -> DNS Routing`.
 * Normal website: use `12. Website Management`. Websites use normal `80/443 + HTTPS`; nodes continue to use random ports.
@@ -44,7 +45,7 @@ Common management entries:
 ## Current Capabilities
 
 * `sing-box`-first deployment with retained `Xray-core` compatibility.
-* VLESS Reality, AnyTLS+Reality, Snell v4/v5 + Shadow-TLS v3.
+* VLESS Reality, AnyTLS+Reality, Hysteria2, Snell v4/v5 + Shadow-TLS v3.
 * Independent multi-instance nodes for Reality, AnyTLS+Reality, and Snell+ShadowTLS.
 * Node-level DNS routing for the main `sing-box` node and multi-instance `sing-box` nodes.
 * Website management for Chinese tech blogs, Chinese tool sites, custom static uploads, and archived legacy templates.
@@ -55,6 +56,7 @@ Common management entries:
 * Multi-instance means independent nodes, not extra entry ports for old nodes.
 * `Xray-core` is kept for compatibility; prefer `sing-box` for per-node DNS routing.
 * AnyTLS+Reality does not require your own domain certificate; mihomo/Clash.Meta is not supported, and Shadowrocket/v2rayN are unverified.
+* Hysteria2 does not strictly require a public certificate. Real certificates are easiest for clients; self-signed mode must keep and import `pinSHA256`.
 * Node-level DNS routing depends on `sing-box` 1.12+; avoid downgrading the core to older versions.
 * In Snell+ShadowTLS mode, Shadow-TLS listens publicly while Snell listens only on a local backend port.
 * Snell+ShadowTLS is intended for single-user VPS usage; avoid shared multi-user machines.

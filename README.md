@@ -37,6 +37,7 @@
 
 * 稳定优先：选 `Reality`，默认随机端口，不需要自备域名。
 * 想尝试 AnyTLS：选 `AnyTLS+Reality`，不再申请自备域名证书，仅建议 `sing-box` 客户端使用。
+* 想用 Hysteria2：高级/兼容功能里安装；有域名走真实证书，无域名走自签证书 + `pinSHA256`。
 * 想用 Snell：选 `Snell+ShadowTLS`，默认随机公网端口，443 只在空闲时使用。
 * 流媒体分流：优先使用 `sing-box + 11.分流工具 -> DNS分流`。
 * 普通网站：用 `12.网站管理`，网站走正常 `80/443 + HTTPS`，节点继续走随机端口。
@@ -44,7 +45,7 @@
 ## 当前能力
 
 * 支持 `sing-box` 优先部署，也保留 `Xray-core` 兼容入口。
-* 支持 VLESS Reality、AnyTLS+Reality、Snell v4/v5 + Shadow-TLS v3。
+* 支持 VLESS Reality、AnyTLS+Reality、Hysteria2、Snell v4/v5 + Shadow-TLS v3。
 * 支持 Reality / AnyTLS+Reality / Snell+ShadowTLS 多实例独立节点。
 * `sing-box` 下支持主节点和多实例节点的节点级 DNS 分流。
 * 网站管理支持中文技术博客、中文小工具站、自定义静态站和旧模板兼容入口。
@@ -55,6 +56,7 @@
 * 多实例是“独立节点”，不是给旧节点补入口。
 * `Xray-core` 目前只保留兼容能力，按节点 DNS 分流优先使用 `sing-box`。
 * AnyTLS+Reality 不再走证书版 AnyTLS；mihomo/Clash.Meta 不支持，Shadowrocket/v2rayN 未验证。
+* Hysteria2 不强制真实证书；真实证书客户端最省心，自签证书模式必须保留并导入 `pinSHA256`。
 * 节点级 DNS 分流依赖 `sing-box` 1.12+，不建议把核心降到旧版本。
 * Snell+ShadowTLS 中 Shadow-TLS 对外监听，Snell 只监听本机后端端口。
 * Snell+ShadowTLS 更适合单用户 VPS，不建议在多人共享机器上使用。

@@ -21,6 +21,9 @@ managedMultiAnyTLSDNSPrefix="33_anytls_multi_dns_"
 managedMultiRealityShortID="6ba85179e30d4fc2"
 managedMultiRealityKeySuffix=".key"
 singBoxAnyTLSRealityKeyFile="/etc/v2ray-agent/sing-box/conf/config/anytls_reality_key"
+hysteria2SelfSignedPinSuffix=".hysteria2_pin_sha256"
+hysteria2SingBoxPinSuffix=".sing_box_pin_sha256"
+hysteria2SelfSignedDefaultSNI="hy2.dodo258.local"
 snellShadowTLSRoot="/etc/v2ray-agent/snell-shadowtls"
 snellShadowTLSNodeRoot="${snellShadowTLSRoot}/nodes"
 snellBinaryRoot="${snellShadowTLSRoot}/bin"
@@ -2339,6 +2342,88 @@ installTLS() {
     else
         echoContent yellow " ---> 未安装acme.sh"
         exit 0
+    fi
+}
+
+getHysteria2PinFile() {
+    local tlsDomain=$1
+    echo "/etc/v2ray-agent/tls/${tlsDomain}${hysteria2SelfSignedPinSuffix}"
+}
+
+getHysteria2SingBoxPinFile() {
+    local tlsDomain=$1
+    echo "/etc/v2ray-agent/tls/${tlsDomain}${hysteria2SingBoxPinSuffix}"
+}
+
+getHysteria2CertificatePinSHA256() {
+    local certPath=$1
+    openssl x509 -in "${certPath}" -noout -fingerprint -sha256 2>/dev/null | awk -F '=' '{print tolower($2)}'
+}
+
+getSingBoxCertificatePublicKeySHA256() {
+    local certPath=$1
+    openssl x509 -in "${certPath}" -pubkey -noout 2>/dev/null | openssl pkey -pubin -outform DER 2>/dev/null | openssl dgst -sha256 -binary 2>/dev/null | base64 -w 0
+}
+
+initHysteria2SelfSignedTLS() {
+    local tlsDomain=$1
+    local certPath="/etc/v2ray-agent/tls/${tlsDomain}.crt"
+    local keyPath="/etc/v2ray-agent/tls/${tlsDomain}.key"
+    local hysteria2PinFile=
+    local singBoxPinFile=
+    local hysteria2Pin=
+    local singBoxPin=
+
+    mkdir -p /etc/v2ray-agent/tls
+    echoContent skyBlue "\n进度  $2/${totalProgress} : 生成Hysteria2自签证书"
+    openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 3650 \
+        -keyout "${keyPath}" \
+        -out "${certPath}" \
+        -subj "/CN=${tlsDomain}" \
+        -addext "subjectAltName=DNS:${tlsDomain}" >/dev/null 2>&1
+
+    if [[ ! -f "${certPath}" || ! -f "${keyPath}" || -z $(cat "${certPath}") || -z $(cat "${keyPath}") ]]; then
+        echoContent red " ---> Hysteria2自签证书生成失败"
+        exit 0
+    fi
+
+    hysteria2Pin=$(getHysteria2CertificatePinSHA256 "${certPath}")
+    singBoxPin=$(getSingBoxCertificatePublicKeySHA256 "${certPath}")
+    if [[ -z "${hysteria2Pin}" || -z "${singBoxPin}" ]]; then
+        echoContent red " ---> Hysteria2证书指纹生成失败"
+        exit 0
+    fi
+
+    hysteria2PinFile=$(getHysteria2PinFile "${tlsDomain}")
+    singBoxPinFile=$(getHysteria2SingBoxPinFile "${tlsDomain}")
+    echo "${hysteria2Pin}" >"${hysteria2PinFile}"
+    echo "${singBoxPin}" >"${singBoxPinFile}"
+
+    echoContent green " ---> 自签证书生成成功"
+    echoContent green " ---> pinSHA256:${hysteria2Pin}"
+}
+
+prepareHysteria2TLS() {
+    echoContent skyBlue "\n进度  $1/${totalProgress} : 选择Hysteria2证书模式"
+    echoContent yellow "# 有域名推荐真实证书，客户端无需额外 pin"
+    echoContent yellow "# 无域名可用自签证书 + pinSHA256，客户端会锁定证书指纹\n"
+    echoContent yellow "1.有域名：申请 Let's Encrypt 真实证书"
+    echoContent yellow "2.无域名：生成自签证书 + pinSHA256"
+    read -r -p "请选择[回车默认1]:" hysteria2TLSMode
+    if [[ "${hysteria2TLSMode}" == "2" ]]; then
+        read -r -p "请输入自签证书SNI[回车默认 ${hysteria2SelfSignedDefaultSNI}]:" hysteria2SelfSignedSNI
+        if [[ -z "${hysteria2SelfSignedSNI}" ]]; then
+            hysteria2SelfSignedSNI="${hysteria2SelfSignedDefaultSNI}"
+        fi
+        domain="${hysteria2SelfSignedSNI}"
+        dnsTLSDomain="$(echo "${domain}" | awk -F "." '{$1="";print $0}' | sed 's/^[[:space:]]*//' | sed 's/ /./g')"
+        initHysteria2SelfSignedTLS "${domain}" "$((1 + $1))"
+        hysteria2TLSMode="self-signed"
+    else
+        initTLSNginxConfig "$((1 + $1))"
+        installTLS "$((2 + $1))"
+        handleNginx stop
+        hysteria2TLSMode="acme"
     fi
 }
 
@@ -7555,6 +7640,7 @@ initSingBoxHysteria2Config() {
 
     initHysteriaPort
     initHysteria2Network
+    local hysteria2TLSDomain="${sslDomain:-${domain:-${currentHost}}}"
 
     cat <<EOF >/etc/v2ray-agent/sing-box/conf/config/hysteria2.json
 {
@@ -7568,12 +7654,12 @@ initSingBoxHysteria2Config() {
             "down_mbps":${hysteria2ClientUploadSpeed},
             "tls": {
                 "enabled": true,
-                "server_name":"${currentHost}",
+                "server_name":"${hysteria2TLSDomain}",
                 "alpn": [
                     "h3"
                 ],
-                "certificate_path": "/etc/v2ray-agent/tls/${currentHost}.crt",
-                "key_path": "/etc/v2ray-agent/tls/${currentHost}.key"
+                "certificate_path": "/etc/v2ray-agent/tls/${hysteria2TLSDomain}.crt",
+                "key_path": "/etc/v2ray-agent/tls/${hysteria2TLSDomain}.key"
             }
         }
     ]
@@ -7599,18 +7685,19 @@ singBoxTuicInstall() {
 
 # sing-box hy2安装
 singBoxHysteria2Install() {
-    if ! echo "${currentInstallProtocolType}" | grep -qE ",0,|,1,|,2,|,3,|,4,|,5,|,6,|,9,|,10,"; then
-        echoContent red "\n ---> 由于需要依赖证书，如安装Hysteria2，请先安装带有TLS标识协议"
-        exit 0
-    fi
-
-    totalProgress=5
-    installSingBox 1
+    totalProgress=8
     selectCustomInstallType=",6,"
-    initSingBoxConfig custom 2 true
-    installSingBoxService 3
-    reloadCore
-    showAccounts 4
+    selectCoreType="2"
+    installTools 1
+    prepareHysteria2TLS 2
+    installSingBox 5
+    initSingBoxConfig custom 6 true
+    installSingBoxService 7
+    if [[ "${hysteria2TLSMode}" == "acme" ]]; then
+        installCronTLS 7
+    fi
+    handleSingBox restart
+    showAccounts 8
 }
 
 # 合并config
@@ -8451,6 +8538,7 @@ EOF
         mapfile -t result < <(initSingBoxPort "${singBoxHysteria2Port}")
         echoContent green "\n ---> Hysteria2端口：${result[-1]}"
         initHysteria2Network
+        local hysteria2TLSDomain="${sslDomain:-${domain:-${currentHost}}}"
         cat <<EOF >/etc/v2ray-agent/sing-box/conf/config/06_hysteria2_inbounds.json
 {
     "inbounds": [
@@ -8463,12 +8551,12 @@ EOF
             "down_mbps":${hysteria2ClientUploadSpeed},
             "tls": {
                 "enabled": true,
-                "server_name":"${sslDomain}",
+                "server_name":"${hysteria2TLSDomain}",
                 "alpn": [
                     "h3"
                 ],
-                "certificate_path": "/etc/v2ray-agent/tls/${sslDomain}.crt",
-                "key_path": "/etc/v2ray-agent/tls/${sslDomain}.key"
+                "certificate_path": "/etc/v2ray-agent/tls/${hysteria2TLSDomain}.crt",
+                "key_path": "/etc/v2ray-agent/tls/${hysteria2TLSDomain}.key"
             }
         }
     ]
@@ -8912,37 +9000,106 @@ EOF
         local clashMetaPortContent="port: ${port}"
         local multiPort=
         local multiPortEncode
+        local hysteria2Server="${currentHost}"
+        local hysteria2SNI="${currentHost}"
+        local hysteria2Insecure="0"
+        local hysteria2PinValue=
+        local hysteria2PinValueEncode=
+        local hysteria2PinParam=
+        local hysteria2PinParamEncode=
+        local hysteria2ClashTLSExtra=
+        local hysteria2SingBoxPin=
+        local hysteria2PinFile=
+        local hysteria2SingBoxPinFile=
+        local hysteria2NativeTLSJson=
+        local hysteria2ConfigFile="${configPath}06_hysteria2_inbounds.json"
+        if [[ ! -f "${hysteria2ConfigFile}" && -n "${singBoxConfigPath}" && -f "${singBoxConfigPath}06_hysteria2_inbounds.json" ]]; then
+            hysteria2ConfigFile="${singBoxConfigPath}06_hysteria2_inbounds.json"
+        fi
+        if [[ -f "${hysteria2ConfigFile}" ]]; then
+            hysteria2SNI=$(jq -r '.inbounds[0].tls.server_name // ""' "${hysteria2ConfigFile}")
+            if [[ -z "${hysteria2SNI}" || "${hysteria2SNI}" == "null" ]]; then
+                hysteria2SNI="${currentHost}"
+            fi
+            hysteria2Server="${hysteria2SNI}"
+        fi
         if echo "${port}" | grep -q "-"; then
             clashMetaPortContent="ports: ${port}"
             multiPort="mport=${port}&"
             multiPortEncode="mport%3D${port}%26"
         fi
+        hysteria2PinFile=$(getHysteria2PinFile "${hysteria2SNI}")
+        hysteria2SingBoxPinFile=$(getHysteria2SingBoxPinFile "${hysteria2SNI}")
+        if [[ -f "${hysteria2PinFile}" ]]; then
+            hysteria2Server="$(getPublicIP)"
+            hysteria2Insecure="1"
+            hysteria2PinValue=$(cat "${hysteria2PinFile}")
+            hysteria2PinValueEncode=$(echo "${hysteria2PinValue}" | sed 's/:/%3A/g')
+            hysteria2PinParam="pinSHA256=${hysteria2PinValue}&"
+            hysteria2PinParamEncode="pinSHA256%3D${hysteria2PinValueEncode}%26"
+            hysteria2ClashTLSExtra="    skip-cert-verify: true"
+            if [[ -f "${hysteria2SingBoxPinFile}" ]]; then
+                hysteria2SingBoxPin=$(cat "${hysteria2SingBoxPinFile}")
+            fi
+        fi
 
-        echoContent green "    hysteria2://${id}@${currentHost}:${singBoxHysteria2Port}?${multiPort}peer=${currentHost}&insecure=0&sni=${currentHost}&alpn=h3#${email}\n"
+        echoContent green "    hysteria2://${id}@${hysteria2Server}:${singBoxHysteria2Port}?${multiPort}${hysteria2PinParam}peer=${hysteria2SNI}&insecure=${hysteria2Insecure}&sni=${hysteria2SNI}&alpn=h3#${email}\n"
         cat <<EOF >>"/etc/v2ray-agent/subscribe_local/default/${user}"
-hysteria2://${id}@${currentHost}:${singBoxHysteria2Port}?${multiPort}peer=${currentHost}&insecure=0&sni=${currentHost}&alpn=h3#${email}
+hysteria2://${id}@${hysteria2Server}:${singBoxHysteria2Port}?${multiPort}${hysteria2PinParam}peer=${hysteria2SNI}&insecure=${hysteria2Insecure}&sni=${hysteria2SNI}&alpn=h3#${email}
 EOF
         echoContent yellow " ---> v2rayN(hysteria+TLS)"
-        echo "{\"server\": \"${currentHost}:${port}\",\"socks5\": { \"listen\": \"127.0.0.1:7798\", \"timeout\": 300},\"auth\":\"${id}\",\"tls\":{\"sni\":\"${currentHost}\"}}" | jq
+        if [[ -n "${hysteria2PinValue}" ]]; then
+            hysteria2NativeTLSJson="{\"sni\":\"${hysteria2SNI}\",\"insecure\":true,\"pinSHA256\":\"${hysteria2PinValue}\"}"
+        else
+            hysteria2NativeTLSJson="{\"sni\":\"${hysteria2SNI}\",\"insecure\":false}"
+        fi
+        echo "{\"server\": \"${hysteria2Server}:${port}\",\"socks5\": { \"listen\": \"127.0.0.1:7798\", \"timeout\": 300},\"auth\":\"${id}\",\"tls\":${hysteria2NativeTLSJson}}" | jq
+        if [[ -n "${hysteria2PinValue}" ]]; then
+            echoContent yellow " ---> 自签证书 pinSHA256"
+            echoContent green "    ${hysteria2PinValue}\n"
+        fi
 
         cat <<EOF >>"/etc/v2ray-agent/subscribe_local/clashMeta/${user}"
   - name: "${email}"
     type: hysteria2
-    server: ${currentHost}
+    server: ${hysteria2Server}
     ${clashMetaPortContent}
     password: ${id}
     alpn:
         - h3
-    sni: ${currentHost}
+    sni: ${hysteria2SNI}
     up: "${hysteria2ClientUploadSpeed} Mbps"
     down: "${hysteria2ClientDownloadSpeed} Mbps"
+${hysteria2ClashTLSExtra}
 EOF
 
-        singBoxSubscribeLocalConfig=$(jq -r ". += [{\"tag\":\"${email}\",\"type\":\"hysteria2\",\"server\":\"${currentHost}\",\"server_port\":${singBoxHysteria2Port},\"up_mbps\":${hysteria2ClientUploadSpeed},\"down_mbps\":${hysteria2ClientDownloadSpeed},\"password\":\"${id}\",\"tls\":{\"enabled\":true,\"server_name\":\"${currentHost}\",\"alpn\":[\"h3\"]}}]" "/etc/v2ray-agent/subscribe_local/sing-box/${user}")
+        singBoxSubscribeLocalConfig=$(jq -r \
+            --arg tag "${email}" \
+            --arg server "${hysteria2Server}" \
+            --argjson serverPort "${singBoxHysteria2Port}" \
+            --argjson upMbps "${hysteria2ClientUploadSpeed}" \
+            --argjson downMbps "${hysteria2ClientDownloadSpeed}" \
+            --arg password "${id}" \
+            --arg sni "${hysteria2SNI}" \
+            --arg certPin "${hysteria2SingBoxPin}" \
+            '. += [{
+                "tag": $tag,
+                "type": "hysteria2",
+                "server": $server,
+                "server_port": $serverPort,
+                "up_mbps": $upMbps,
+                "down_mbps": $downMbps,
+                "password": $password,
+                "tls": ({
+                    "enabled": true,
+                    "server_name": $sni,
+                    "alpn": ["h3"]
+                } + (if $certPin == "" then {} else {"certificate_public_key_sha256": [$certPin]} end))
+            }]' "/etc/v2ray-agent/subscribe_local/sing-box/${user}")
         echo "${singBoxSubscribeLocalConfig}" | jq . >"/etc/v2ray-agent/subscribe_local/sing-box/${user}"
 
         echoContent yellow " ---> 二维码 Hysteria2(TLS)"
-        echoContent green "    https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=hysteria2%3A%2F%2F${id}%40${currentHost}%3A${singBoxHysteria2Port}%3F${multiPortEncode}peer%3D${currentHost}%26insecure%3D0%26sni%3D${currentHost}%26alpn%3Dh3%23${email}\n"
+        echoContent green "    https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=hysteria2%3A%2F%2F${id}%40${hysteria2Server}%3A${singBoxHysteria2Port}%3F${multiPortEncode}${hysteria2PinParamEncode}peer%3D${hysteria2SNI}%26insecure%3D${hysteria2Insecure}%26sni%3D${hysteria2SNI}%26alpn%3Dh3%23${email}\n"
 
     elif [[ "${type}" == "vlessReality" ]]; then
         local realityServerName=${xrayVLESSRealityServerName}
@@ -12819,7 +12976,7 @@ customSingBoxInstall() {
     echoMenuHint "1.VLESS+TLS+WS" "仅CDN推荐"
     echoMenuHint "3.VMess+TLS+WS" "仅CDN推荐"
     echoMenuHint "4.Trojan+TLS" "不推荐"
-    echoContent yellow "6.Hysteria2"
+    echoMenuHint "6.Hysteria2" "有域名真实证书/无域名自签pin"
     echoMenuHint "7.VLESS+Reality+Vision" "无域名推荐"
     echoMenuHint "8.VLESS+Reality+gRPC" "进阶"
     echoContent yellow "9.Tuic"
@@ -12854,7 +13011,9 @@ customSingBoxInstall() {
         totalProgress=9
         installTools 1
         # 申请tls
-        if echo "${selectCustomInstallType}" | grep -q -E ",0,|,1,|,3,|,4,|,6,|,9,|,10,|,11,|,13,"; then
+        if [[ "${selectCustomInstallType}" == ",6," ]]; then
+            prepareHysteria2TLS 2
+        elif echo "${selectCustomInstallType}" | grep -q -E ",0,|,1,|,3,|,4,|,6,|,9,|,10,|,11,|,13,"; then
             initTLSNginxConfig 2
             installTLS 3
             handleNginx stop
@@ -12864,10 +13023,14 @@ customSingBoxInstall() {
         installSingBoxService 5
         initSingBoxConfig custom 6
         cleanUp xrayDel
-        installCronTLS 7
+        if [[ "${hysteria2TLSMode}" != "self-signed" ]]; then
+            installCronTLS 7
+        fi
         handleSingBox restart
-        handleNginx stop
-        handleNginx start
+        if [[ "${hysteria2TLSMode}" != "self-signed" ]]; then
+            handleNginx stop
+            handleNginx start
+        fi
         # 生成账号
         checkGFWStatue 8
         showAccounts 9
@@ -14373,6 +14536,8 @@ realityScanner() {
 manageHysteria() {
     echoContent skyBlue "\n进度  1/1 : Hysteria2 管理"
     echoContent red "\n=============================================================="
+    echoContent yellow "# 有域名可走 Let's Encrypt 真实证书"
+    echoContent yellow "# 无域名可走自签证书 + pinSHA256\n"
     local hysteria2Status=
     if [[ -n "${singBoxConfigPath}" ]] && [[ -f "/etc/v2ray-agent/sing-box/conf/config/06_hysteria2_inbounds.json" ]]; then
         echoContent yellow "依赖第三方sing-box\n"
@@ -14535,7 +14700,7 @@ menu() {
     cd "$HOME" || exit
     echoContent red "\n=============================================================="
     echoContent green "维护：dodo258"
-    echoContent green "当前版本：v3.8.1"
+    echoContent green "当前版本：v3.8.2"
     echoContent green "项目：https://github.com/dodo258/sing-box-reality-manager"
     echoContent green "描述：多实例重构版管理脚本\c"
     showInstallStatus
