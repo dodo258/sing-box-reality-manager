@@ -36,7 +36,7 @@
 ## 怎么选
 
 * 稳定优先：选 `Reality`，默认随机端口，不需要自备域名。
-* 想尝试 AnyTLS：选 `AnyTLS+Reality`，不再申请自备域名证书，主要面向 `sing-box` 客户端。
+* 想尝试 AnyTLS：选 `AnyTLS+Reality`，不再申请自备域名证书，仅建议 `sing-box` 客户端使用。
 * 想用 Snell：选 `Snell+ShadowTLS`，默认随机公网端口，443 只在空闲时使用。
 * 流媒体分流：优先使用 `sing-box + 11.分流工具 -> DNS分流`。
 * 普通网站：用 `12.网站管理`，网站走正常 `80/443 + HTTPS`，节点继续走随机端口。
@@ -54,11 +54,15 @@
 
 * 多实例是“独立节点”，不是给旧节点补入口。
 * `Xray-core` 目前只保留兼容能力，按节点 DNS 分流优先使用 `sing-box`。
-* AnyTLS+Reality 不再走证书版 AnyTLS；客户端优先使用 `sing-box`。
+* AnyTLS+Reality 不再走证书版 AnyTLS；mihomo/Clash.Meta 不支持，Shadowrocket/v2rayN 未验证。
+* 节点级 DNS 分流依赖 `sing-box` 1.12+，不建议把核心降到旧版本。
 * Snell+ShadowTLS 中 Shadow-TLS 对外监听，Snell 只监听本机后端端口。
+* Snell+ShadowTLS 更适合单用户 VPS，不建议在多人共享机器上使用。
 * Reality / Shadow-TLS 目标域名依赖外部网络环境，必要时需要重新筛选。
 
 ## 安装
+
+请先确认脚本来源和仓库地址无误，再以 `root` 执行：
 
 ```bash
 wget -P /root -N --no-check-certificate "https://raw.githubusercontent.com/dodo258/sing-box-reality-manager/main/install.sh" && chmod 700 /root/install.sh && /root/install.sh

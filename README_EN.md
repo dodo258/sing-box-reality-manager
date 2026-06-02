@@ -36,7 +36,7 @@ Common management entries:
 ## What To Choose
 
 * Stability first: use `Reality`. It uses a random port by default and does not require your own domain.
-* Want AnyTLS: use `AnyTLS+Reality`. It no longer requests your own domain certificate and is mainly for `sing-box` clients.
+* Want AnyTLS: use `AnyTLS+Reality`. It no longer requests your own domain certificate and is recommended only for `sing-box` clients.
 * Need Snell: use `Snell+ShadowTLS`. It uses a random public port by default; use 443 only when it is free.
 * Streaming routing: prefer `sing-box + 11. Routing Tools -> DNS Routing`.
 * Normal website: use `12. Website Management`. Websites use normal `80/443 + HTTPS`; nodes continue to use random ports.
@@ -54,11 +54,15 @@ Common management entries:
 
 * Multi-instance means independent nodes, not extra entry ports for old nodes.
 * `Xray-core` is kept for compatibility; prefer `sing-box` for per-node DNS routing.
-* AnyTLS+Reality does not require your own domain certificate; prefer `sing-box` clients.
+* AnyTLS+Reality does not require your own domain certificate; mihomo/Clash.Meta is not supported, and Shadowrocket/v2rayN are unverified.
+* Node-level DNS routing depends on `sing-box` 1.12+; avoid downgrading the core to older versions.
 * In Snell+ShadowTLS mode, Shadow-TLS listens publicly while Snell listens only on a local backend port.
+* Snell+ShadowTLS is intended for single-user VPS usage; avoid shared multi-user machines.
 * Reality and Shadow-TLS target domains depend on the external network environment and may need future re-testing.
 
 ## Installation
+
+Verify the script source and repository URL before running it as `root`:
 
 ```bash
 wget -P /root -N --no-check-certificate "https://raw.githubusercontent.com/dodo258/sing-box-reality-manager/main/install.sh" && chmod 700 /root/install.sh && /root/install.sh

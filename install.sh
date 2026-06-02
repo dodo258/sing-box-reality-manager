@@ -79,6 +79,29 @@ echoMenuHintGreen() {
 echoMenuHintSuffix() {
     ${echoType} "\033[33m${printN}$1\033[1;36m[$2]\033[33m$3 \033[0m"
 }
+
+safeJQWriteFile() {
+    local file=$1
+    shift
+    local tmpFile="${file}.tmp.$$"
+    if jq "$@" "${file}" >"${tmpFile}" && jq . "${tmpFile}" >/dev/null 2>&1; then
+        mv "${tmpFile}" "${file}"
+        return 0
+    fi
+    rm -f "${tmpFile}" >/dev/null 2>&1
+    return 1
+}
+
+confirmSingBoxMultiConfigDeletion() {
+    local configDir="/etc/v2ray-agent/sing-box/conf/config"
+    local managedCount=
+    [[ -d "${configDir}" ]] || return 0
+    managedCount=$(find "${configDir}" -maxdepth 1 -type f \( -name "${managedMultiRealityPrefix}*.json" -o -name "${managedMultiAnyTLSPrefix}*.json" \) 2>/dev/null | wc -l | tr -d ' ')
+    [[ -z "${managedCount}" || "${managedCount}" == "0" ]] && return 0
+    echoContent yellow " ---> 检测到 ${managedCount} 个 sing-box 多实例节点配置"
+    read -r -p "继续会删除这些多实例节点，是否继续？[y/N]:" confirmDeleteManagedMulti
+    [[ "${confirmDeleteManagedMulti}" == "y" || "${confirmDeleteManagedMulti}" == "Y" ]] || exit 0
+}
 # 检查SELinux状态
 checkCentosSELinux() {
     if command -v getenforce >/dev/null 2>&1 && [ "$(getenforce)" == "Enforcing" ]; then
@@ -1007,6 +1030,7 @@ unInstallSingBox() {
         echoContent yellow " ---> 检测到有其他配置，保留sing-box核心"
         handleSingBox restart
     else
+        confirmSingBoxMultiConfigDeletion
         handleSingBox stop
         rm -f "${singBoxSystemdServicePath}" "${singBoxOpenrcServicePath}"
         rm -rf /etc/v2ray-agent/sing-box/*
@@ -1224,6 +1248,7 @@ cleanUp() {
         handleXray stop
         rm -rf /etc/v2ray-agent/xray/*
     elif [[ "$1" == "singBoxDel" ]]; then
+        confirmSingBoxMultiConfigDeletion
         if [[ -f "${singBoxSystemdServicePath}" ]]; then
             systemctl stop "${singBoxServiceName}.service" >/dev/null 2>&1
         elif [[ -f "${singBoxOpenrcServicePath}" ]]; then
@@ -2393,7 +2418,7 @@ nginxBlog() {
         fi
 
         if [[ "${nginxBlogInstallStatus}" == "y" ]]; then
-            rm -rf "${nginxStaticPath}*"
+            rm -rf "${nginxStaticPath:?}"/*
             #  randomNum=$((RANDOM % 6 + 1))
             randomNum=$(randomNum 1 9)
             if [[ "${release}" == "alpine" ]]; then
@@ -2403,13 +2428,13 @@ nginxBlog() {
             fi
 
             unzip -o "${nginxStaticPath}html${randomNum}.zip" -d "${nginxStaticPath}" >/dev/null
-            rm -f "${nginxStaticPath}html${randomNum}.zip*"
+            rm -f "${nginxStaticPath}html${randomNum}.zip"
             echoContent green " ---> 添加伪装站点成功"
         fi
     else
         randomNum=$(randomNum 1 9)
         #        randomNum=$((RANDOM % 6 + 1))
-        rm -rf "${nginxStaticPath}*"
+        rm -rf "${nginxStaticPath:?}"/*
 
         if [[ "${release}" == "alpine" ]]; then
             wget -q -P "${nginxStaticPath}" "https://raw.githubusercontent.com/dodo258/sing-box-reality-manager/main/fodder/blog/unable/html${randomNum}.zip"
@@ -2418,7 +2443,7 @@ nginxBlog() {
         fi
 
         unzip -o "${nginxStaticPath}html${randomNum}.zip" -d "${nginxStaticPath}" >/dev/null
-        rm -f "${nginxStaticPath}html${randomNum}.zip*"
+        rm -f "${nginxStaticPath}html${randomNum}.zip"
         echoContent green " ---> 添加伪装站点成功"
     fi
 
@@ -5940,7 +5965,10 @@ addManagedMultiRealityUser() {
             exit 0
         fi
         usersJson=$(buildManagedMultiRealityXrayUsersJson "${uuid}" "${userName}")
-        jq --argjson users "${usersJson}" '.inbounds[0].settings.clients += $users' "${file}" | jq . >"${file}"
+        if ! safeJQWriteFile "${file}" --argjson users "${usersJson}" '.inbounds[0].settings.clients += $users'; then
+            echoContent red " ---> 更新节点配置失败"
+            exit 0
+        fi
         handleXray restart
     else
         if jq -e --arg uuid "${uuid}" '.inbounds[0].users[] | select(.uuid == $uuid)' "${file}" >/dev/null; then
@@ -5948,7 +5976,10 @@ addManagedMultiRealityUser() {
             exit 0
         fi
         usersJson=$(buildManagedMultiRealitySingBoxUsersJson "${uuid}" "${userName}")
-        jq --argjson users "${usersJson}" '.inbounds[0].users += $users' "${file}" | jq . >"${file}"
+        if ! safeJQWriteFile "${file}" --argjson users "${usersJson}" '.inbounds[0].users += $users'; then
+            echoContent red " ---> 更新节点配置失败"
+            exit 0
+        fi
         handleSingBox restart
     fi
     echoContent green " ---> 添加完成"
@@ -5983,10 +6014,16 @@ removeManagedMultiRealityUser() {
     managedMultiRealityDeleteUserIndex=$((managedMultiRealityDeleteUserIndex - 1))
 
     if [[ "${coreInstallType}" == "1" ]]; then
-        jq "del(.inbounds[0].settings.clients[${managedMultiRealityDeleteUserIndex}])" "${file}" | jq . >"${file}"
+        if ! safeJQWriteFile "${file}" "del(.inbounds[0].settings.clients[${managedMultiRealityDeleteUserIndex}])"; then
+            echoContent red " ---> 更新节点配置失败"
+            exit 0
+        fi
         handleXray restart
     else
-        jq "del(.inbounds[0].users[${managedMultiRealityDeleteUserIndex}])" "${file}" | jq . >"${file}"
+        if ! safeJQWriteFile "${file}" "del(.inbounds[0].users[${managedMultiRealityDeleteUserIndex}])"; then
+            echoContent red " ---> 更新节点配置失败"
+            exit 0
+        fi
         handleSingBox restart
     fi
     echoContent green " ---> 删除完成"
@@ -6240,7 +6277,7 @@ showManagedMultiAnyTLSAccounts() {
   }
 }
 EOF
-        echoContent yellow " ---> 注意: AnyTLS+Reality 主要面向 sing-box 客户端，通用 URI/ClashMeta 可能不完整\n"
+        echoContent yellow " ---> 注意: AnyTLS+Reality 仅建议 sing-box 客户端使用；mihomo/Clash.Meta 不支持，Shadowrocket/v2rayN 未验证\n"
     done
 }
 
@@ -6254,7 +6291,10 @@ addManagedMultiAnyTLSUser() {
         exit 0
     fi
     usersJson=$(buildManagedMultiAnyTLSUsersJson "${managedMultiAnyTLSPassword}" "${managedMultiAnyTLSUserName}")
-    jq --argjson users "${usersJson}" '.inbounds[0].users += $users' "${file}" | jq . >"${file}"
+    if ! safeJQWriteFile "${file}" --argjson users "${usersJson}" '.inbounds[0].users += $users'; then
+        echoContent red " ---> 更新节点配置失败"
+        exit 0
+    fi
     handleSingBox restart
     echoContent green " ---> 添加完成"
 }
@@ -6275,7 +6315,10 @@ removeManagedMultiAnyTLSUser() {
         exit 0
     fi
     managedMultiAnyTLSDeleteUserIndex=$((managedMultiAnyTLSDeleteUserIndex - 1))
-    jq "del(.inbounds[0].users[${managedMultiAnyTLSDeleteUserIndex}])" "${file}" | jq . >"${file}"
+    if ! safeJQWriteFile "${file}" "del(.inbounds[0].users[${managedMultiAnyTLSDeleteUserIndex}])"; then
+        echoContent red " ---> 更新节点配置失败"
+        exit 0
+    fi
     handleSingBox restart
     echoContent green " ---> 删除完成"
 }
@@ -6300,7 +6343,8 @@ managedMultiAnyTLSMenu() {
     echoContent red "\n=============================================================="
     echoContent yellow "# 注意事项"
     echoContent yellow "# 这里只部署独立 AnyTLS+Reality 节点，每个节点使用独立 Reality 目标和密钥"
-    echoContent yellow "# AnyTLS+Reality 仅推荐 sing-box 客户端使用，不再申请域名证书"
+    echoContent yellow "# AnyTLS+Reality 仅建议 sing-box 客户端使用，不再申请域名证书"
+    echoContent yellow "# mihomo/Clash.Meta 不支持，Shadowrocket/v2rayN 未验证，升级 sing-box 后建议先自测"
     echoContent yellow "1.部署新的独立节点"
     echoContent yellow "2.查看已部署节点"
     echoContent yellow "3.查看某个节点账号"
@@ -9104,12 +9148,12 @@ EOF
 }
 EOF
 
-        echoContent yellow " ---> 注意: AnyTLS+Reality 主要面向 sing-box 客户端，通用 URI/ClashMeta 可能不完整\n"
+        echoContent yellow " ---> 注意: AnyTLS+Reality 仅建议 sing-box 客户端使用；mihomo/Clash.Meta 不支持，Shadowrocket/v2rayN 未验证\n"
         cat <<EOF >>"/etc/v2ray-agent/subscribe_local/default/${user}"
 AnyTLS+Reality: ${email} $(getPublicIP):${singBoxAnyTLSPort} serverName=${anyTLSRealityServerName} publicKey=${anyTLSRealityPublicKey} shortId=${managedMultiRealityShortID}
 EOF
         cat <<EOF >>"/etc/v2ray-agent/subscribe_local/clashMeta/${user}"
-  # ${email}: AnyTLS+Reality 仅建议使用 sing-box 客户端订阅
+  # ${email}: AnyTLS+Reality 仅建议使用 sing-box 客户端订阅，mihomo/Clash.Meta 不支持
 EOF
 
         singBoxSubscribeLocalConfig=$(jq -r ". += [{\"tag\":\"${email}\",\"type\":\"anytls\",\"server\":\"$(getPublicIP)\",\"server_port\":${singBoxAnyTLSPort},\"password\":\"${id}\",\"tls\":{\"enabled\":true,\"server_name\":\"${anyTLSRealityServerName}\",\"utls\":{\"enabled\":true,\"fingerprint\":\"chrome\"},\"reality\":{\"enabled\":true,\"public_key\":\"${anyTLSRealityPublicKey}\",\"short_id\":\"${managedMultiRealityShortID}\"}}}]" "/etc/v2ray-agent/subscribe_local/sing-box/${user}")
@@ -9821,7 +9865,7 @@ updateNginxBlog() {
         fi
     fi
     if [[ "${selectInstallNginxBlogType}" =~ ^[1-9]$ ]]; then
-        rm -rf "${nginxStaticPath}*"
+        rm -rf "${nginxStaticPath:?}"/*
 
         if [[ "${release}" == "alpine" ]]; then
             wget -q -P "${nginxStaticPath}" "https://raw.githubusercontent.com/dodo258/sing-box-reality-manager/main/fodder/blog/unable/html${selectInstallNginxBlogType}.zip"
@@ -9830,7 +9874,7 @@ updateNginxBlog() {
         fi
 
         unzip -o "${nginxStaticPath}html${selectInstallNginxBlogType}.zip" -d "${nginxStaticPath}" >/dev/null
-        rm -f "${nginxStaticPath}html${selectInstallNginxBlogType}.zip*"
+        rm -f "${nginxStaticPath}html${selectInstallNginxBlogType}.zip"
         echoContent green " ---> 更换伪站成功"
     else
         echoContent red " ---> 选择错误，请重新选择"
@@ -12784,7 +12828,7 @@ customSingBoxInstall() {
     echoContent yellow "9.Tuic"
     echoContent yellow "10.Naive"
     echoContent yellow "11.VMess+TLS+HTTPUpgrade"
-    echoMenuHint "13.AnyTLS+Reality" "sing-box专用/无需证书"
+    echoMenuHint "13.AnyTLS+Reality" "sing-box客户端专用"
 
     read -r -p "请选择[多选]，[例如:1,2,3]:" selectCustomInstallType
     echoContent skyBlue "--------------------------------------------------------------"
@@ -14508,7 +14552,7 @@ menu() {
 
     echoContent yellow "2.高级组合安装"
     echoMenuHint "3.一键无域名Reality" "只装推荐VLESS，新手最推荐" "覆盖当前Reality节点并全新安装"
-    echoMenuHint "4.一键AnyTLS+Reality" "sing-box专用/无需证书"
+    echoMenuHint "4.一键AnyTLS+Reality" "sing-box客户端专用"
     echoMenuHint "5.一键Snell+ShadowTLS" "Snell v4/v5 + Shadow-TLS v3"
     echoMenuHint "6.多实例Reality" "先装一个主节点再用这个"
     echoMenuHint "7.多实例AnyTLS+Reality" "sing-box/每节点独立Reality"
