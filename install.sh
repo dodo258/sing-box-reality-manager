@@ -9149,9 +9149,6 @@ EOF
 EOF
 
         echoContent yellow " ---> 注意: AnyTLS+Reality 仅建议 sing-box 客户端使用；mihomo/Clash.Meta 不支持，Shadowrocket/v2rayN 未验证\n"
-        cat <<EOF >>"/etc/v2ray-agent/subscribe_local/default/${user}"
-AnyTLS+Reality: ${email} $(getPublicIP):${singBoxAnyTLSPort} serverName=${anyTLSRealityServerName} publicKey=${anyTLSRealityPublicKey} shortId=${managedMultiRealityShortID}
-EOF
         cat <<EOF >>"/etc/v2ray-agent/subscribe_local/clashMeta/${user}"
   # ${email}: AnyTLS+Reality 仅建议使用 sing-box 客户端订阅，mihomo/Clash.Meta 不支持
 EOF
