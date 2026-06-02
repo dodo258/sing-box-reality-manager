@@ -3861,12 +3861,12 @@ websitePrepareTLS() {
     checkDNSIP "${websiteDomain}"
     if [[ ! -s "/etc/v2ray-agent/tls/${websiteDomain}.crt" || ! -s "/etc/v2ray-agent/tls/${websiteDomain}.key" ]]; then
         echoContent yellow "\n ---> 未检测到 ${websiteDomain} 的证书，开始申请"
-        echoContent skyBlue " ---> 网站管理沿用 13.证书管理 的 acme.sh 免费证书与自动续期链路"
+        echoContent skyBlue " ---> 网站管理沿用 14.证书管理 的 acme.sh 免费证书与自动续期链路"
         websiteTLSAutoMode=true
         installTLS 2
     else
         echoContent green " ---> 已检测到 ${websiteDomain} 的证书，直接复用"
-        echoContent skyBlue " ---> 当前网站证书与 13.证书管理 共用同一套续期机制"
+        echoContent skyBlue " ---> 当前网站证书与 14.证书管理 共用同一套续期机制"
     fi
     websiteTLSAutoMode="${oldWebsiteTLSAutoMode}"
     domain="${oldDomain}"
@@ -4172,7 +4172,7 @@ websiteManagementMenu() {
     echoContent yellow "# 注意事项"
     echoContent yellow "# 网站功能与节点功能解耦，网站使用80/443，Reality等节点继续使用随机端口"
     echoContent yellow "# 建议使用真实域名、正常解析和可信HTTPS证书"
-    echoContent yellow "# 网站证书沿用13.证书管理同一套免费证书与自动续期逻辑"
+    echoContent yellow "# 网站证书沿用14.证书管理同一套免费证书与自动续期逻辑"
     echoContent yellow "# 旧伪装模板只保留兼容入口，主推荐是中文技术博客和中文小工具站\n"
     echoContent yellow "1.部署中文技术博客[可选简洁版/文档版]"
     echoContent yellow "2.部署中文小工具站[可选开发/文本/运维版]"
@@ -6290,11 +6290,21 @@ showManagedMultiAnyTLSAccounts() {
     jq -c '.inbounds[0].users[]' "${file}" | while read -r user; do
         local userName=
         local password=
+        local encodedPassword=
+        local encodedUserName=
+        local anyTLSURI=
+        local anyTLSURIEncode=
         userName=$(echo "${user}" | jq -r '.name')
         password=$(echo "${user}" | jq -r '.password')
+        encodedPassword=$(jq -rn --arg v "${password}" '$v|@uri')
+        encodedUserName=$(jq -rn --arg v "${userName}" '$v|@uri')
+        anyTLSURI="anytls://${encodedPassword}@${domainName}:${port}/?sni=${domainName}#${encodedUserName}"
+        anyTLSURIEncode=$(jq -rn --arg v "${anyTLSURI}" '$v|@uri')
         echoContent skyBlue "\n ---> 节点:${managedMultiAnyTLSSelectedId}"
         echoContent skyBlue " ---> 账号:${userName}"
         echo
+        echoContent yellow " ---> 通用格式(AnyTLS+TLS证书)"
+        echoContent green "    ${anyTLSURI}\n"
         echoContent yellow " ---> sing-box JSON 订阅参数(AnyTLS+TLS证书)"
         echoContent green "协议类型:AnyTLS+TLS证书，地址:${domainName}，端口:${port}，serverName:${domainName}，账户名:${userName}\n"
         cat <<EOF
@@ -6314,7 +6324,21 @@ showManagedMultiAnyTLSAccounts() {
   }
 }
 EOF
-        echoContent yellow " ---> 注意: AnyTLS 仅建议 sing-box 客户端使用；mihomo/Clash.Meta 不支持，Shadowrocket/v2rayN 未验证\n"
+        echoContent yellow " ---> mihomo/Clash.Meta YAML(AnyTLS+TLS证书)"
+        cat <<EOF
+  - name: "${userName}"
+    type: anytls
+    server: ${domainName}
+    port: ${port}
+    password: "${password}"
+    sni: ${domainName}
+    client-fingerprint: chrome
+    skip-cert-verify: false
+    udp: true
+EOF
+        echoContent yellow " ---> 二维码 AnyTLS(TLS)"
+        echoContent green "    https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${anyTLSURIEncode}\n"
+        echoContent yellow " ---> 注意: AnyTLS+TLS证书支持 sing-box / mihomo(Clash.Meta) / Shadowrocket 2.2.65+ / v2rayN；抗检测能力弱于 Reality，建议按需使用\n"
     done
 }
 
@@ -6379,8 +6403,8 @@ managedMultiAnyTLSMenu() {
     echoContent red "\n=============================================================="
     echoContent yellow "# 注意事项"
     echoContent yellow "# 这里只部署独立 AnyTLS 节点，每个节点使用独立域名证书"
-    echoContent yellow "# AnyTLS 仅建议 sing-box 客户端使用，需要域名解析和真实TLS证书"
-    echoContent yellow "# mihomo/Clash.Meta 不支持，Shadowrocket/v2rayN 未验证，升级 sing-box 后建议先自测"
+    echoContent yellow "# AnyTLS+TLS证书支持 sing-box / mihomo / Shadowrocket 2.2.65+ / v2rayN"
+    echoContent yellow "# 需要域名解析和真实TLS证书，升级客户端后建议先自测"
     echoContent yellow "1.部署新的独立节点"
     echoContent yellow "2.查看已部署节点"
     echoContent yellow "3.查看某个节点账号"
@@ -7636,7 +7660,7 @@ singBoxTuicInstall() {
 
 # sing-box hy2安装
 singBoxHysteria2Install() {
-    totalProgress=8
+    totalProgress=10
     selectCustomInstallType=",6,"
     selectCoreType="2"
     installTools 1
@@ -7645,10 +7669,14 @@ singBoxHysteria2Install() {
     initSingBoxConfig custom 6 true
     installSingBoxService 7
     if [[ "${hysteria2TLSMode}" == "acme" ]]; then
-        installCronTLS 7
+        installCronTLS 8
+    else
+        echoContent skyBlue "\n进度  8/${totalProgress} : 自签证书跳过自动续期"
     fi
     handleSingBox restart
-    showAccounts 8
+    cleanUp xrayDel
+    checkGFWStatue 9
+    showAccounts 10
 }
 
 # 合并config
@@ -8715,6 +8743,10 @@ defaultBase64Code() {
         echo [] >"/etc/v2ray-agent/subscribe_local/sing-box/${user}"
     fi
     local singBoxSubscribeLocalConfig=
+    local encodedId=
+    local encodedEmail=
+    encodedId=$(jq -rn --arg v "${id}" '$v|@uri')
+    encodedEmail=$(jq -rn --arg v "${email}" '$v|@uri')
     if [[ "${type}" == "vlesstcp" ]]; then
 
         echoContent yellow " ---> 通用格式(VLESS+TCP+TLS_Vision)"
@@ -9214,9 +9246,17 @@ EOF
 
     elif [[ "${type}" == "anytls" ]]; then
         local anyTLSServerName=
+        local anyTLSURI=
+        local anyTLSURIEncode=
         anyTLSServerName=$(jq -r '.inbounds[0].tls.server_name // ""' "${singBoxConfigPath}13_anytls_inbounds.json" 2>/dev/null)
+        anyTLSURI="anytls://${encodedId}@${anyTLSServerName}:${port}/?sni=${anyTLSServerName}#${encodedEmail}"
+        anyTLSURIEncode=$(jq -rn --arg v "${anyTLSURI}" '$v|@uri')
 
         echoContent yellow " ---> AnyTLS+TLS证书"
+        echoContent green "    ${anyTLSURI}\n"
+        cat <<EOF >>"/etc/v2ray-agent/subscribe_local/default/${user}"
+${anyTLSURI}
+EOF
 
         echoContent yellow " ---> sing-box JSON 订阅参数(AnyTLS+TLS证书)"
         echoContent green "协议类型:anytls+tls，地址:${anyTLSServerName}，端口:${port}，serverName:${anyTLSServerName}，账户名:${email}\n"
@@ -9238,13 +9278,24 @@ EOF
 }
 EOF
 
-        echoContent yellow " ---> 注意: AnyTLS 仅建议 sing-box 客户端使用；mihomo/Clash.Meta 不支持，Shadowrocket/v2rayN 未验证\n"
+        echoContent yellow " ---> mihomo/Clash.Meta YAML(AnyTLS+TLS证书)"
         cat <<EOF >>"/etc/v2ray-agent/subscribe_local/clashMeta/${user}"
-  # ${email}: AnyTLS 仅建议使用 sing-box 客户端订阅，mihomo/Clash.Meta 不支持
+  - name: "${email}"
+    type: anytls
+    server: ${anyTLSServerName}
+    port: ${port}
+    password: "${id}"
+    sni: ${anyTLSServerName}
+    client-fingerprint: chrome
+    skip-cert-verify: false
+    udp: true
 EOF
 
         singBoxSubscribeLocalConfig=$(jq -r ". += [{\"tag\":\"${email}\",\"type\":\"anytls\",\"server\":\"${anyTLSServerName}\",\"server_port\":${port},\"password\":\"${id}\",\"tls\":{\"enabled\":true,\"server_name\":\"${anyTLSServerName}\",\"utls\":{\"enabled\":true,\"fingerprint\":\"chrome\"}}}]" "/etc/v2ray-agent/subscribe_local/sing-box/${user}")
         echo "${singBoxSubscribeLocalConfig}" | jq . >"/etc/v2ray-agent/subscribe_local/sing-box/${user}"
+        echoContent yellow " ---> 二维码 AnyTLS(TLS)"
+        echoContent green "    https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${anyTLSURIEncode}\n"
+        echoContent yellow " ---> 注意: AnyTLS+TLS证书支持 sing-box / mihomo(Clash.Meta) / Shadowrocket 2.2.65+ / v2rayN；抗检测能力弱于 Reality，建议按需使用\n"
     fi
 
 }
@@ -9796,7 +9847,7 @@ deleteInstalledNode() {
     if removeInstalledNodeConfig "${selectedCoreType}" "${selectedProtocolType}"; then
         reloadInstalledNodeCores
         echoContent green " ---> 节点删除完成: ${selectedLabel}"
-        echoContent yellow " ---> 建议顺手执行一次 9.账号/订阅管理 -> 查看订阅，确认客户端节点列表已同步"
+        echoContent yellow " ---> 建议顺手执行一次 10.账号/订阅管理 -> 查看订阅，确认客户端节点列表已同步"
     fi
 }
 
@@ -12915,7 +12966,7 @@ customSingBoxInstall() {
     echoContent yellow "9.Tuic"
     echoContent yellow "10.Naive"
     echoContent yellow "11.VMess+TLS+HTTPUpgrade"
-    echoMenuHint "13.AnyTLS+TLS证书" "sing-box客户端专用/需域名"
+    echoMenuHint "13.AnyTLS+TLS证书" "通用客户端/需域名"
 
     read -r -p "请选择[多选]，[例如:1,2,3]:" selectCustomInstallType
     echoContent skyBlue "--------------------------------------------------------------"
@@ -13139,8 +13190,8 @@ selectCoreInstall() {
     echoContent skyBlue "\n功能 1/${totalProgress} : 选择核心安装"
     if [[ "${selectInstallType}" == "3" ]]; then
         echoContent yellow "# 注意：该功能会覆盖当前Reality节点并全新安装"
-        echoContent yellow "# 已有节点想继续加用户/看订阅，请返回主菜单选 9.账号/订阅管理"
-        echoContent yellow "# 同机想再加独立节点，请返回主菜单选 6/7/8 多实例入口\n"
+        echoContent yellow "# 已有节点想继续加用户/看订阅，请返回主菜单选 10.账号/订阅管理"
+        echoContent yellow "# 同机想再加独立节点，请返回主菜单选 7/8/9 多实例入口\n"
     fi
     echoContent red "\n=============================================================="
     echoMenuHint "1.Xray-core" "兼容旧功能时选这个"
@@ -14635,7 +14686,7 @@ menu() {
     cd "$HOME" || exit
     echoContent red "\n=============================================================="
     echoContent green "维护：dodo258"
-    echoContent green "当前版本：v3.8.3"
+    echoContent green "当前版本：v3.8.4"
     echoContent green "项目：https://github.com/dodo258/sing-box-reality-manager"
     echoContent green "描述：多实例重构版管理脚本\c"
     showInstallStatus
@@ -14649,25 +14700,26 @@ menu() {
 
     echoContent yellow "2.高级组合安装"
     echoMenuHint "3.一键无域名Reality" "只装推荐VLESS，新手最推荐" "覆盖当前Reality节点并全新安装"
-    echoMenuHint "4.一键AnyTLS+TLS证书" "sing-box客户端专用/需域名"
+    echoMenuHint "4.一键AnyTLS+TLS证书" "通用客户端/需域名"
     echoMenuHint "5.一键Snell+ShadowTLS" "Snell v4/v5 + Shadow-TLS v3"
-    echoMenuHint "6.多实例Reality" "先装一个主节点再用这个"
-    echoMenuHint "7.多实例AnyTLS+TLS证书" "sing-box/每节点独立域名证书"
-    echoMenuHint "8.多实例Snell+ShadowTLS" "独立端口/可多节点"
+    echoMenuHint "6.一键Hysteria2" "有域名证书/无域名自签pin"
+    echoMenuHint "7.多实例Reality" "先装一个主节点再用这个"
+    echoMenuHint "8.多实例AnyTLS+TLS证书" "sing-box/每节点独立域名证书"
+    echoMenuHint "9.多实例Snell+ShadowTLS" "独立端口/可多节点"
 
     echoContent skyBlue "-------------------------工具管理-----------------------------"
-    echoMenuHint "9.账号/订阅管理" "主节点账号在这里看"
-    echoContent yellow "10.节点管理"
-    echoContent yellow "11.分流工具"
-    echoContent yellow "12.网站管理"
-    echoContent yellow "13.证书管理"
+    echoMenuHint "10.账号/订阅管理" "主节点账号在这里看"
+    echoContent yellow "11.节点管理"
+    echoContent yellow "12.分流工具"
+    echoContent yellow "13.网站管理"
+    echoContent yellow "14.证书管理"
     echoContent skyBlue "-------------------------版本管理-----------------------------"
-    echoContent yellow "14.core管理"
-    echoContent yellow "15.更新脚本"
-    echoContent yellow "16.安装BBR、DD脚本"
+    echoContent yellow "15.core管理"
+    echoContent yellow "16.更新脚本"
+    echoContent yellow "17.安装BBR、DD脚本"
     echoContent skyBlue "-------------------------脚本管理-----------------------------"
-    echoContent yellow "17.高级/兼容功能"
-    echoContent yellow "18.卸载脚本"
+    echoContent yellow "18.高级/兼容功能"
+    echoContent yellow "19.卸载脚本"
     echoContent red "=============================================================="
     mkdirTools
     aliasInstall
@@ -14689,42 +14741,45 @@ menu() {
         installSnellShadowTLS
         ;;
     6)
-        managedMultiRealityMenu
+        singBoxHysteria2Install
         ;;
     7)
-        managedMultiAnyTLSMenu
+        managedMultiRealityMenu
         ;;
     8)
-        snellShadowTLSMenu
+        managedMultiAnyTLSMenu
         ;;
     9)
-        manageAccount 1
+        snellShadowTLSMenu
         ;;
     10)
-        manageInstalledNodes
+        manageAccount 1
         ;;
     11)
-        routingToolsMenu 1
+        manageInstalledNodes
         ;;
     12)
-        websiteManagementMenu
+        routingToolsMenu 1
         ;;
     13)
-        renewalTLS 1
+        websiteManagementMenu
         ;;
     14)
-        coreVersionManageMenu 1
+        renewalTLS 1
         ;;
     15)
-        updateV2RayAgent 1
+        coreVersionManageMenu 1
         ;;
     16)
-        bbrInstall
+        updateV2RayAgent 1
         ;;
     17)
-        advancedCompatibilityMenu
+        bbrInstall
         ;;
     18)
+        advancedCompatibilityMenu
+        ;;
+    19)
         unInstall 1
         ;;
     esac

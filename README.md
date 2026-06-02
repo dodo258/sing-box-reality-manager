@@ -17,30 +17,30 @@
 需要多个独立节点时，再用：
 
 ```text
-6.多实例Reality
-7.多实例AnyTLS+TLS证书
-8.多实例Snell+ShadowTLS
+7.多实例Reality
+8.多实例AnyTLS+TLS证书
+9.多实例Snell+ShadowTLS
 ```
 
 常用管理入口：
 
 ```text
-9.账号/订阅管理      查看主节点账号
-10.节点管理          查看和管理节点
-11.分流工具          配置 DNS / 流媒体分流
-12.网站管理          部署普通静态网站
-15.更新脚本          更新到最新版
-18.卸载脚本
+10.账号/订阅管理     查看主节点账号
+11.节点管理          查看和管理节点
+12.分流工具          配置 DNS / 流媒体分流
+13.网站管理          部署普通静态网站
+16.更新脚本          更新到最新版
+19.卸载脚本
 ```
 
 ## 怎么选
 
 * 稳定优先：选 `Reality`，默认随机端口，不需要自备域名。
-* 想尝试 AnyTLS：选 `AnyTLS+TLS证书`，需要自备域名并申请真实证书，仅建议 `sing-box` 客户端使用。
-* 想用 Hysteria2：高级/兼容功能里安装；有域名走真实证书，无域名走自签证书 + `pinSHA256`。
+* 想尝试 AnyTLS：选 `AnyTLS+TLS证书`，需要自备域名并申请真实证书，支持 `sing-box` / `mihomo` / `Shadowrocket 2.2.65+` / `v2rayN`。
+* 想用 Hysteria2：选 `6.一键Hysteria2`；有域名走真实证书，无域名走自签证书 + `pinSHA256`。
 * 想用 Snell：选 `Snell+ShadowTLS`，默认随机公网端口，443 只在空闲时使用。
-* 流媒体分流：优先使用 `sing-box + 11.分流工具 -> DNS分流`。
-* 普通网站：用 `12.网站管理`，网站走正常 `80/443 + HTTPS`，节点继续走随机端口。
+* 流媒体分流：优先使用 `sing-box + 12.分流工具 -> DNS分流`。
+* 普通网站：用 `13.网站管理`，网站走正常 `80/443 + HTTPS`，节点继续走随机端口。
 
 ## 当前能力
 
@@ -55,7 +55,7 @@
 
 * 多实例是“独立节点”，不是给旧节点补入口。
 * `Xray-core` 目前只保留兼容能力，按节点 DNS 分流优先使用 `sing-box`。
-* AnyTLS 使用真实 TLS 证书，不再使用 Reality；mihomo/Clash.Meta 不支持，Shadowrocket/v2rayN 未验证。
+* AnyTLS 使用真实 TLS 证书，不再使用 Reality；兼容性更好，但抗检测能力弱于 Reality，约等于普通 TLS 类协议。
 * Hysteria2 不强制真实证书；真实证书客户端最省心，自签证书模式必须保留并导入 `pinSHA256`。
 * 节点级 DNS 分流依赖 `sing-box` 1.12+，不建议把核心降到旧版本。
 * Snell+ShadowTLS 中 Shadow-TLS 对外监听，Snell 只监听本机后端端口。

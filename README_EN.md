@@ -17,30 +17,30 @@ For normal stable usage, start with:
 For multiple independent nodes, use:
 
 ```text
-6. Multi-instance Reality
-7. Multi-instance AnyTLS+TLS Certificate
-8. Multi-instance Snell+ShadowTLS
+7. Multi-instance Reality
+8. Multi-instance AnyTLS+TLS Certificate
+9. Multi-instance Snell+ShadowTLS
 ```
 
 Common management entries:
 
 ```text
-9. Account / Subscription Management   View main-node accounts
-10. Node Management                    View and manage nodes
-11. Routing Tools                      Configure DNS / streaming routing
-12. Website Management                 Deploy a normal static website
-15. Update Script                      Update to the latest version
-18. Uninstall Script
+10. Account / Subscription Management  View main-node accounts
+11. Node Management                    View and manage nodes
+12. Routing Tools                      Configure DNS / streaming routing
+13. Website Management                 Deploy a normal static website
+16. Update Script                      Update to the latest version
+19. Uninstall Script
 ```
 
 ## What To Choose
 
 * Stability first: use `Reality`. It uses a random port by default and does not require your own domain.
-* Want AnyTLS: use `AnyTLS+TLS certificate`. It requires your own domain and a real TLS certificate, and is recommended only for `sing-box` clients.
-* Need Hysteria2: install it from Advanced / Compatibility; use a real certificate with a domain, or self-signed certificate + `pinSHA256` without a domain.
+* Want AnyTLS: use `AnyTLS+TLS certificate`. It requires your own domain and a real TLS certificate, and supports `sing-box`, `mihomo`, `Shadowrocket 2.2.65+`, and `v2rayN`.
+* Need Hysteria2: use `6. One-click Hysteria2`; use a real certificate with a domain, or self-signed certificate + `pinSHA256` without a domain.
 * Need Snell: use `Snell+ShadowTLS`. It uses a random public port by default; use 443 only when it is free.
-* Streaming routing: prefer `sing-box + 11. Routing Tools -> DNS Routing`.
-* Normal website: use `12. Website Management`. Websites use normal `80/443 + HTTPS`; nodes continue to use random ports.
+* Streaming routing: prefer `sing-box + 12. Routing Tools -> DNS Routing`.
+* Normal website: use `13. Website Management`. Websites use normal `80/443 + HTTPS`; nodes continue to use random ports.
 
 ## Current Capabilities
 
@@ -55,7 +55,7 @@ Common management entries:
 
 * Multi-instance means independent nodes, not extra entry ports for old nodes.
 * `Xray-core` is kept for compatibility; prefer `sing-box` for per-node DNS routing.
-* AnyTLS uses real TLS certificates and no longer uses Reality; mihomo/Clash.Meta is not supported, and Shadowrocket/v2rayN are unverified.
+* AnyTLS uses real TLS certificates and no longer uses Reality; it is easier to import, but its anti-detection profile is weaker than Reality and closer to normal TLS-based protocols.
 * Hysteria2 does not strictly require a public certificate. Real certificates are easiest for clients; self-signed mode must keep and import `pinSHA256`.
 * Node-level DNS routing depends on `sing-box` 1.12+; avoid downgrading the core to older versions.
 * In Snell+ShadowTLS mode, Shadow-TLS listens publicly while Snell listens only on a local backend port.
