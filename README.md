@@ -4,7 +4,7 @@
 
 语言: [简体中文](README.md) | [English](README_EN.md)
 
-这是一个 AGPL-3.0 魔改版分支仓库。它以 `sing-box` 优先，围绕 Reality、AnyTLS、Snell+ShadowTLS 多实例节点管理、节点级 DNS 分流和轻量网站管理做了整理。
+这是一个 AGPL-3.0 魔改版分支仓库。它以 `sing-box` 优先，围绕 Reality、AnyTLS+Reality、Snell+ShadowTLS 多实例节点管理、节点级 DNS 分流和轻量网站管理做了整理。
 
 ## 推荐用法
 
@@ -18,7 +18,7 @@
 
 ```text
 6.多实例Reality
-7.多实例AnyTLS
+7.多实例AnyTLS+Reality
 8.多实例Snell+ShadowTLS
 ```
 
@@ -36,7 +36,7 @@
 ## 怎么选
 
 * 稳定优先：选 `Reality`，默认随机端口，不需要自备域名。
-* 需要自备域名证书：选 `AnyTLS`。
+* 想尝试 AnyTLS：选 `AnyTLS+Reality`，不再申请自备域名证书，主要面向 `sing-box` 客户端。
 * 想用 Snell：选 `Snell+ShadowTLS`，默认随机公网端口，443 只在空闲时使用。
 * 流媒体分流：优先使用 `sing-box + 11.分流工具 -> DNS分流`。
 * 普通网站：用 `12.网站管理`，网站走正常 `80/443 + HTTPS`，节点继续走随机端口。
@@ -44,8 +44,8 @@
 ## 当前能力
 
 * 支持 `sing-box` 优先部署，也保留 `Xray-core` 兼容入口。
-* 支持 VLESS Reality、AnyTLS、Snell v4/v5 + Shadow-TLS v3。
-* 支持 Reality / AnyTLS / Snell+ShadowTLS 多实例独立节点。
+* 支持 VLESS Reality、AnyTLS+Reality、Snell v4/v5 + Shadow-TLS v3。
+* 支持 Reality / AnyTLS+Reality / Snell+ShadowTLS 多实例独立节点。
 * `sing-box` 下支持主节点和多实例节点的节点级 DNS 分流。
 * 网站管理支持中文技术博客、中文小工具站、自定义静态站和旧模板兼容入口。
 * 服务由 `systemd` 托管，机器重启后会自动拉起。
@@ -54,7 +54,7 @@
 
 * 多实例是“独立节点”，不是给旧节点补入口。
 * `Xray-core` 目前只保留兼容能力，按节点 DNS 分流优先使用 `sing-box`。
-* AnyTLS 需要域名，证书走免费 `acme.sh` 自动续期链路。
+* AnyTLS+Reality 不再走证书版 AnyTLS；客户端优先使用 `sing-box`。
 * Snell+ShadowTLS 中 Shadow-TLS 对外监听，Snell 只监听本机后端端口。
 * Reality / Shadow-TLS 目标域名依赖外部网络环境，必要时需要重新筛选。
 
