@@ -20,7 +20,6 @@ managedMultiAnyTLSPrefix="32_anytls_multi_"
 managedMultiAnyTLSDNSPrefix="33_anytls_multi_dns_"
 managedMultiRealityShortID="6ba85179e30d4fc2"
 managedMultiRealityKeySuffix=".key"
-singBoxAnyTLSRealityKeyFile="/etc/v2ray-agent/sing-box/conf/config/anytls_reality_key"
 hysteria2SelfSignedPinSuffix=".hysteria2_pin_sha256"
 hysteria2SingBoxPinSuffix=".sing_box_pin_sha256"
 hysteria2SelfSignedDefaultSNI="hy2.dodo258.local"
@@ -929,7 +928,7 @@ resolveSingBoxForwardTargetLabel() {
     elif [[ -n "${singBoxVMessHTTPUpgradePort}" && "${targetPort}" == "${singBoxVMessHTTPUpgradePort}" ]]; then
         echo "VMess+HTTPUpgrade"
     elif [[ -n "${singBoxAnyTLSPort}" && "${targetPort}" == "${singBoxAnyTLSPort}" ]]; then
-        echo "AnyTLS+Reality"
+        echo "AnyTLS+TLS证书"
     else
         echo "目标端口"
     fi
@@ -1230,7 +1229,7 @@ showInstallStatus() {
             echoContent yellow "VLESS+Reality+XHTTP \c"
         fi
         if echo ${currentInstallProtocolType} | grep -q ",13,"; then
-            echoContent yellow "AnyTLS+Reality \c"
+            echoContent yellow "AnyTLS+TLS证书 \c"
         fi
         local managedMultiRealityCount=
         managedMultiRealityCount=$(countManagedMultiRealityNodes)
@@ -1240,7 +1239,7 @@ showInstallStatus() {
         local managedMultiAnyTLSCount=
         managedMultiAnyTLSCount=$(countManagedMultiAnyTLSNodes)
         if [[ "${managedMultiAnyTLSCount}" != "0" ]]; then
-            echoMenuHint "\n多实例AnyTLS+Reality节点" "${managedMultiAnyTLSCount}个"
+            echoMenuHint "\n多实例AnyTLS节点" "${managedMultiAnyTLSCount}个"
         fi
     fi
 }
@@ -5204,7 +5203,7 @@ buildManagedMultiAnyTLSEntries() {
         managedMultiAnyTLSNodePorts[index]="${port}"
         managedMultiAnyTLSNodeDomains[index]="${domain}"
         managedMultiAnyTLSNodeUserCounts[index]="${userCount}"
-        managedMultiAnyTLSNodeLabels[index]="端口:${port} 目标:${domain} 用户:${userCount}${dnsSummary}"
+        managedMultiAnyTLSNodeLabels[index]="端口:${port} 域名:${domain} 用户:${userCount}${dnsSummary}"
         index=$((index + 1))
     done < <(listManagedMultiAnyTLSFiles)
 }
@@ -5213,11 +5212,11 @@ selectManagedMultiAnyTLSNode() {
     local actionLabel=$1
     buildManagedMultiAnyTLSEntries
     if [[ ${#managedMultiAnyTLSNodeFiles[@]} -eq 0 ]]; then
-        echoContent yellow " ---> 当前没有已部署的多实例 AnyTLS+Reality 节点"
+        echoContent yellow " ---> 当前没有已部署的多实例 AnyTLS 节点"
         exit 0
     fi
 
-    echoContent yellow "\n请选择要${actionLabel}的多实例 AnyTLS+Reality 节点"
+    echoContent yellow "\n请选择要${actionLabel}的多实例 AnyTLS 节点"
     local index=0
     for index in "${!managedMultiAnyTLSNodeFiles[@]}"; do
         echoContent green "$((index + 1)).${managedMultiAnyTLSNodeIds[${index}]} ${managedMultiAnyTLSNodeLabels[${index}]}"
@@ -5290,37 +5289,6 @@ readManagedMultiRealityPublicKey() {
     if [[ -f "${keyFile}" ]]; then
         grep '^publicKey:' <"${keyFile}" | awk -F "[:]" '{print $2}' | tail -n 1
     fi
-}
-
-persistSingBoxAnyTLSRealityKeyInfo() {
-    local publicKey=$1
-    mkdir -p "$(dirname "${singBoxAnyTLSRealityKeyFile}")"
-    cat <<EOF >"${singBoxAnyTLSRealityKeyFile}"
-publicKey:${publicKey}
-shortId:${managedMultiRealityShortID}
-EOF
-}
-
-readSingBoxAnyTLSRealityPublicKey() {
-    if [[ -f "${singBoxAnyTLSRealityKeyFile}" ]]; then
-        grep '^publicKey:' <"${singBoxAnyTLSRealityKeyFile}" | awk -F "[:]" '{print $2}' | tail -n 1
-    fi
-}
-
-initSingBoxAnyTLSRealityKey() {
-    echoContent skyBlue "\n生成 AnyTLS Reality key\n"
-    anyTLSRealityKeypair=$("${singBoxBinaryPath}" generate reality-keypair 2>/dev/null)
-    anyTLSRealityPrivateKey=$(echo "${anyTLSRealityKeypair}" | head -1 | awk '{print $2}')
-    anyTLSRealityPublicKey=$(echo "${anyTLSRealityKeypair}" | tail -n 1 | awk '{print $2}')
-
-    if [[ -z "${anyTLSRealityPrivateKey}" || -z "${anyTLSRealityPublicKey}" ]]; then
-        echoContent red " ---> 生成 AnyTLS Reality 密钥失败"
-        exit 0
-    fi
-
-    persistSingBoxAnyTLSRealityKeyInfo "${anyTLSRealityPublicKey}"
-    echoContent green "\n privateKey:${anyTLSRealityPrivateKey}"
-    echoContent green "\n publicKey:${anyTLSRealityPublicKey}"
 }
 
 buildManagedMultiRealityEntries() {
@@ -5475,12 +5443,12 @@ buildSingBoxRealityDNSEntries() {
         fi
         singBoxRealityDNSNodeFiles[index]="${anyTLSMainFile}"
         singBoxRealityDNSNodeIds[index]="main_anytls"
-        singBoxRealityDNSNodeDisplayNames[index]="AnyTLS+Reality主节点"
+        singBoxRealityDNSNodeDisplayNames[index]="AnyTLS主节点"
         singBoxRealityDNSNodePorts[index]="$(jq -r '.inbounds[0].listen_port // ""' "${anyTLSMainFile}")"
         singBoxRealityDNSNodeTargets[index]="$(jq -r '.inbounds[0].tls.server_name // ""' "${anyTLSMainFile}")"
         singBoxRealityDNSNodeInboundTags[index]="$(getManagedMultiRealityInboundTag "${anyTLSMainFile}")"
         singBoxRealityDNSNodeDNSFiles[index]="${anyTLSDNSConfigFile}"
-        singBoxRealityDNSNodeLabels[index]="AnyTLS+Reality主节点 端口:${singBoxRealityDNSNodePorts[${index}]} 目标:${singBoxRealityDNSNodeTargets[${index}]} 用户:$(jq -r '.inbounds[0].users | length' "${anyTLSMainFile}")${anyTLSDNSSummary}"
+        singBoxRealityDNSNodeLabels[index]="AnyTLS主节点 端口:${singBoxRealityDNSNodePorts[${index}]} 域名:${singBoxRealityDNSNodeTargets[${index}]} 用户:$(jq -r '.inbounds[0].users | length' "${anyTLSMainFile}")${anyTLSDNSSummary}"
         index=$((index + 1))
     fi
 
@@ -5490,7 +5458,7 @@ buildSingBoxRealityDNSEntries() {
         singBoxRealityDNSNodeFiles[index]="${managedMultiAnyTLSNodeFiles[${anyTLSIndex}]}"
         singBoxRealityDNSNodeIds[index]="${managedMultiAnyTLSNodeIds[${anyTLSIndex}]}"
         singBoxRealityDNSNodeDisplayNames[index]="${managedMultiAnyTLSNodeIds[${anyTLSIndex}]}"
-        singBoxRealityDNSNodeLabels[index]="AnyTLS+Reality ${managedMultiAnyTLSNodeLabels[${anyTLSIndex}]}"
+        singBoxRealityDNSNodeLabels[index]="AnyTLS ${managedMultiAnyTLSNodeLabels[${anyTLSIndex}]}"
         singBoxRealityDNSNodePorts[index]="${managedMultiAnyTLSNodePorts[${anyTLSIndex}]}"
         singBoxRealityDNSNodeTargets[index]="${managedMultiAnyTLSNodeDomains[${anyTLSIndex}]}"
         singBoxRealityDNSNodeInboundTags[index]="$(getManagedMultiRealityInboundTag "${managedMultiAnyTLSNodeFiles[${anyTLSIndex}]}")"
@@ -6189,29 +6157,31 @@ promptManagedMultiAnyTLSPort() {
 }
 
 promptManagedMultiAnyTLSTarget() {
-    local savedMultiRealityTargetServerName="${managedMultiRealityTargetServerName}"
-    local savedMultiRealityTargetPort="${managedMultiRealityTargetPort}"
-
-    promptManagedMultiRealityTarget
-    managedMultiAnyTLSTargetServerName="${managedMultiRealityTargetServerName}"
-    managedMultiAnyTLSTargetPort="${managedMultiRealityTargetPort}"
-    managedMultiRealityTargetServerName="${savedMultiRealityTargetServerName}"
-    managedMultiRealityTargetPort="${savedMultiRealityTargetPort}"
+    echoContent yellow "请输入多实例 AnyTLS 域名[需A记录解析到当前服务器]"
+    read -r -p "域名:" managedMultiAnyTLSDomain
+    if [[ -z "${managedMultiAnyTLSDomain}" ]]; then
+        echoContent red " ---> 域名不可为空"
+        promptManagedMultiAnyTLSTarget
+        return
+    fi
+    checkDNSIP "${managedMultiAnyTLSDomain}"
 }
 
-generateManagedMultiAnyTLSRealityKeypair() {
-    echoContent skyBlue "\n生成 AnyTLS Reality key\n"
-    managedMultiAnyTLSKeypair=$("${singBoxBinaryPath}" generate reality-keypair 2>/dev/null)
-    managedMultiAnyTLSPrivateKey=$(echo "${managedMultiAnyTLSKeypair}" | head -1 | awk '{print $2}')
-    managedMultiAnyTLSPublicKey=$(echo "${managedMultiAnyTLSKeypair}" | tail -n 1 | awk '{print $2}')
+prepareManagedMultiAnyTLSCertificate() {
+    local savedDomain="${domain}"
+    local savedDnsTLSDomain="${dnsTLSDomain}"
+    local savedWebsiteTLSAutoMode="${websiteTLSAutoMode}"
 
-    if [[ -z "${managedMultiAnyTLSPrivateKey}" || -z "${managedMultiAnyTLSPublicKey}" ]]; then
-        echoContent red " ---> 生成 AnyTLS Reality 密钥失败"
-        exit 0
-    fi
+    domain="${managedMultiAnyTLSDomain}"
+    dnsTLSDomain=$(echo "${domain}" | awk -F "." '{$1="";print $0}' | sed 's/^[[:space:]]*//' | sed 's/ /./g')
+    websiteTLSAutoMode=""
+    installTLS 2
+    installCronTLS 3
+    handleNginx stop
 
-    echoContent green "\n privateKey:${managedMultiAnyTLSPrivateKey}"
-    echoContent green "\n publicKey:${managedMultiAnyTLSPublicKey}"
+    domain="${savedDomain}"
+    dnsTLSDomain="${savedDnsTLSDomain}"
+    websiteTLSAutoMode="${savedWebsiteTLSAutoMode}"
 }
 
 generateManagedMultiAnyTLSUserIdentity() {
@@ -6237,17 +6207,14 @@ buildManagedMultiAnyTLSUsersJson() {
 writeManagedMultiAnyTLSConfig() {
     local file="$1"
     local port="$2"
-    local targetServer="$3"
-    local targetPort="$4"
-    local privateKey="$5"
-    local usersJson="$6"
+    local tlsDomain="$3"
+    local usersJson="$4"
     jq -n \
         --argjson port "${port}" \
         --arg tag "AnyTLSMulti${port}" \
-        --arg targetServer "${targetServer}" \
-        --argjson targetPort "${targetPort}" \
-        --arg privateKey "${privateKey}" \
-        --arg shortId "${managedMultiRealityShortID}" \
+        --arg tlsDomain "${tlsDomain}" \
+        --arg certPath "/etc/v2ray-agent/tls/${tlsDomain}.crt" \
+        --arg keyPath "/etc/v2ray-agent/tls/${tlsDomain}.key" \
         --argjson users "${usersJson}" \
         '{
           inbounds: [
@@ -6259,19 +6226,9 @@ writeManagedMultiAnyTLSConfig() {
               users: $users,
               tls: {
                 enabled: true,
-                server_name: $targetServer,
-                reality: {
-                  enabled: true,
-                  handshake: {
-                    server: $targetServer,
-                    server_port: $targetPort
-                  },
-                  private_key: $privateKey,
-                  short_id: [
-                    "",
-                    $shortId
-                  ]
-                }
+                server_name: $tlsDomain,
+                certificate_path: $certPath,
+                key_path: $keyPath
               }
             }
           ]
@@ -6280,14 +6237,16 @@ writeManagedMultiAnyTLSConfig() {
 
 deployManagedMultiAnyTLSNode() {
     if [[ "${coreInstallType}" != "2" ]]; then
-        echoContent red " ---> 多实例 AnyTLS+Reality 仅支持 sing-box 核心"
+        echoContent red " ---> 多实例 AnyTLS 仅支持 sing-box 核心"
         echoContent yellow " ---> 请先安装一个 sing-box 主节点后再使用该功能"
         exit 0
     fi
-    totalProgress=1
+    selectCustomInstallType=",13,"
+    totalProgress=4
+    installTools 1
     promptManagedMultiAnyTLSPort
     promptManagedMultiAnyTLSTarget
-    generateManagedMultiAnyTLSRealityKeypair
+    prepareManagedMultiAnyTLSCertificate
     generateManagedMultiAnyTLSUserIdentity
 
     local nodeId=
@@ -6296,10 +6255,10 @@ deployManagedMultiAnyTLSNode() {
     nodeId="$(date +%Y%m%d%H%M%S)-${managedMultiAnyTLSPort}"
     file="${singBoxConfigPath}${managedMultiAnyTLSPrefix}${nodeId}.json"
     usersJson=$(buildManagedMultiAnyTLSUsersJson "${managedMultiAnyTLSPassword}" "${managedMultiAnyTLSUserName}")
-    writeManagedMultiAnyTLSConfig "${file}" "${managedMultiAnyTLSPort}" "${managedMultiAnyTLSTargetServerName}" "${managedMultiAnyTLSTargetPort}" "${managedMultiAnyTLSPrivateKey}" "${usersJson}"
-    persistManagedMultiRealityKeyInfo "${file}" "${managedMultiAnyTLSPublicKey}"
+    writeManagedMultiAnyTLSConfig "${file}" "${managedMultiAnyTLSPort}" "${managedMultiAnyTLSDomain}" "${usersJson}"
+    echoContent skyBlue "\n进度  4/${totalProgress} : 写入并重启 AnyTLS 节点"
     handleSingBox restart
-    echoContent green " ---> sing-box 多实例 AnyTLS+Reality 节点部署成功"
+    echoContent green " ---> sing-box 多实例 AnyTLS 节点部署成功"
     managedMultiAnyTLSSelectedFile="${file}"
     managedMultiAnyTLSSelectedId="${nodeId}"
     showManagedMultiAnyTLSAccounts true
@@ -6308,10 +6267,10 @@ deployManagedMultiAnyTLSNode() {
 showManagedMultiAnyTLSNodes() {
     buildManagedMultiAnyTLSEntries
     if [[ ${#managedMultiAnyTLSNodeFiles[@]} -eq 0 ]]; then
-        echoContent yellow " ---> 当前没有已部署的多实例 AnyTLS+Reality 节点"
+        echoContent yellow " ---> 当前没有已部署的多实例 AnyTLS 节点"
         exit 0
     fi
-    echoContent skyBlue "\n====================== 多实例 AnyTLS+Reality 节点 ======================\n"
+    echoContent skyBlue "\n====================== 多实例 AnyTLS 节点 ======================\n"
     for i in "${!managedMultiAnyTLSNodeLabels[@]}"; do
         echoContent green "$((i + 1)).${managedMultiAnyTLSNodeLabels[$i]}"
     done
@@ -6325,11 +6284,9 @@ showManagedMultiAnyTLSAccounts() {
     local file="${managedMultiAnyTLSSelectedFile}"
     local port=
     local domainName=
-    local publicKey=
     port=$(jq -r '.inbounds[0].listen_port' "${file}")
     domainName=$(jq -r '.inbounds[0].tls.server_name' "${file}")
-    publicKey=$(readManagedMultiRealityPublicKey "${file}")
-    echoContent skyBlue "\n====================== 多实例 AnyTLS+Reality 账号 ======================\n"
+    echoContent skyBlue "\n====================== 多实例 AnyTLS 账号 ======================\n"
     jq -c '.inbounds[0].users[]' "${file}" | while read -r user; do
         local userName=
         local password=
@@ -6338,13 +6295,13 @@ showManagedMultiAnyTLSAccounts() {
         echoContent skyBlue "\n ---> 节点:${managedMultiAnyTLSSelectedId}"
         echoContent skyBlue " ---> 账号:${userName}"
         echo
-        echoContent yellow " ---> sing-box JSON 订阅参数(AnyTLS+Reality)"
-        echoContent green "协议类型:AnyTLS+Reality，地址:$(getPublicIP)，端口:${port}，serverName:${domainName}，publicKey:${publicKey}，shortId:${managedMultiRealityShortID}，账户名:${userName}\n"
+        echoContent yellow " ---> sing-box JSON 订阅参数(AnyTLS+TLS证书)"
+        echoContent green "协议类型:AnyTLS+TLS证书，地址:${domainName}，端口:${port}，serverName:${domainName}，账户名:${userName}\n"
         cat <<EOF
 {
   "type": "anytls",
   "tag": "${userName}",
-  "server": "$(getPublicIP)",
+  "server": "${domainName}",
   "server_port": ${port},
   "password": "${password}",
   "tls": {
@@ -6353,16 +6310,11 @@ showManagedMultiAnyTLSAccounts() {
     "utls": {
       "enabled": true,
       "fingerprint": "chrome"
-    },
-    "reality": {
-      "enabled": true,
-      "public_key": "${publicKey}",
-      "short_id": "${managedMultiRealityShortID}"
     }
   }
 }
 EOF
-        echoContent yellow " ---> 注意: AnyTLS+Reality 仅建议 sing-box 客户端使用；mihomo/Clash.Meta 不支持，Shadowrocket/v2rayN 未验证\n"
+        echoContent yellow " ---> 注意: AnyTLS 仅建议 sing-box 客户端使用；mihomo/Clash.Meta 不支持，Shadowrocket/v2rayN 未验证\n"
     done
 }
 
@@ -6411,24 +6363,23 @@ removeManagedMultiAnyTLSUser() {
 deleteManagedMultiAnyTLSNode() {
     selectManagedMultiAnyTLSNode "删除"
     rm -f "${managedMultiAnyTLSSelectedFile}"
-    rm -f "$(getManagedMultiRealityKeyFile "${managedMultiAnyTLSSelectedFile}")"
     rm -f "$(getManagedMultiAnyTLSDNSConfigFileById "${managedMultiAnyTLSSelectedId}")"
     handleSingBox restart
-    echoContent green " ---> 已删除多实例 AnyTLS+Reality 节点: ${managedMultiAnyTLSSelectedId}"
+    echoContent green " ---> 已删除多实例 AnyTLS 节点: ${managedMultiAnyTLSSelectedId}"
 }
 
 managedMultiAnyTLSMenu() {
     if [[ "${coreInstallType}" != "2" ]]; then
-        echoContent red " ---> 多实例 AnyTLS+Reality 仅支持 sing-box 核心"
+        echoContent red " ---> 多实例 AnyTLS 仅支持 sing-box 核心"
         echoContent yellow " ---> 请先安装一个 sing-box 主节点后再使用该功能"
         exit 0
     fi
 
-    echoContent skyBlue "\n功能 1/1 : 多实例 AnyTLS+Reality 管理"
+    echoContent skyBlue "\n功能 1/1 : 多实例 AnyTLS 管理"
     echoContent red "\n=============================================================="
     echoContent yellow "# 注意事项"
-    echoContent yellow "# 这里只部署独立 AnyTLS+Reality 节点，每个节点使用独立 Reality 目标和密钥"
-    echoContent yellow "# AnyTLS+Reality 仅建议 sing-box 客户端使用，不再申请域名证书"
+    echoContent yellow "# 这里只部署独立 AnyTLS 节点，每个节点使用独立域名证书"
+    echoContent yellow "# AnyTLS 仅建议 sing-box 客户端使用，需要域名解析和真实TLS证书"
     echoContent yellow "# mihomo/Clash.Meta 不支持，Shadowrocket/v2rayN 未验证，升级 sing-box 后建议先自测"
     echoContent yellow "1.部署新的独立节点"
     echoContent yellow "2.查看已部署节点"
@@ -8693,17 +8644,16 @@ EOF
     fi
 
     if echo "${selectCustomInstallType}" | grep -q ",13," || [[ "$1" == "all" ]]; then
-        echoContent yellow "\n================== 配置 AnyTLS+Reality ==================\n"
-        if [[ -z "${realityServerName}" || -z "${realityDomainPort}" ]]; then
-            initRealityClientServersName
+        local anyTLSTLSDomain="${sslDomain:-${domain:-${currentHost}}}"
+        echoContent yellow "\n================== 配置 AnyTLS+TLS证书 ==================\n"
+        if [[ -z "${anyTLSTLSDomain}" ]]; then
+            echoContent red " ---> AnyTLS+TLS证书需要先配置域名并申请TLS证书"
+            exit 0
         fi
-        if [[ -z "${anyTLSRealityPrivateKey}" ]]; then
-            initSingBoxAnyTLSRealityKey
-        fi
-        echoContent skyBlue "\n开始配置AnyTLS+Reality协议端口"
+        echoContent skyBlue "\n开始配置AnyTLS协议端口"
         echo
         mapfile -t result < <(initSingBoxPort "${singBoxAnyTLSPort}")
-        echoContent green "\n ---> AnyTLS+Reality端口：${result[-1]}"
+        echoContent green "\n ---> AnyTLS端口：${result[-1]}"
         cat <<EOF >/etc/v2ray-agent/sing-box/conf/config/13_anytls_inbounds.json
 {
     "inbounds": [
@@ -8715,19 +8665,9 @@ EOF
             "users": $(initSingBoxClients 13),
             "tls": {
                 "enabled": true,
-                "server_name":"${realityServerName}",
-                "reality": {
-                    "enabled": true,
-                    "handshake": {
-                        "server": "${realityServerName}",
-                        "server_port": ${realityDomainPort}
-                    },
-                    "private_key": "${anyTLSRealityPrivateKey}",
-                    "short_id": [
-                        "",
-                        "${managedMultiRealityShortID}"
-                    ]
-                }
+                "server_name":"${anyTLSTLSDomain}",
+                "certificate_path": "/etc/v2ray-agent/tls/${anyTLSTLSDomain}.crt",
+                "key_path": "/etc/v2ray-agent/tls/${anyTLSTLSDomain}.key"
             }
         }
     ]
@@ -9273,44 +9213,37 @@ EOF
         echoContent green "    https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=vmess://${qrCodeBase64Default}\n"
 
     elif [[ "${type}" == "anytls" ]]; then
-        local anyTLSRealityServerName=
-        local anyTLSRealityPublicKey=
-        anyTLSRealityServerName=$(jq -r '.inbounds[0].tls.server_name // ""' "${singBoxConfigPath}13_anytls_inbounds.json" 2>/dev/null)
-        anyTLSRealityPublicKey=$(readSingBoxAnyTLSRealityPublicKey)
+        local anyTLSServerName=
+        anyTLSServerName=$(jq -r '.inbounds[0].tls.server_name // ""' "${singBoxConfigPath}13_anytls_inbounds.json" 2>/dev/null)
 
-        echoContent yellow " ---> AnyTLS+Reality"
+        echoContent yellow " ---> AnyTLS+TLS证书"
 
-        echoContent yellow " ---> sing-box JSON 订阅参数(AnyTLS+Reality)"
-        echoContent green "协议类型:anytls+reality，地址:$(getPublicIP)，端口:${singBoxAnyTLSPort}，serverName:${anyTLSRealityServerName}，publicKey:${anyTLSRealityPublicKey}，shortId:${managedMultiRealityShortID}，账户名:${email}\n"
+        echoContent yellow " ---> sing-box JSON 订阅参数(AnyTLS+TLS证书)"
+        echoContent green "协议类型:anytls+tls，地址:${anyTLSServerName}，端口:${port}，serverName:${anyTLSServerName}，账户名:${email}\n"
         cat <<EOF
 {
   "type": "anytls",
   "tag": "${email}",
-  "server": "$(getPublicIP)",
-  "server_port": ${singBoxAnyTLSPort},
+  "server": "${anyTLSServerName}",
+  "server_port": ${port},
   "password": "${id}",
   "tls": {
     "enabled": true,
-    "server_name": "${anyTLSRealityServerName}",
+    "server_name": "${anyTLSServerName}",
     "utls": {
       "enabled": true,
       "fingerprint": "chrome"
-    },
-    "reality": {
-      "enabled": true,
-      "public_key": "${anyTLSRealityPublicKey}",
-      "short_id": "${managedMultiRealityShortID}"
     }
   }
 }
 EOF
 
-        echoContent yellow " ---> 注意: AnyTLS+Reality 仅建议 sing-box 客户端使用；mihomo/Clash.Meta 不支持，Shadowrocket/v2rayN 未验证\n"
+        echoContent yellow " ---> 注意: AnyTLS 仅建议 sing-box 客户端使用；mihomo/Clash.Meta 不支持，Shadowrocket/v2rayN 未验证\n"
         cat <<EOF >>"/etc/v2ray-agent/subscribe_local/clashMeta/${user}"
-  # ${email}: AnyTLS+Reality 仅建议使用 sing-box 客户端订阅，mihomo/Clash.Meta 不支持
+  # ${email}: AnyTLS 仅建议使用 sing-box 客户端订阅，mihomo/Clash.Meta 不支持
 EOF
 
-        singBoxSubscribeLocalConfig=$(jq -r ". += [{\"tag\":\"${email}\",\"type\":\"anytls\",\"server\":\"$(getPublicIP)\",\"server_port\":${singBoxAnyTLSPort},\"password\":\"${id}\",\"tls\":{\"enabled\":true,\"server_name\":\"${anyTLSRealityServerName}\",\"utls\":{\"enabled\":true,\"fingerprint\":\"chrome\"},\"reality\":{\"enabled\":true,\"public_key\":\"${anyTLSRealityPublicKey}\",\"short_id\":\"${managedMultiRealityShortID}\"}}}]" "/etc/v2ray-agent/subscribe_local/sing-box/${user}")
+        singBoxSubscribeLocalConfig=$(jq -r ". += [{\"tag\":\"${email}\",\"type\":\"anytls\",\"server\":\"${anyTLSServerName}\",\"server_port\":${port},\"password\":\"${id}\",\"tls\":{\"enabled\":true,\"server_name\":\"${anyTLSServerName}\",\"utls\":{\"enabled\":true,\"fingerprint\":\"chrome\"}}}]" "/etc/v2ray-agent/subscribe_local/sing-box/${user}")
         echo "${singBoxSubscribeLocalConfig}" | jq . >"/etc/v2ray-agent/subscribe_local/sing-box/${user}"
     fi
 
@@ -9595,9 +9528,9 @@ showAccounts() {
             done < <(echo "${currentCDNAddress}" | tr ',' '\n')
         done
     fi
-    # AnyTLS+Reality
+    # AnyTLS+TLS证书
     if echo ${currentInstallProtocolType} | grep -q ",13,"; then
-        echoContent skyBlue "\n================================  AnyTLS+Reality ================================\n"
+        echoContent skyBlue "\n================================  AnyTLS+TLS证书 ================================\n"
 
         jq -r -c '.inbounds[]|.users[]' "${configPath}13_anytls_inbounds.json" | while read -r user; do
             echoContent skyBlue "\n ---> 账号:$(echo "${user}" | jq -r .name)"
@@ -9720,7 +9653,7 @@ buildInstalledNodeEntries() {
         appendInstalledNodeEntry "2" "11" "VMess+HTTPUpgrade" "$(grep 'listen ' <"${nginxConfigPath}sing_box_VMess_HTTPUpgrade.conf" 2>/dev/null | awk '{print $2}' | tr -d ';')" "$(jq -r '.inbounds[0].users | length' "${singBoxConfigPath}11_VMess_HTTPUpgrade_inbounds.json")" "域名:$(grep 'server_name' <"${nginxConfigPath}sing_box_VMess_HTTPUpgrade.conf" 2>/dev/null | awk '{print $2}' | tr -d ';') 路径:$(jq -r '.inbounds[0].transport.path // ""' "${singBoxConfigPath}11_VMess_HTTPUpgrade_inbounds.json")"
     fi
     if [[ -f "${singBoxConfigPath}13_anytls_inbounds.json" ]]; then
-        appendInstalledNodeEntry "2" "13" "AnyTLS+Reality" "$(jq -r '.inbounds[0].listen_port // ""' "${singBoxConfigPath}13_anytls_inbounds.json")" "$(jq -r '.inbounds[0].users | length' "${singBoxConfigPath}13_anytls_inbounds.json")" "目标:$(jq -r '.inbounds[0].tls.server_name // ""' "${singBoxConfigPath}13_anytls_inbounds.json")"
+        appendInstalledNodeEntry "2" "13" "AnyTLS+TLS证书" "$(jq -r '.inbounds[0].listen_port // ""' "${singBoxConfigPath}13_anytls_inbounds.json")" "$(jq -r '.inbounds[0].users | length' "${singBoxConfigPath}13_anytls_inbounds.json")" "域名:$(jq -r '.inbounds[0].tls.server_name // ""' "${singBoxConfigPath}13_anytls_inbounds.json")"
     fi
 }
 
@@ -9801,7 +9734,7 @@ removeInstalledNodeConfig() {
         ;;
     "2:13")
         rm -f "${singBoxConfigPath}13_anytls_inbounds.json"
-        rm -f "${singBoxAnyTLSRealityKeyFile}"
+        rm -f "${singBoxConfigPath}anytls_reality_key"
         ;;
     *)
         echoContent red " ---> 暂不支持删除这个节点"
@@ -10132,12 +10065,12 @@ addCorePort() {
                 appendSingBoxForwardTargetStatus "VMess+HTTPUpgrade" "${singBoxVMessHTTPUpgradePort}"
             fi
             if echo "${currentInstallProtocolType}" | grep -q ",13,"; then
-                appendSingBoxForwardTargetStatus "AnyTLS+Reality" "${singBoxAnyTLSPort}"
+                appendSingBoxForwardTargetStatus "AnyTLS+TLS证书" "${singBoxAnyTLSPort}"
             fi
 
             if [[ ${#singBoxForwardTargetPorts[@]} -eq 0 ]]; then
                 echoContent red "\n ---> 当前 sing-box 未安装可补充新端口的 TCP 节点"
-                echoContent yellow " ---> 当前仅支持 VLESS/Trojan/Naive/AnyTLS+Reality/HTTPUpgrade/Reality 这类 TCP 入口"
+                echoContent yellow " ---> 当前仅支持 VLESS/Trojan/Naive/AnyTLS/HTTPUpgrade/Reality 这类 TCP 入口"
                 exit 0
             elif [[ ${#singBoxForwardTargetPorts[@]} -eq 1 ]]; then
                 singBoxSelectedTargetLabel="${singBoxForwardTargetLabels[0]}"
@@ -12653,7 +12586,7 @@ dnsRouting() {
     echoContent red "\n=============================================================="
     echoContent yellow "# 注意事项"
     echoContent yellow "# 使用说明：请参考仓库 README \n"
-    echoContent yellow "# sing-box 节点级 DNS 分流支持 Reality/AnyTLS+Reality 主节点和多实例节点，节点可单独指定上游 DNS\n"
+    echoContent yellow "# sing-box 节点级 DNS 分流支持 Reality/AnyTLS 主节点和多实例节点，节点可单独指定上游 DNS\n"
     if [[ "${coreInstallType}" == "1" ]]; then
         echoContent yellow "# 当前核心为 Xray-core，节点级 DNS 分流暂不可用，仅支持全局 DNS 分流\n"
     fi
@@ -12982,7 +12915,7 @@ customSingBoxInstall() {
     echoContent yellow "9.Tuic"
     echoContent yellow "10.Naive"
     echoContent yellow "11.VMess+TLS+HTTPUpgrade"
-    echoMenuHint "13.AnyTLS+Reality" "sing-box客户端专用"
+    echoMenuHint "13.AnyTLS+TLS证书" "sing-box客户端专用/需域名"
 
     read -r -p "请选择[多选]，[例如:1,2,3]:" selectCustomInstallType
     echoContent skyBlue "--------------------------------------------------------------"
@@ -13080,26 +13013,28 @@ installSingBoxReality() {
     showAccounts 6
 }
 
-# 一键 AnyTLS+Reality，使用 sing-box 托管，不再申请域名证书
+# 一键 AnyTLS+TLS证书，使用 sing-box 托管，需要域名和真实 TLS 证书
 installSingBoxAnyTLS() {
 
     selectCustomInstallType=",13,"
     selectCoreType="2"
     unInstallSubscribe
-    totalProgress=6
+    totalProgress=9
     installTools 1
 
-    installSingBox 2
-    installSingBoxService 3
-    initRealityClientServersName
-    initSingBoxAnyTLSRealityKey
-    initSingBoxConfig custom 4 keep
+    initTLSNginxConfig 2
+    installTLS 3
+    handleNginx stop
+    installSingBox 4
+    installSingBoxService 5
+    initSingBoxConfig custom 6 keep
     if [[ "${coreInstallType}" != "2" ]]; then
         cleanUp xrayDel
     fi
+    installCronTLS 7
     handleSingBox restart
-    checkGFWStatue 5
-    showAccounts 6
+    checkGFWStatue 8
+    showAccounts 9
 }
 
 # Xray-core个性化安装
@@ -14700,7 +14635,7 @@ menu() {
     cd "$HOME" || exit
     echoContent red "\n=============================================================="
     echoContent green "维护：dodo258"
-    echoContent green "当前版本：v3.8.2"
+    echoContent green "当前版本：v3.8.3"
     echoContent green "项目：https://github.com/dodo258/sing-box-reality-manager"
     echoContent green "描述：多实例重构版管理脚本\c"
     showInstallStatus
@@ -14714,10 +14649,10 @@ menu() {
 
     echoContent yellow "2.高级组合安装"
     echoMenuHint "3.一键无域名Reality" "只装推荐VLESS，新手最推荐" "覆盖当前Reality节点并全新安装"
-    echoMenuHint "4.一键AnyTLS+Reality" "sing-box客户端专用"
+    echoMenuHint "4.一键AnyTLS+TLS证书" "sing-box客户端专用/需域名"
     echoMenuHint "5.一键Snell+ShadowTLS" "Snell v4/v5 + Shadow-TLS v3"
     echoMenuHint "6.多实例Reality" "先装一个主节点再用这个"
-    echoMenuHint "7.多实例AnyTLS+Reality" "sing-box/每节点独立Reality"
+    echoMenuHint "7.多实例AnyTLS+TLS证书" "sing-box/每节点独立域名证书"
     echoMenuHint "8.多实例Snell+ShadowTLS" "独立端口/可多节点"
 
     echoContent skyBlue "-------------------------工具管理-----------------------------"
