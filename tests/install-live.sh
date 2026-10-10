@@ -100,12 +100,43 @@ echo 'PASS a node on port 853 starts under the unprivileged service user'
     ! systemctl is-active --quiet "$SERVICE" || exit 1
 )
 echo 'PASS self-signed TUIC and TCP+UDP Shadowsocks run under the service user'
+# Snell v6 and v5 behind ShadowTLS through the real transaction and systemd: the
+# pinned official binaries download, snell-server runs as the service user on
+# loopback from the current generation, and toggling and deleting stop its unit.
+(
+    source ./srm.sh
+    reality_target_check() { return 0; }
+    node_add "$PWD/dist/srm" snell --name snell6 --host 127.0.0.1 --yes
+    node_add "$PWD/dist/srm" snell --name snell5 --host 127.0.0.1 --proto-version 5 --yes
+    systemctl is-active --quiet "$SERVICE" || exit 1
+    [[ -x /opt/srm/snell/v6/snell-server && -x /opt/srm/snell/v5/snell-server ]] || exit 1
+    systemd-analyze verify /etc/systemd/system/srm-snell@.service
+    for name in snell6 snell5; do
+        n=$(jq -c --arg n "$name" '.nodes[]|select(.name==$n)' "$STATE")
+        id=$(jq -r .id <<< "$n"); unit=srm-snell@$id.service
+        systemctl is-active --quiet "$unit" && systemctl is-enabled --quiet "$unit" || { journalctl -u "$unit" --no-pager | tail -20; exit 1; }
+        [[ $(systemctl show -p User --value "$unit") == srm ]] || exit 1
+        ss -H -ltn "sport = :$(jq -r .local_port <<< "$n")" | grep -q "127.0.0.1:$(jq -r .local_port <<< "$n") " || exit 1
+        [[ -n $(ss -H -ltn "sport = :$(jq -r .port <<< "$n")") ]] || exit 1
+        [[ $(readlink "$DATA/current/sidecar/$id/snell-server") == "/opt/srm/snell/v$(jq -r .snell_version <<< "$n")/snell-server" ]] || exit 1
+    done
+    show_logs | grep -q 'snell-server v6\.' && show_logs | grep -q 'snell-server v5\.' || { show_logs; exit 1; }
+    show_status | grep -q "srm-snell@$id.service" || exit 1
+    node_change "$id" toggle
+    ! systemctl is-active --quiet "$unit" && ! systemctl is-enabled --quiet "$unit" || exit 1
+    node_change "$id" toggle
+    systemctl is-active --quiet "$unit" || exit 1
+    for id in $(jq -r '.nodes[]|select(.type=="snell")|.id' "$STATE"); do node_change "$id" delete; done
+    if systemctl list-units --all --plain --no-legend 'srm-snell@*' | grep -qw active; then exit 1; fi
+    ! systemctl is-active --quiet "$SERVICE" || exit 1
+)
+echo 'PASS Snell v6 and v5 run as srm-snell@<node> on loopback behind sing-box; toggle and delete stop the unit'
 # Updates are manual only: installation must not schedule any update job.
 if compgen -G '/etc/systemd/system/srm-update*' > /dev/null; then echo 'FAIL update unit installed'; exit 1; fi
 if crontab -l 2>/dev/null | grep -q srm; then echo 'FAIL update cron job installed'; exit 1; fi
 echo 'PASS no automatic update job is installed'
 cleanup
 trap - EXIT
-[[ ! -e /opt/srm && ! -e /var/lib/srm && ! -e /etc/systemd/system/srm.service ]] || exit 1
+[[ ! -e /opt/srm && ! -e /var/lib/srm && ! -e /etc/systemd/system/srm.service && ! -e /etc/systemd/system/srm-snell@.service ]] || exit 1
 [[ ! -e /usr/local/sbin/srm && ! -L /usr/local/sbin/vasma ]] || exit 1
 echo 'PASS uninstall removes manager, service and both commands'

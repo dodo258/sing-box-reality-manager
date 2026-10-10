@@ -57,7 +57,8 @@ validate_state() {
       .schema == 2 and (.nodes|type == "array") and (.policies|type == "array") and
       ([.policies[].name]|length == (unique|length)) and
       ([.nodes[].id]|length == (unique|length)) and
-      ([.nodes[].port]|length == (unique|length)) and
+      # Node ports and the loopback ports of helper services never overlap.
+      ([.nodes[]|.port, (.local_port // empty)]|length == (unique|length)) and
       all(.nodes[];
         (.id|test("^[a-f0-9]{16}$")) and (.name|text) and
         (.host|text) and (.sni == null or (.sni|text)) and ((.listen // "::") == "::" or .listen == "0.0.0.0") and (.enabled|type == "boolean") and
@@ -117,3 +118,4 @@ share_uri() { jq -r "$PROTO_JQ_DEFS $(proto_jq share_uri 'error("不支持的协
 # Client snippets; empty output when the client has no support for the protocol.
 clash_proxy() { jq -r "$PROTO_JQ_DEFS $(proto_jq clash empty)|\"- \(tojson)\""; }
 surge_proxy() { jq -r "$PROTO_JQ_DEFS $(proto_jq surge empty)"; }
+client_note() { jq -r "$PROTO_JQ_DEFS $(proto_jq note empty)"; }

@@ -92,7 +92,7 @@ port_free() {
     local port=$1 exclude=${2:-} output
     valid_port "$port" || return 1
     if [[ -f $STATE ]]; then
-        jq -e --arg id "$exclude" --argjson port "$port" 'any(.nodes[]; .id!=$id and .port==$port)' "$STATE" >/dev/null && return 1
+        jq -e --arg id "$exclude" --argjson port "$port" 'any(.nodes[]; (.id!=$id and .port==$port) or .local_port==$port)' "$STATE" >/dev/null && return 1
     fi
     output=$(ss -H -lntu "sport = :$port") || return 1
     [[ -z $output ]]

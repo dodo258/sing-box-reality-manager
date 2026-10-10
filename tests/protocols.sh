@@ -15,7 +15,7 @@ STATE=$DATA/current/state.json
 mkdir -p "$SRM_ROOT" "$DATA/current"
 touch "$SRM_ROOT/.srm-owned" "$DATA/.srm-owned"
 
-[[ $PROTOCOLS == 'vless anytls hysteria2 shadowsocks tuic vlesstls trojan vmess naive hysteria' ]] || fail "registered: $PROTOCOLS"
+[[ $PROTOCOLS == 'vless anytls hysteria2 snell shadowsocks tuic vlesstls trojan vmess naive hysteria' ]] || fail "registered: $PROTOCOLS"
 for type in $PROTOCOLS; do
     for hook in $PROTO_HOOKS; do declare -F "proto_${type}_$hook" >/dev/null || fail "$type lacks $hook"; done
 done
@@ -34,7 +34,7 @@ if proto_register 'Bad-Name' 2>/dev/null; then fail 'invalid protocol name regis
     proto_half_retarget_select() { :; }; proto_half_retarget_label() { :; }
     proto_register half || fail 'complete optional hook group rejected'
 ) || exit 1
-[[ $PROTOCOLS == 'vless anytls hysteria2 shadowsocks tuic vlesstls trojan vmess naive hysteria' ]] || fail "registry changed: $PROTOCOLS"
+[[ $PROTOCOLS == 'vless anytls hysteria2 snell shadowsocks tuic vlesstls trojan vmess naive hysteria' ]] || fail "registry changed: $PROTOCOLS"
 if proto_call socks label 2> "$work/err"; then fail 'unknown protocol dispatched'; fi
 grep -q '不支持的协议：socks' "$work/err" || fail 'unknown protocol message'
 if proto_known '' || proto_known socks || proto_known 'vless anytls'; then fail 'proto_known accepted unknown name'; fi
@@ -115,7 +115,7 @@ echo 'PASS QR codes use only local qrencode and fall back to the link'
     proto_demo_create() { REPLY='{"password":"pw"}'; }
     proto_demo_rotate() { REPLY='{"password":"new"}'; }
     proto_register demo
-    [[ $PROTOCOLS == 'vless anytls hysteria2 shadowsocks tuic vlesstls trojan vmess naive hysteria demo' ]] || fail 'demo not registered'
+    [[ $PROTOCOLS == 'vless anytls hysteria2 snell shadowsocks tuic vlesstls trojan vmess naive hysteria demo' ]] || fail 'demo not registered'
     jq '.nodes += [{id:"4444444444444444",name:"d",type:"demo",enabled:true,host:"2001:db8::1",port:18104,sni:"demo.example.com",password:"pw"}]' "$work/state.json" > "$work/demo.json"
     render_config "$work/demo.json" | jq -e '.inbounds[-1]=={tag:"4444444444444444",listen:"::",listen_port:18104,type:"demo",password:"pw"}' >/dev/null || fail 'demo render'
     [[ $(node_json "$work/demo.json" 4444444444444444 | share_uri) == 'demo://pw@[2001:db8::1]:18104' ]] || fail 'demo link'

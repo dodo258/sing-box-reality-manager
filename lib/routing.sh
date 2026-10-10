@@ -36,11 +36,18 @@ routing_show() {
       {unlock_dns,egress:(if .egress then (.egress|del(.password)) else null end),
        policies:[.policies[]|. + {nodes:(if .inbounds then [.inbounds[]|$names[.]] else "全部节点" end)}]}' "$STATE" || return 1
     if ! routing_check_conflicts "$STATE"; then msg '已有规则保持原状，重叠部分按当前配置由代理规则优先处理。'; fi
-    return 0
+    routing_bypass_note
+}
+# Nodes served by a helper program connect out on their own, past sing-box's rules.
+routing_bypass_note() {
+    local names
+    names=$(jq -r "$PROTO_JQ_DEFS [.nodes[]|select(($(proto_jq sidecar empty))|length > 0)|.name]|join(\"、\")" "$STATE") || return 1
+    [[ -z $names ]] || msg "注意：节点 ${names} 的流量由独立服务直接发出，不经过分流规则。"
 }
 routing_menu() {
     [[ -f $STATE ]] || { err '请先部署节点。'; return 1; }
     msg '解锁 DNS 需要客户端把域名或 DNS 查询交给本服务器；仅发送已解析 IP 时，SNI 嗅探不会自动重写该 IP。指定代理出口可按可识别的域名分流。'
+    routing_bypass_note
     msg '流媒体分流：1.查看 2.设置解锁 DNS 3.设置代理出口（SOCKS5） 4.添加/替换平台规则 5.删除平台规则'
     ask '操作' 1 || return 0
     local host port user name mode domains scope

@@ -36,5 +36,5 @@ restart_nodes() {
     owned_root || return 1
     [[ -f $STATE ]] || { err '请先部署节点。'; return 1; }
     if [[ $(jq '[.nodes[]|select(.enabled)]|length' "$STATE") == 0 ]]; then msg '没有启用的节点。'; return 0; fi
-    "$CORE" check -c "$DATA/current/config.json" && systemctl restart "$SERVICE" && service_healthy "$STATE"
+    "$CORE" check -c "$DATA/current/config.json" && sidecars_sync "$STATE" && systemctl restart "$SERVICE" && service_healthy "$STATE"
 }

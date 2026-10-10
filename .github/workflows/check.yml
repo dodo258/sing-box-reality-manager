@@ -34,12 +34,19 @@ jobs:
           curl -fsSL --max-time 120 -o "$RUNNER_TEMP/mihomo.gz" https://github.com/MetaCubeX/mihomo/releases/download/v1.19.32/mihomo-linux-amd64-v1.19.32.gz
           echo "8451100836c9eda194331c2babfad490b2faf30cebc1a04b0e76fd8ac2d35d10  $RUNNER_TEMP/mihomo.gz" | sha256sum -c -
           gunzip "$RUNNER_TEMP/mihomo.gz" && chmod 755 "$RUNNER_TEMP/mihomo"
+      - name: Download checksum-pinned snell-server v6 and v5
+        run: |
+          source ./srm.sh
+          snell_download 6 "$RUNNER_TEMP/snell-server-v6"
+          snell_download 5 "$RUNNER_TEMP/snell-server-v5"
       - name: Unit tests and real proxy traffic through the core
         env:
           TEST_CORE: ${{ runner.temp }}/sing-box
           TEST_MIHOMO: ${{ runner.temp }}/mihomo
+          TEST_SNELL_V6: ${{ runner.temp }}/snell-server-v6
+          TEST_SNELL_V5: ${{ runner.temp }}/snell-server-v5
         run: |
-          for test in cli menu protocols clients state local traffic updates firewall certificates-menu management; do
+          for test in cli menu protocols clients snell state local traffic snell-traffic updates firewall certificates-menu management; do
             echo "::group::tests/$test.sh"
             bash "tests/$test.sh"
             echo "::endgroup::"
