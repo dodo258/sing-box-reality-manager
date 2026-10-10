@@ -28,7 +28,7 @@ jobs:
         env:
           TEST_CORE: ${{ runner.temp }}/sing-box
         run: |
-          for test in cli menu protocols local updates firewall certificates-menu management; do
+          for test in cli menu protocols state local updates firewall certificates-menu management; do
             echo "::group::tests/$test.sh"
             bash "tests/$test.sh"
             echo "::endgroup::"

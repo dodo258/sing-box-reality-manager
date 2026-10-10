@@ -18,7 +18,7 @@ firewall_profile() {
 firewall_fields_valid() {
     [[ $1 == ufw || $1 == firewalld ]] && [[ $2 =~ ^[a-zA-Z0-9_-]+$ ]] &&
         [[ $3 == both || $3 == runtime || $3 == permanent ]] &&
-        { valid_port "$4" || [[ $4 == 80 || $4 == 443 ]]; } && [[ $5 == tcp || $5 == udp ]]
+        valid_port "$4" && [[ $5 == tcp || $5 == udp ]]
 }
 firewall_add() {
     local backend=$1 zone=$2 scope=$3 port=$4 proto=$5 file app profile output rc
@@ -103,6 +103,8 @@ firewall_sync() {
         [[ $2 == 80 || $2 == 443 ]] || { rm -f "$ports" "$desired"; return 1; }
         printf '%s\ttcp\n' "$2" >> "$ports"
     fi
+    # A node may itself use the certificate challenge port.
+    sort -u -o "$ports" "$ports" || { rm -f "$ports" "$desired"; return 1; }
     if [[ $backend == firewalld ]]; then
         zones=$(firewall-cmd --get-active-zones) || { rm -f "$ports" "$desired"; return 1; }
         zones=$(printf '%s\n' "$zones" | awk '/^[^[:space:]]/{print $1}')

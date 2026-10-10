@@ -15,7 +15,7 @@ private=$(printf '%s\n' "$pair" | awk '/PrivateKey:/{print $2}')
 public=$(printf '%s\n' "$pair" | awk '/PublicKey:/{print $2}')
 uuid=$("$CORE" generate uuid)
 password=$(random_hex 24)
-jq -n --arg host "${TEST_SERVER_HOST:-127.0.0.1}" --arg dir "$DATA/certs/test.example.com/active" --arg private "$private" --arg public "$public" --arg uuid "$uuid" --arg password "$password" '{schema:1,nodes:[
+jq -n --arg host "${TEST_SERVER_HOST:-127.0.0.1}" --arg dir "$DATA/certs/test.example.com/active" --arg private "$private" --arg public "$public" --arg uuid "$uuid" --arg password "$password" '{schema:2,nodes:[
  {id:"1111111111111111",name:"test-reality",type:"vless",enabled:true,host:$host,port:18101,sni:"www.microsoft.com",uuid:$uuid,private_key:$private,public_key:$public,short_id:"0123456789abcdef"},
  {id:"2222222222222222",name:"test-anytls",type:"anytls",enabled:true,host:$host,port:40529,sni:"test.example.com",password:$password,cert_dir:$dir},
  {id:"3333333333333333",name:"test-hysteria2",type:"hysteria2",enabled:true,host:$host,port:18103,sni:"test.example.com",password:$password,cert_dir:$dir}

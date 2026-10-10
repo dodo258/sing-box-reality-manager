@@ -52,7 +52,9 @@ echo 'PASS atomic certificate origin switching and repeated activation'
     uuid=$("$CORE" generate uuid)
     jq -n --arg private "$private" --arg public "$public" --arg uuid "$uuid" \
       '{schema:1,policies:[],unlock_dns:null,egress:null,nodes:[{id:"1111111111111111",name:"test",type:"vless",enabled:false,host:"127.0.0.1",port:18101,sni:"www.ctrip.com",uuid:$uuid,private_key:$private,public_key:$public,short_id:"0123456789abcdef"}]}' > "$DATA/cert-test/state.json"
+    # Written as schema 1 on purpose: the real transaction must migrate it.
     apply_state "$DATA/cert-test/state.json"
+    jq -e '.schema==2 and .nodes[0].id=="1111111111111111"' "$STATE" >/dev/null || exit 1
     original=$(readlink "$DATA/current")
     reality_target_check() { return 0; }
     firewall_sync() { [[ $(jq -r '.nodes[0].sni' "$1") != www.ixigua.com ]]; }
@@ -65,6 +67,21 @@ echo 'PASS atomic certificate origin switching and repeated activation'
     ! systemctl is-active --quiet "$SERVICE" || exit 1
 )
 echo 'PASS real Reality configuration transaction rolls back on failure and preserves stopped state'
+# Ports below 1024 work: the service user may bind them and nothing else is granted.
+(
+    source ./srm.sh
+    reality_target_check() { return 0; }
+    [[ -z $(ss -H -ltn 'sport = :853') ]] || { echo 'FAIL port 853 already in use on the runner'; exit 1; }
+    node_change 1111111111111111 port 853
+    node_change 1111111111111111 toggle
+    systemctl is-active --quiet "$SERVICE" || exit 1
+    [[ -n $(ss -H -ltn 'sport = :853') ]] || exit 1
+    [[ $(systemctl show -p AmbientCapabilities --value "$SERVICE") == cap_net_bind_service ]] || exit 1
+    [[ $(systemctl show -p User --value "$SERVICE") == srm ]] || exit 1
+    node_change 1111111111111111 toggle
+    ! systemctl is-active --quiet "$SERVICE" || exit 1
+)
+echo 'PASS a node on port 853 starts under the unprivileged service user'
 # Updates are manual only: installation must not schedule any update job.
 if compgen -G '/etc/systemd/system/srm-update*' > /dev/null; then echo 'FAIL update unit installed'; exit 1; fi
 if crontab -l 2>/dev/null | grep -q srm; then echo 'FAIL update cron job installed'; exit 1; fi

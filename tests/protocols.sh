@@ -41,7 +41,7 @@ if proto_known '' || proto_known vmess || proto_known 'vless anytls'; then fail 
 if proto_call anytls retarget '{}' www.ctrip.com 2>/dev/null; then fail 'optional hook dispatched to a protocol without it'; fi
 echo 'PASS registry rejects unknown names, incomplete protocols and missing hooks'
 
-jq -n '{schema:1,policies:[],unlock_dns:null,egress:null,nodes:[
+jq -n '{schema:2,policies:[],unlock_dns:null,egress:null,nodes:[
  {id:"1111111111111111",name:"r",type:"vless",enabled:true,host:"192.0.2.1",port:18101,sni:"www.ctrip.com",uuid:"0f2a6c1e-3b4d-4e5f-8a9b-0c1d2e3f4a5b",private_key:"private",public_key:"public",short_id:"0123456789abcdef"},
  {id:"2222222222222222",name:"h",type:"hysteria2",enabled:true,host:"192.0.2.1",port:18103,sni:"test.example.com",password:"password",cert_dir:"/certs"}]}' > "$work/state.json"
 validate_state "$work/state.json" || fail 'valid state rejected'

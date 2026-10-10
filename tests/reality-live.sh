@@ -21,7 +21,7 @@ uuid=$("$CORE" generate uuid)
 for domain in www.ctrip.com www.ixigua.com; do
     reality_target_check "$domain"
     jq -n --arg sni "$domain" --arg private "$private" --arg public "$public" --arg uuid "$uuid" \
-      --argjson port "$server_port" '{schema:1,policies:[],unlock_dns:null,egress:null,nodes:[
+      --argjson port "$server_port" '{schema:2,policies:[],unlock_dns:null,egress:null,nodes:[
       {id:"1111111111111111",name:"Reality test",type:"vless",enabled:true,host:"127.0.0.1",port:$port,sni:$sni,uuid:$uuid,private_key:$private,public_key:$public,short_id:"0123456789abcdef"}]}' > "$STATE"
     render_config "$STATE" | jq '.inbounds[].listen="127.0.0.1"' > "$work/server.json"
     node_json "$STATE" 1111111111111111 | client_outbound | jq --argjson port "$client_port" \

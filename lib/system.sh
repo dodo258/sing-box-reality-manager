@@ -44,7 +44,9 @@ PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
 RestrictSUIDSGID=true
-CapabilityBoundingSet=
+# Only for node ports below 1024 (e.g. 443); no other privilege.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 LimitNOFILE=65536
 [Install]
 WantedBy=multi-user.target
@@ -64,7 +66,7 @@ new_candidate() {
     local tmp
     tmp=$(mktemp) || return 1
     chmod 600 "$tmp"
-    if [[ -f $STATE ]]; then cat "$STATE" > "$tmp"; else empty_state > "$tmp"; fi
+    if [[ -f $STATE ]]; then state_upgrade "$STATE" > "$tmp"; else empty_state > "$tmp"; fi || { rm -f "$tmp"; return 1; }
     printf '%s\n' "$tmp"
 }
 service_healthy() {
@@ -107,8 +109,12 @@ recover_pending() {
 }
 apply_state() (
     owned_root || exit 1
-    local candidate=$1 gen old='' active=0 count switched=0
-    validate_state "$candidate" || exit 1
+    local candidate gen old='' active=0 count switched=0
+    # The generation keeps the upgraded copy, so a rollback to an older-schema
+    # generation is migrated too; the file passed in is never modified.
+    candidate=$(mktemp) || exit 1
+    trap 'rm -f "$candidate"' EXIT
+    state_upgrade "$1" > "$candidate" && validate_state "$candidate" || exit 1
     gen=$(mktemp -d "$DATA/generations/g.XXXXXXXX") || exit 1
     chmod 750 "$gen" && chgrp srm "$gen" || exit 1
     if ! render_config "$candidate" > "$gen/config.json" || ! "$CORE" check -c "$gen/config.json"; then
@@ -119,7 +125,7 @@ apply_state() (
     [[ ! -L $DATA/current ]] || old=$(readlink "$DATA/current")
     systemctl is-active --quiet "$SERVICE" && active=1
     jq -n --arg old "$old" --argjson active "$active" '{old:$old,active:$active}' > "$DATA/pending.json" || exit 1
-    trap '[[ $switched == 0 ]] || recover_pending' EXIT
+    trap 'rm -f "$candidate"; [[ $switched == 0 ]] || recover_pending' EXIT
     trap 'exit 130' INT TERM HUP
     switched=1
     switch_generation "$gen" || exit 1
