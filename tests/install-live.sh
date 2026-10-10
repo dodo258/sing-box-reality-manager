@@ -130,10 +130,10 @@ echo 'PASS self-signed TUIC and TCP+UDP Shadowsocks run under the service user'
     ! systemctl is-active --quiet "$unit" && ! systemctl is-enabled --quiet "$unit" || exit 1
     node_change "$id" toggle
     systemctl is-active --quiet "$unit" || exit 1
-    # Quick successive changes restart sing-box and every snell-server more often
-    # than systemd's default start limit (5 in 10 s) allows.
-    for port in 20101 20102 20103 20104 20105 20106; do node_change "$id" port "$port" || logs; done
-    systemctl is-active --quiet "$SERVICE" && systemctl is-active --quiet "$unit" || logs
+    # Quick successive changes restart sing-box and every snell-server; seven
+    # restarts in a row exceed systemd's default start limit (5 in 10 s).
+    for i in 1 2 3 4 5 6 7; do restart_unit "$SERVICE" && restart_unit "$unit" || logs; done
+    service_healthy "$STATE" || logs
     # The v6 node goes; the v5 node keeps running for the uninstall below.
     id=$(jq -r '.nodes[]|select(.name=="snell6")|.id' "$STATE")
     node_change "$id" delete
