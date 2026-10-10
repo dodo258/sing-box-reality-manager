@@ -76,6 +76,8 @@ node_add() {
         msg '二维码、详情和客户端配置：在菜单里选「2. 节点管理」。'
         return 0
     fi
+    # A self-signed certificate made for this node is unused once the deploy fails.
+    rm -rf "$DATA/selfsigned/$id"
     rm -f "$candidate"; return 1
 }
 # Another node of the same protocol gets a numbered default name: <type>, <type>-2, …

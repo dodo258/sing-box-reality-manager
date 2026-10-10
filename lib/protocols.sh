@@ -182,7 +182,8 @@ tls_prompt() {
     local allow=${1:-} default=1 domain=''
     # valid_domain also accepts dotted IPv4 addresses, which cannot get a certificate.
     if [[ ! $host =~ ^[0-9.]+$ ]] && valid_domain "$host"; then domain=$host; fi
-    [[ $allow != selfsigned || -n $domain ]] || default=4
+    # Without any domain (no domain host, no --sni) the self-signed certificate is the default.
+    [[ $allow != selfsigned || -n $domain || -n ${opt_sni:-} ]] || default=4
     if [[ -z ${opt_cert:-} && ${assume_yes:-0} != 1 ]]; then
         msg 'Lets Encrypt 免费证书：1.自动验证（使用空闲 80 或 443） 2.现有网站目录验证（网站保持运行） 3.导入已有证书'
         [[ $allow != selfsigned ]] || msg '不用域名：4.自签证书（客户端按证书指纹校验）'

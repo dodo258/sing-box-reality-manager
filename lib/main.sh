@@ -66,9 +66,9 @@ srm $SRM_VERSION：sing-box 节点管理（$(proto_labels)）
   srm install             只安装运行环境（核心、服务、srm / vasma 命令）
   srm add [协议] [选项]   部署节点，协议：$PROTOCOLS
                             --name 名称  --host 地址  --port 端口|random  --sni 域名
-                            --cert auto|webroot|import|selfsigned（自签只用于 TUIC / Hysteria / Hysteria2）
+                            --cert auto|webroot|import|selfsigned（自签只用于客户端能校验证书指纹的协议）
                             --webroot 目录  --cert-file 文件  --key-file 文件  --email 邮箱
-                            --transport tcp|ws|grpc|httpupgrade（VLESS TLS）
+                            --transport tcp|ws|grpc|httpupgrade（只用于能选传输方式的协议）
                             --bbr enable|keep  --yes（不提问，未给的选项用默认值）
   srm list                列出节点：ID、名称、协议、端口、状态
   srm nodes               节点管理菜单：原始链接、二维码、启停、改端口、重置凭据

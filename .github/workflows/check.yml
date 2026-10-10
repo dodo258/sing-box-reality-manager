@@ -24,6 +24,11 @@ jobs:
         run: |
           source ./srm.sh
           core_download "$RUNNER_TEMP/sing-box"
+          # The naive client in tests/traffic.sh loads libcronet.so from the core's
+          # directory; it comes from the same checksum-pinned archive (servers do not need it).
+          fetch "https://github.com/SagerNet/sing-box/releases/download/v$CORE_VERSION/sing-box-$CORE_VERSION-linux-amd64.tar.gz" "$RUNNER_TEMP/core.tar.gz"
+          [[ $(sha256 "$RUNNER_TEMP/core.tar.gz") == 12cb2816b52febb356f6a885b740cc8758c3f30b8ae0ca8edba80f0d2d35343f ]]
+          tar -xzf "$RUNNER_TEMP/core.tar.gz" -C "$RUNNER_TEMP" --strip-components=1 "sing-box-$CORE_VERSION-linux-amd64/libcronet.so"
       - name: Download checksum-pinned mihomo (Clash Meta) client
         run: |
           curl -fsSL --max-time 120 -o "$RUNNER_TEMP/mihomo.gz" https://github.com/MetaCubeX/mihomo/releases/download/v1.19.32/mihomo-linux-amd64-v1.19.32.gz

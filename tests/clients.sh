@@ -186,8 +186,17 @@ done
 [[ ! -e $work/issued ]] || fail 'self-signed deploy requested a Lets Encrypt certificate'
 node_add self tuic --host vpn.example.com --yes > /dev/null 2>&1 || fail 'tuic with domain'
 [[ $(cat "$work/issued") == 'vpn.example.com auto' ]] && last | jq -e '.sni=="vpn.example.com" and (has("cert_sha256")|not)' >/dev/null || fail 'tuic with a domain uses Lets Encrypt'
+# An IP address plus --sni means the user has a domain: Lets Encrypt, not self-signed.
+node_add self hysteria2 --host 192.0.2.1 --sni hy.example.com --yes > /dev/null 2>&1 || fail 'hysteria2 with --sni'
+[[ $(tail -n 1 "$work/issued") == 'hy.example.com auto' ]] && last | jq -e '.sni=="hy.example.com" and (has("cert_sha256")|not)' >/dev/null ||
+    fail 'IP host with --sni fell back to a self-signed certificate'
 node_add self hysteria --host 192.0.2.1 --cert selfsigned --sni cdn.example.com --yes > /dev/null 2>&1 || fail 'self-signed with --sni'
 last | jq -e '.sni=="cdn.example.com" and .cert_sha256' >/dev/null || fail 'self-signed --sni'
+# A failed deploy leaves no self-signed certificate behind.
+apply_state() { return 1; }
+if node_add self tuic --host 192.0.2.1 --yes > /dev/null 2>&1; then fail 'failed apply reported success'; fi
+[[ $(find "$DATA/selfsigned" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ') == $(jq '[.nodes[]|select(.cert_sha256)]|length' "$STATE") ]] || fail 'orphaned self-signed certificate'
+apply_state() { validate_state "$1" && cp "$1" "$STATE"; }
 echo 'PASS TUIC and Hysteria without a domain get a self-signed certificate whose pins match; with a domain they use Lets Encrypt'
 
 for transport in tcp ws grpc httpupgrade; do
