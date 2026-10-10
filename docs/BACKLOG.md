@@ -6,7 +6,7 @@
 
 从上往下做。正在做的条目后面标「（进行中：分支名 时间）」。
 
-- [ ] v4 旧版迁移（菜单引导，命令行 srm migrate）—— 属于 `docs/specs/2026-10-10-v4-rewrite.md`「迁移」一节：从 `/etc/v2ray-agent` 读取 v3 的 sing-box 节点（包括 `30_`–`33_` 多实例文件、密钥、证书）和 `snell-shadowtls/nodes/*.env`，v4 支持的协议都迁过来，生成 schema 2 的 state；检测到 `/etc/v2ray-agent` 时，打开菜单第一屏就提示「发现旧版节点，要迁移过来吗？」，选是先展示能迁和不能迁的内容，再「确认 / 返回」（默认返回）；命令行 `srm migrate` 默认 dry-run，列出能迁移和不能迁移的内容（Xray 核心的节点、网站、订阅）；`--apply` 时停旧服务，由新服务接管原端口，健康检查失败就恢复旧服务；旧 crontab 行注释掉不删；`/etc/v2ray-agent` 一个字节都不改。验收：测试证明只靠菜单选择就能完成迁移；`tests/fixtures/v3/` 放至少 4 份脱敏的 v3 配置样本（单 Reality、Reality+AnyTLS+Hy2、多实例、Snell+ShadowTLS），断言迁移结果；测试证明 `--apply` 失败时旧服务被恢复；CI 全绿。
+- [ ] v4 旧版迁移（菜单引导，命令行 srm migrate）—— 属于 `docs/specs/2026-10-10-v4-rewrite.md`「迁移」一节：从 `/etc/v2ray-agent` 读取 v3 的 sing-box 节点（包括 `30_`–`33_` 多实例文件、密钥、证书）和 `snell-shadowtls/nodes/*.env`，v4 支持的协议都迁过来，生成 schema 2 的 state；检测到 `/etc/v2ray-agent` 时，打开菜单第一屏就提示「发现旧版节点，要迁移过来吗？」，选是先展示能迁和不能迁的内容，再「确认 / 返回」（默认返回）；命令行 `srm migrate` 默认 dry-run，列出能迁移和不能迁移的内容（Xray 核心的节点、网站、订阅）；`--apply` 时停旧服务，由新服务接管原端口，健康检查失败就恢复旧服务；旧 crontab 行注释掉不删；`/etc/v2ray-agent` 一个字节都不改。验收：测试证明只靠菜单选择就能完成迁移；`tests/fixtures/v3/` 放至少 4 份脱敏的 v3 配置样本（单 Reality、Reality+AnyTLS+Hy2、多实例、Snell+ShadowTLS），断言迁移结果；测试证明 `--apply` 失败时旧服务被恢复；CI 全绿。（进行中：agent/1010-migrate 2026-10-10）
 
 ## 等主人拍板
 
