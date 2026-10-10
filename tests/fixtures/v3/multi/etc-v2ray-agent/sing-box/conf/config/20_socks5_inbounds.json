@@ -1,0 +1,16 @@
+{
+  "inbounds": [
+    {
+      "type": "socks",
+      "listen": "::",
+      "listen_port": 31447,
+      "tag": "s5_in",
+      "users": [
+        {
+          "username": "0a1b2c3d-1111-4222-8333-444455556666",
+          "password": "0a1b2c3d-1111-4222-8333-444455556666"
+        }
+      ]
+    }
+  ]
+}

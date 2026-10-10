@@ -1,0 +1,22 @@
+{
+  "inbounds": [
+    {
+      "type": "anytls",
+      "listen": "::",
+      "tag": "AnyTLSMulti31445",
+      "listen_port": 31445,
+      "users": [
+        {
+          "password": "4e5f6071-5555-4666-8777-88889999aaaa",
+          "name": "dave-anytls"
+        }
+      ],
+      "tls": {
+        "server_name": "vpn.example.com",
+        "enabled": true,
+        "certificate_path": "/etc/v2ray-agent/tls/vpn.example.com.crt",
+        "key_path": "/etc/v2ray-agent/tls/vpn.example.com.key"
+      }
+    }
+  ]
+}

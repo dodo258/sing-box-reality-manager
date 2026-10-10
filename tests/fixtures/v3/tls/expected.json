@@ -1,0 +1,18 @@
+{
+  "nodes": [
+    {"name": "vlesstls-33443", "type": "vlesstls", "port": 33443, "enabled": true, "sni": "vpn.example.com", "transport": "tcp",
+     "uuid": "5e6f7081-6666-4777-8888-9999aaaabbbb", "cert_dir": "certs/vpn.example.com/active"},
+    {"name": "vlesstls-33444", "type": "vlesstls", "port": 33444, "enabled": true, "sni": "vpn.example.com", "transport": "ws",
+     "path": "/qwerws", "early_data": true, "uuid": "5e6f7081-6666-4777-8888-9999aaaabbbb", "cert_dir": "certs/vpn.example.com/active"},
+    {"name": "trojan-33445", "type": "trojan", "port": 33445, "enabled": true, "sni": "vpn.example.com",
+     "password": "5e6f7081-6666-4777-8888-9999aaaabbbb", "cert_dir": "certs/vpn.example.com/active"},
+    {"name": "vmess-33446", "type": "vmess", "port": 33446, "enabled": true, "sni": "vpn.example.com", "path": "/qwer", "early_data": true,
+     "uuid": "5e6f7081-6666-4777-8888-9999aaaabbbb", "cert_dir": "certs/vpn.example.com/active"},
+    {"name": "tuic-33447", "type": "tuic", "port": 33447, "enabled": true, "sni": "vpn.example.com",
+     "uuid": "5e6f7081-6666-4777-8888-9999aaaabbbb", "password": "5e6f7081-6666-4777-8888-9999aaaabbbb", "cert_dir": "certs/vpn.example.com/active"},
+    {"name": "naive-33448", "type": "naive", "port": 33448, "enabled": true, "sni": "vpn.example.com",
+     "username": "5e6f7081-singbox_naive", "password": "5e6f7081-6666-4777-8888-9999aaaabbbb", "cert_dir": "certs/vpn.example.com/active"}
+  ],
+  "skipped": [],
+  "units": ["dodo258-sing-box.service"]
+}

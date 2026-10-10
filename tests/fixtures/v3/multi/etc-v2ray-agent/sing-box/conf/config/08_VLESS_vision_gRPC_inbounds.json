@@ -1,0 +1,36 @@
+{
+  "inbounds": [
+    {
+      "type": "vless",
+      "listen": "::",
+      "listen_port": 31446,
+      "tag": "VLESSRealityGRPC",
+      "users": [
+        {
+          "uuid": "0a1b2c3d-1111-4222-8333-444455556666",
+          "name": "0a1b2c3d-VLESS_Reality_gPRC"
+        }
+      ],
+      "tls": {
+        "enabled": true,
+        "server_name": "www.example.com",
+        "reality": {
+          "enabled": true,
+          "handshake": {
+            "server": "www.example.com",
+            "server_port": 443
+          },
+          "private_key": "KHNTAarbRs3yCCRcXb7D3xH6yR_jjX3Hp57f6B-yKkI",
+          "short_id": [
+            "",
+            "6ba85179e30d4fc2"
+          ]
+        }
+      },
+      "transport": {
+        "type": "grpc",
+        "service_name": "grpc"
+      }
+    }
+  ]
+}

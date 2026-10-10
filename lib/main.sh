@@ -25,6 +25,8 @@ main_menu() {
     require_linux || return 1
     # Leaving quick deploy without a node is fine here; `srm add` treats it as a failure.
     local IN_MENU=1
+    # A v3 installation whose nodes have not moved: offered before anything else.
+    if migrate_pending; then menu_header; migrate_offer; fi
     # No node yet: straight into quick deploy; 0 there shows the menu.
     if [[ ! -f $STATE ]] || ! jq -e '.nodes|length > 0' "$STATE" >/dev/null 2>&1; then
         menu_header
@@ -32,7 +34,9 @@ main_menu() {
     fi
     while :; do
         menu_header
-        msg $'  1. 添加节点 · 快速部署\n  2. 节点管理 · 原始链接 / 二维码\n  3. 流媒体分流 · 解锁 DNS / 代理出口\n  4. 运行状态 · 日志 / 重启 / 防火墙\n  5. 更新 · 新版本检查 / 回滚\n  6. BBR 与系统检测\n  7. 卸载\n  8. 证书管理 · 到期时间 / 自动续期\n\n  0. 退出\n'
+        msg $'  1. 添加节点 · 快速部署\n  2. 节点管理 · 原始链接 / 二维码\n  3. 流媒体分流 · 解锁 DNS / 代理出口\n  4. 运行状态 · 日志 / 重启 / 防火墙\n  5. 更新 · 新版本检查 / 回滚\n  6. BBR 与系统检测\n  7. 卸载\n  8. 证书管理 · 到期时间 / 自动续期'
+        ! migrate_pending || msg '  9. 迁移旧版节点 · 发现 v3 安装'
+        msg $'\n  0. 退出\n'
         ask '请选择' || return 0
         case $REPLY in
           1) with_lock node_add "$SRM_SELF";;
@@ -46,6 +50,7 @@ main_menu() {
             yesno '当前内核支持时自动开启 BBR + FQ（不更换内核、不重启）' && with_lock bbr_enable;;
           7) with_lock uninstall; [[ -f $SRM_ROOT/.srm-owned ]] || return 0;;
           8) certificate_menu;;
+          9) if migrate_pending; then migrate_menu; else err '无效选项。'; fi;;
           *) err '无效选项。';;
         esac
     done
@@ -113,6 +118,9 @@ srm $SRM_VERSION：sing-box 节点管理（$(proto_labels)）
                           更新 sing-box 或 $(program_labels) 会重启服务、断开连接几秒，--yes 跳过确认
   srm update-check [on|off|status|run]
                           每日检查新版本（只查版本号，不下载、不重启）：开启、关闭、查看（默认）、立即检查
+  srm migrate [--apply] [--yes] [--host 地址]
+                          迁移旧版（v3，$V3_ROOT）的节点：默认只预览能迁移和不能迁移的内容；
+                          --apply 执行（停止旧服务，srm 在原端口接管，失败恢复旧服务），--yes 不再确认
   srm uninstall [--yes]   卸载（默认需要确认）
   srm render STATE        用 state 文件生成 sing-box 配置（调试用）
   srm version             版本
@@ -186,6 +194,7 @@ main() {
           run) require_linux && update_check_run;;
           *) err '用法：srm update-check [on|off|status|run]'; return 1;;
         esac;;
+      migrate) shift; migrate_command "$@";;
       uninstall)
         case ${2:-} in -y|--yes) assume_yes=1;; '') ;; *) err '用法：srm uninstall [--yes]'; return 1;; esac
         with_lock uninstall;;

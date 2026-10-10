@@ -26,6 +26,13 @@
 # (jq string: the program variant a node runs, e.g. "v6"), program_path KEY,
 # program_current KEY (installed version), program_latest KEY… (one network lookup;
 # prints KEY<TAB>VERSION lines) and program_fetch KEY VERSION TARGET (download and verify).
+# Moving v3 installations (lib/migrate.sh), all optional: v3_import INBOUND (one inbound
+# of v3's sing-box configuration: returns 0 with REPLY = the node's protocol fields, 1
+# when the inbound is another protocol's, 2 when it is this protocol's but cannot move,
+# REPLY = the reason; the first user is taken and certificates are handled by the
+# migration), v3_scan ROOT (nodes v3 kept in files of their own: one JSON line each,
+# {label, units, node} or {label, units, skip}, optional note) and v3_prepare NODE
+# (install what the node needs before it starts, e.g. a server program).
 PROTO_HOOKS='label transport domain link_clients validate render_inbound share_uri client_outbound secrets prompt create rotate'
 PROTOCOLS=''
 # First page of the quick-deploy list, in this order; the rest are under 「更多协议」.
@@ -42,6 +49,9 @@ PROTO_JQ_DEFS='
   def clash_pin: if pinned then {fingerprint:.cert_sha256} else {} end;
   def surge_head($type): "\(.name|gsub("[,=]";" ")) = \($type), \(.host), \(.port)";
   def surge_pin: if pinned then ", server-cert-fingerprint-sha256=\(.cert_sha256)" else "" end;
+  # ws early data in the Sec-WebSocket-Protocol header, kept for nodes moved from v3
+  # whose sing-box clients send it; clients without early data still connect.
+  def early_data_server: if .early_data then {max_early_data:2048,early_data_header_name:"Sec-WebSocket-Protocol"} else {} end;
 '
 proto_register() {
     local type=$1 hook
@@ -155,6 +165,34 @@ proto_vless_retarget_label() { printf '切换 Reality 目标（携程 / 西瓜�
 proto_vless_retarget_select() { reality_target_select; }
 # REPLY = JSON fields to merge, or empty when the node already uses the target.
 proto_vless_retarget() { handshake_retarget "$@"; }
+# v3 Reality: the handshake server is the SNI, and v3 links use its fixed non-empty
+# shortId, which the node keeps so clients need no change.
+proto_vless_v3_import() {
+    local in=$1 public
+    jq -e '.type == "vless" and .tls.reality.enabled == true' <<< "$in" >/dev/null || return 1
+    if ! jq -e '.transport == null' <<< "$in" >/dev/null; then
+        REPLY="v4 的 Reality 只支持 TCP Vision，不支持 $(jq -r '.transport.type' <<< "$in") 传输"; return 2
+    fi
+    # srm uses one name for the handshake target and the SNI clients send.
+    jq -e '(.tls.reality.handshake.server_port // 443) == 443 and .tls.reality.handshake.server == .tls.server_name and .users[0].flow == "xtls-rprx-vision"' <<< "$in" >/dev/null ||
+        { REPLY='握手目标不是「SNI 同名域名:443」或没有 Vision 流控，v4 不支持'; return 2; }
+    REPLY=$(jq -c '{sni:.tls.reality.handshake.server,uuid:(.users[0].uuid|ascii_downcase),private_key:.tls.reality.private_key,
+        short_id:([.tls.reality.short_id[]?|select(test("^[a-f0-9]{16}$"))][0])}' <<< "$in") || return 1
+    jq -e '.short_id and (.private_key|type == "string")' <<< "$REPLY" >/dev/null || { REPLY='缺少 16 位 shortId 或私钥'; return 2; }
+    public=$(reality_public_key "$(jq -r .private_key <<< "$REPLY")") || { REPLY='私钥无法读取'; return 2; }
+    REPLY=$(jq -c --arg p "$public" '. + {public_key:$p}' <<< "$REPLY")
+}
+# X25519 public key of a Reality private key (both base64url without padding): the raw
+# key is wrapped in its PKCS#8 header so openssl can derive the public half.
+reality_public_key() {
+    local key out
+    key=$(printf '%s' "$1" | tr '_-' '/+')
+    [[ $key =~ ^[A-Za-z0-9+/]{43}$ ]] || return 1
+    out=$({ printf '\x30\x2e\x02\x01\x00\x30\x05\x06\x03\x2b\x65\x6e\x04\x22\x04\x20'; printf '%s=' "$key" | openssl base64 -d -A; } |
+        openssl pkey -inform DER -pubout -outform DER 2>/dev/null | tail -c 32 | openssl base64 -A | tr '+/' '-_' | tr -d '=') || return 1
+    [[ $out =~ ^[A-Za-z0-9_-]{43}$ ]] && printf '%s\n' "$out"
+}
+
 # Reality and ShadowTLS borrow the TLS 1.3 handshake of the same vetted sites.
 # Without --sni the target is picked at create time (handshake_target_ready).
 handshake_target_prompt() {
@@ -291,6 +329,14 @@ with_uuid() {
     REPLY=$(jq -c --arg v "$value" '. + {uuid:$v}' <<< "${REPLY:-null}")
 }
 UUID_VALID='(.uuid|test("^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$"))'
+# v3_import of a TLS protocol without a transport: an INBOUND of sing-box TYPE with a
+# certificate; FIELDS (jq) are taken from it along with the SNI.
+v3_tls_import() {
+    local in=$1 type=$2 fields=$3
+    jq -e --arg t "$type" '.type == $t and .tls.enabled == true and .tls.reality.enabled != true' <<< "$in" >/dev/null || return 1
+    jq -e '.transport == null' <<< "$in" >/dev/null || { REPLY="v4 不支持这种节点带 $(jq -r .transport.type <<< "$in") 传输"; return 2; }
+    REPLY=$(jq -c "{sni:.tls.server_name} + ($fields)" <<< "$in")
+}
 
 # --- AnyTLS ------------------------------------------------------------------
 proto_anytls_label() { printf 'AnyTLS'; }
@@ -310,6 +356,7 @@ proto_anytls_secrets() { printf '%s' '.password'; }
 proto_anytls_prompt() { tls_prompt; }
 proto_anytls_create() { tls_create && with_password; }
 proto_anytls_rotate() { REPLY=''; with_password; }
+proto_anytls_v3_import() { v3_tls_import "$1" anytls '{password:.users[0].password}'; }
 
 # --- Hysteria2 ---------------------------------------------------------------
 proto_hysteria2_label() { printf 'Hysteria2'; }
@@ -333,6 +380,10 @@ proto_hysteria2_secrets() { printf '%s' '.password'; }
 proto_hysteria2_prompt() { tls_prompt selfsigned; }
 proto_hysteria2_create() { tls_create && with_password; }
 proto_hysteria2_rotate() { REPLY=''; with_password; }
+proto_hysteria2_v3_import() {
+    if jq -e '.type == "hysteria2" and .obfs != null' <<< "$1" >/dev/null; then REPLY='带 obfs 混淆的 Hysteria2，v4 不支持'; return 2; fi
+    v3_tls_import "$1" hysteria2 '{password:.users[0].password}'
+}
 
 # --- Snell v6 / v5 + ShadowTLS v3 --------------------------------------------
 # The official snell-server runs as its own service srm-snell@<node id> and listens
@@ -436,7 +487,8 @@ proto_snell_domain() { printf 'none'; }
 proto_snell_link_clients() { :; }
 proto_snell_hint() { printf 'Surge 用户 · 不需要域名'; }
 proto_snell_validate() {
-    printf '%s' '(.sni|text) and (.psk|test("^[a-f0-9]{32}$")) and (.shadowtls_password|test("^[a-f0-9]{32}$")) and
+    # New nodes get 32 hex digits; nodes moved from v3 keep their letters and digits.
+    printf '%s' '(.sni|text) and (.psk|test("^[A-Za-z0-9._~-]{8,255}$")) and (.shadowtls_password|test("^[A-Za-z0-9._~-]{8,255}$")) and
       (.local_port|type == "number" and floor == . and . >= 1 and . <= 65535) and
       ((.snell_version == 6 and (.snell_mode == "default" or .snell_mode == "unshaped")) or (.snell_version == 5 and .snell_mode == null))'
 }
@@ -503,18 +555,20 @@ proto_snell_variant() {
 proto_snell_create() {
     local psk password local_port
     handshake_target_ready && snell_install "$proto_version" || return 1
-    psk=$(random_hex 16) && password=$(random_hex 16) || return 1
-    # snell-server listens on its own loopback port, never the node port ($port of node_add),
-    # and below Linux's default ephemeral range (32768–60999): a source port of a live
-    # connection could otherwise block snell-server from binding it again on restart.
-    local tries
-    for ((tries=0; tries<100; tries++)); do
-        local_port=$(choose_port) || return 1
-        (( local_port < 32768 )) && [[ $local_port != "$port" ]] && break
-    done
-    (( tries < 100 )) || { err '未找到空闲的本机端口。'; return 1; }
+    psk=$(random_hex 16) && password=$(random_hex 16) && local_port=$(snell_local_port "$port") || return 1
     REPLY=$(jq -nc --argjson v "$proto_version" --arg m "$proto_mode" --arg psk "$psk" --arg pw "$password" --argjson lp "$local_port" \
         '{snell_version:$v} + (if $v == 6 then {snell_mode:$m} else {} end) + {psk:$psk,shadowtls_password:$pw,local_port:$lp}')
+}
+# snell-server listens on its own loopback port, never the node port PORT, and below
+# Linux's default ephemeral range (32768–60999): a source port of a live connection
+# could otherwise block snell-server from binding it again on restart.
+snell_local_port() {
+    local tries candidate
+    for ((tries=0; tries<100; tries++)); do
+        candidate=$(choose_port) || return 1
+        if (( candidate < 32768 )) && [[ $candidate != "$1" ]]; then printf '%s\n' "$candidate"; return 0; fi
+    done
+    err '未找到空闲的本机端口。'; return 1
 }
 proto_snell_rotate() {
     local psk password
@@ -524,6 +578,40 @@ proto_snell_rotate() {
 proto_snell_retarget_label() { printf '切换 ShadowTLS 握手目标（携程 / 西瓜视频）'; }
 proto_snell_retarget_select() { reality_target_select; }
 proto_snell_retarget() { handshake_retarget "$@"; }
+# v3 kept each Snell + ShadowTLS node in snell-shadowtls/nodes/<id>.env (shell
+# assignments, read as text and never sourced), served by snell-server v4 or v5 behind
+# the standalone shadow-tls binary, units dodo258-snell-<id> and dodo258-shadowtls-<id>.
+# Both versions move to snell-server v5, which accepts v4 clients (kb.nssurge.com
+# release notes), so the Surge lines in use keep working.
+proto_snell_v3_scan() {
+    local file id version port target target_port psk password dns units node note label skip local_port pattern='^[A-Za-z0-9._~-]{8,255}$'
+    for file in "$1"/snell-shadowtls/nodes/*.env; do
+        [[ -f $file ]] || continue
+        id=$(env_value "$file" nodeId); version=$(env_value "$file" snellVersion); port=$(env_value "$file" publicPort)
+        target=$(env_value "$file" targetDomain); target_port=$(env_value "$file" targetPort)
+        psk=$(env_value "$file" snellPSK); password=$(env_value "$file" shadowTLSPassword); dns=$(env_value "$file" snellNodeDNS)
+        units='[]'; node=''; note=''
+        [[ ! $id =~ ^[A-Za-z0-9_.-]+$ ]] || units=$(jq -nc --arg id "$id" '["dodo258-snell-\($id).service","dodo258-shadowtls-\($id).service"]')
+        label="Snell v${version:-?} + ShadowTLS（端口 ${port:-?}，${file##*/}）" skip=''
+        if [[ $units == '[]' ]]; then skip='节点文件缺少有效的 nodeId'
+        elif [[ $version != 4 && $version != 5 ]]; then skip='只能迁移 Snell v4 和 v5'
+        elif ! valid_port "$port"; then skip='端口无效'
+        elif [[ ${target_port:-443} != 443 ]] || ! valid_domain "$target"; then skip='ShadowTLS 握手目标不是「域名:443」，v4 不支持'
+        elif [[ ! $psk =~ $pattern || ! $password =~ $pattern ]]; then skip='PSK 或 ShadowTLS 密码含 v4 不支持的字符'
+        else
+            local_port=$(snell_local_port "$port") || return 1
+            node=$(jq -nc --argjson port "$port" --arg sni "$target" --arg psk "$psk" --arg pw "$password" --argjson lp "$local_port" \
+                '{type:"snell",port:$port,sni:$sni,snell_version:5,psk:$psk,shadowtls_password:$pw,local_port:$lp}')
+            [[ $version != 4 ]] || note='Snell v4 节点改由 snell-server v5 运行（兼容 v4 客户端），Surge 里原来的配置行不用改。'
+            [[ -z $dns ]] || note+="节点 DNS（$dns）不迁移，snell-server 改用系统 DNS。"
+        fi
+        jq -nc --arg label "$label" --argjson units "$units" --arg skip "$skip" --arg node "$node" --arg note "$note" \
+            '{label:$label,units:$units} + (if $skip != "" then {skip:$skip} else {node:($node|fromjson)} end) + (if $note != "" then {note:$note} else {} end)'
+    done
+}
+proto_snell_v3_prepare() { snell_install "$(jq -r .snell_version <<< "$1")"; }
+# Value of KEY='value' in a file of shell assignments, without running it.
+env_value() { sed -n "s/^$2='\(.*\)'\$/\1/p" "$1" | head -n 1; }
 proto_snell_sidecar() { printf '%s' '"srm-snell@\(.id).service"'; }
 proto_snell_program_label() { printf 'Snell'; }
 proto_snell_program_key() { printf '%s' '"v\(.snell_version)"'; }
@@ -609,6 +697,7 @@ proto_tuic_secrets() { printf '%s' '.uuid,.password'; }
 proto_tuic_prompt() { tls_prompt selfsigned; }
 proto_tuic_create() { tls_create && with_uuid && with_password; }
 proto_tuic_rotate() { REPLY=''; with_uuid && with_password; }
+proto_tuic_v3_import() { v3_tls_import "$1" tuic '{uuid:(.users[0].uuid|ascii_downcase),password:.users[0].password}'; }
 
 # --- VLESS + TLS (tcp Vision / ws / grpc / httpupgrade) ----------------------
 # Node field "transport" picks the stream; ws and httpupgrade carry a random
@@ -621,11 +710,12 @@ proto_vlesstls_validate() {
     printf '%s and %s and %s' "$(tls_validate)" "$UUID_VALID" '(
       (.transport == "tcp") or
       ((.transport == "ws" or .transport == "httpupgrade") and (.path|test("^/[A-Za-z0-9_-]+$"))) or
-      (.transport == "grpc" and (.service_name|test("^[A-Za-z0-9_-]+$"))))'
+      (.transport == "grpc" and (.service_name|test("^[A-Za-z0-9_-]+$")))) and
+      (.early_data == null or (.early_data == true and .transport == "ws"))'
 }
 STREAM_JQ_DEFS='
   def stream_alpn: if .transport == "grpc" then ["h2"] elif .transport == "tcp" then null else ["http/1.1"] end;
-  def stream_server: if .transport == "ws" then {transport:{type:"ws",path:.path}}
+  def stream_server: if .transport == "ws" then {transport:({type:"ws",path:.path} + early_data_server)}
     elif .transport == "httpupgrade" then {transport:{type:"httpupgrade",path:.path}}
     elif .transport == "grpc" then {transport:{type:"grpc",service_name:.service_name}} else {} end;
   def stream_client: if .transport == "ws" then {transport:{type:"ws",path:.path,headers:{Host:.sni}}}
@@ -680,6 +770,17 @@ proto_vlesstls_create() {
       (if $t == "grpc" then {service_name:$r} elif $t == "tcp" then {} else {path:("/"+$r)} end)' <<< "$REPLY")
 }
 proto_vlesstls_rotate() { REPLY=''; with_uuid; }
+proto_vlesstls_v3_import() {
+    local in=$1 stream
+    jq -e '.type == "vless" and .tls.enabled == true and .tls.reality.enabled != true' <<< "$in" >/dev/null || return 1
+    stream=$(jq -c '.transport as $t |
+      if $t == null then (if .users[0].flow == "xtls-rprx-vision" then {transport:"tcp"} else empty end)
+      elif $t.type == "ws" then {transport:"ws",path:$t.path} + (if ($t.max_early_data // 0) > 0 then {early_data:true} else {} end)
+      elif $t.type == "httpupgrade" then {transport:"httpupgrade",path:$t.path}
+      elif $t.type == "grpc" then {transport:"grpc",service_name:$t.service_name} else empty end' <<< "$in")
+    [[ -n $stream ]] || { REPLY='v4 的 VLESS TLS 只支持 Vision 流控的 TCP、ws、grpc、httpupgrade'; return 2; }
+    REPLY=$(jq -c --argjson s "$stream" '{sni:.tls.server_name,uuid:(.users[0].uuid|ascii_downcase)} + $s' <<< "$in")
+}
 
 # --- Trojan ------------------------------------------------------------------
 proto_trojan_label() { printf 'Trojan'; }
@@ -698,6 +799,7 @@ proto_trojan_secrets() { printf '%s' '.password'; }
 proto_trojan_prompt() { tls_prompt; }
 proto_trojan_create() { tls_create && with_password; }
 proto_trojan_rotate() { REPLY=''; with_password; }
+proto_trojan_v3_import() { v3_tls_import "$1" trojan '{password:.users[0].password}'; }
 
 # --- VMess (TLS + ws) --------------------------------------------------------
 # alterId 0: VMess AEAD only. Kept for older clients.
@@ -705,10 +807,10 @@ proto_vmess_label() { printf 'VMess TLS+ws'; }
 proto_vmess_transport() { printf 'tcp'; }
 proto_vmess_domain() { printf 'required'; }
 proto_vmess_link_clients() { printf 'Shadowrocket v2rayN'; }
-proto_vmess_validate() { printf '%s and %s and %s' "$(tls_validate)" "$UUID_VALID" '(.path|test("^/[A-Za-z0-9_-]+$"))'; }
+proto_vmess_validate() { printf '%s and %s and %s' "$(tls_validate)" "$UUID_VALID" '(.path|test("^/[A-Za-z0-9_-]+$")) and (.early_data == null or .early_data == true)'; }
 proto_vmess_render_inbound() {
     printf '%s' '[base_inbound + {type:"vmess",users:[{name:.id,uuid:.uuid,alterId:0}],
-      tls:({enabled:true,server_name:.sni,alpn:["http/1.1"]} + tls_files),transport:{type:"ws",path:.path}}]'
+      tls:({enabled:true,server_name:.sni,alpn:["http/1.1"]} + tls_files),transport:({type:"ws",path:.path} + early_data_server)}]'
 }
 # v2rayN format: vmess:// + base64 of a JSON object with string values.
 proto_vmess_share_uri() {
@@ -733,6 +835,14 @@ proto_vmess_create() {
     REPLY=$(jq -c --arg r "/$route" '. + {path:$r}' <<< "$REPLY")
 }
 proto_vmess_rotate() { REPLY=''; with_uuid; }
+proto_vmess_v3_import() {
+    local in=$1
+    jq -e '.type == "vmess"' <<< "$in" >/dev/null || return 1
+    jq -e '.tls.enabled == true and .transport.type == "ws" and (.users[0].alterId // 0) == 0' <<< "$in" >/dev/null ||
+        { REPLY='v4 的 VMess 只支持 TLS + ws（alterId 0）'; return 2; }
+    REPLY=$(jq -c '{sni:.tls.server_name,uuid:(.users[0].uuid|ascii_downcase),path:.transport.path}
+        + (if (.transport.max_early_data // 0) > 0 then {early_data:true} else {} end)' <<< "$in")
+}
 
 # --- Naive -------------------------------------------------------------------
 # HTTP/2 over TLS only (no QUIC). Naive clients connect by the certificate domain,
@@ -741,11 +851,12 @@ proto_naive_label() { printf 'Naive'; }
 proto_naive_transport() { printf 'tcp'; }
 proto_naive_domain() { printf 'required'; }
 proto_naive_link_clients() { printf 'v2rayN'; }
-proto_naive_validate() { printf '%s and (.username|test("^[a-f0-9]{12}$")) and (.password|text)' "$(tls_validate)"; }
+# New nodes get 12 hex digits; nodes moved from v3 keep names like "abcd1234-singbox_naive".
+proto_naive_validate() { printf '%s and (.username|test("^[A-Za-z0-9._-]{1,64}$")) and (.password|text)' "$(tls_validate)"; }
 proto_naive_render_inbound() {
     printf '%s' '[base_inbound + {type:"naive",network:"tcp",users:[{username:.username,password:.password}],tls:({enabled:true,server_name:.sni} + tls_files)}]'
 }
-proto_naive_share_uri() { printf '%s' '"naive+https://\(.username):\(.password|@uri)@\(.sni):\(.port)#\(.name|@uri)"'; }
+proto_naive_share_uri() { printf '%s' '"naive+https://\(.username|@uri):\(.password|@uri)@\(.sni):\(.port)#\(.name|@uri)"'; }
 proto_naive_client_outbound() { printf '%s' 'base_outbound + {type:"naive",username:.username,password:.password,tls:tls_client}'; }
 proto_naive_secrets() { printf '%s' '.username,.password'; }
 proto_naive_prompt() { tls_prompt; }
@@ -755,6 +866,7 @@ proto_naive_create() {
     REPLY=$(jq -c --arg u "$user" '. + {username:$u}' <<< "$REPLY")
 }
 proto_naive_rotate() { REPLY=''; with_password; }
+proto_naive_v3_import() { v3_tls_import "$1" naive '{username:.users[0].username,password:.users[0].password}'; }
 
 # --- Hysteria v1 (older clients only) ----------------------------------------
 # Clients must state their bandwidth; links and snippets use 30 Mbps up and

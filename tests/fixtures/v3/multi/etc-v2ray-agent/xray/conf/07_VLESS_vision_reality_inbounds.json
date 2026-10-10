@@ -1,0 +1,22 @@
+{
+  "inbounds": [
+    {
+      "port": 31448,
+      "protocol": "vless",
+      "tag": "VLESSReality",
+      "settings": {
+        "clients": [
+          {
+            "id": "0a1b2c3d-1111-4222-8333-444455556666",
+            "flow": "xtls-rprx-vision"
+          }
+        ],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "reality"
+      }
+    }
+  ]
+}

@@ -1,5 +1,8 @@
 # Nodes using a domain certificate (Let's Encrypt or imported); self-signed nodes
 # keep their own ten-year certificate, pinned by clients, and are never renewed.
+# Origins (active/renewal-source): acme (renewed here), import (renewed by its own
+# tool) and v3 (moved from v3, whose renewal job is off: within 30 days of expiry a
+# new Let's Encrypt certificate is requested, which turns it into acme).
 CERT_NODES='.cert_dir != null and .cert_sha256 == null'
 ensure_acme() {
     [[ -x $ACME ]] && return 0
@@ -28,7 +31,7 @@ cert_valid() {
 }
 activate_cert() {
     local domain=$1 source=$2 origin=${3:-import} dir gen old='' active=0
-    case $origin in acme|import) ;; *) return 1;; esac
+    case $origin in acme|import|v3) ;; *) return 1;; esac
     valid_domain "$domain" && cert_valid "$source/fullchain.pem" "$source/key.pem" "$domain" || { err '证书校验失败。'; return 1; }
     dir=$DATA/certs/$domain
     install -d -m 750 -o root -g srm "$dir" || return 1
@@ -62,10 +65,12 @@ copy_acme_cert() {
         activate_cert "$domain" "$tmp" acme || rc=1
     return "$rc"
 }
+# issue_certificate DOMAIN MODE [EMAIL] [WEBROOT] [force]: force requests one even
+# while the current certificate is still valid.
 issue_certificate() (
     local domain=$1 mode=$2 email=${3:-} webroot=${4:-} rc=0 probe
     valid_domain "$domain" || exit 1
-    if cert_reusable "$domain"; then msg '复用有效证书。'; exit 0; fi
+    if [[ ${5:-} != force ]] && cert_reusable "$domain"; then msg '复用有效证书。'; exit 0; fi
     if [[ $mode == auto ]]; then
         mode=$(cert_auto_mode) || { err '80 和 443 已被占用（或留给正在部署的节点），请改用现有网站目录验证（--cert webroot）或导入证书（--cert import）。'; exit 1; }
         msg "自动选择证书验证方式：$mode"
@@ -167,6 +172,12 @@ renew_certificates() {
     [[ -f $STATE ]] || return 0
     local domain rc failures=0
     while IFS= read -r domain; do
+        if [[ $(certificate_source "$domain") == v3 ]]; then
+            openssl x509 -in "$DATA/certs/$domain/active/fullchain.pem" -noout -checkend 2592000 >/dev/null 2>&1 && continue
+            msg "从旧版迁移来的证书 $domain 30 天内到期，向 Let's Encrypt 申请新证书。"
+            issue_certificate "$domain" auto '' '' force || { err "证书申请失败：${domain}；保留当前证书，明天再试。"; failures=$((failures+1)); }
+            continue
+        fi
         [[ $(certificate_source "$domain") == acme ]] || continue
         # Record a verified legacy association before acme.sh replaces its export.
         # Otherwise a failed activation makes the still-active old cert look imported.
@@ -194,7 +205,7 @@ certificate_source() {
     local domain=$1 active=$DATA/certs/$1/active account=$SRM_ROOT/acme-accounts/$1 value
     if [[ -f $active/renewal-source ]]; then
         value=$(cat "$active/renewal-source") || return 1
-        case $value in acme|import) printf '%s\n' "$value";; *) printf 'unknown\n';; esac
+        case $value in acme|import|v3) printf '%s\n' "$value";; *) printf 'unknown\n';; esac
     elif [[ -f $account/${domain}_ecc/$domain.conf && -f $account/export/fullchain.pem ]] &&
          cmp -s "$account/export/fullchain.pem" "$active/fullchain.pem"; then
         # Legacy releases had no origin marker. An account directory alone is not proof.
@@ -222,6 +233,7 @@ certificate_status() {
         case $source in
           acme) source="Let's Encrypt 自动续期";;
           import) source='外部导入：由原工具续期后重新导入';;
+          v3) source="从旧版迁移：到期前 30 天自动向 Let's Encrypt 重新申请";;
           *) source='来源标记异常：暂不自动续期';;
         esac
         printf '\n域名：%s（%s 个节点共用）\n来源：%s\n' "$domain" "$count" "$source"

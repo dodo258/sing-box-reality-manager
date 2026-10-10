@@ -1,0 +1,4 @@
+# m h dom mon dow command
+30 1 * * * /bin/bash /etc/v2ray-agent/install.sh RenewTLS >> /etc/v2ray-agent/crontab_tls.log 2>&1
+35 1 * * * /bin/bash /etc/v2ray-agent/install.sh UpdateGeo >> /etc/v2ray-agent/crontab_tls.log 2>&1
+0 3 * * * /usr/local/bin/backup.sh

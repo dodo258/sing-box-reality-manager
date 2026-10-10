@@ -1,0 +1,14 @@
+{
+  "dns": {
+    "servers": [
+      {
+        "tag": "local",
+        "type": "local"
+      }
+    ],
+    "final": "local"
+  },
+  "route": {
+    "default_domain_resolver": "local"
+  }
+}

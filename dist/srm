@@ -355,6 +355,13 @@ client_note() { jq -r "$PROTO_JQ_DEFS $(proto_jq note empty)"; }
 # (jq string: the program variant a node runs, e.g. "v6"), program_path KEY,
 # program_current KEY (installed version), program_latest KEY… (one network lookup;
 # prints KEY<TAB>VERSION lines) and program_fetch KEY VERSION TARGET (download and verify).
+# Moving v3 installations (lib/migrate.sh), all optional: v3_import INBOUND (one inbound
+# of v3's sing-box configuration: returns 0 with REPLY = the node's protocol fields, 1
+# when the inbound is another protocol's, 2 when it is this protocol's but cannot move,
+# REPLY = the reason; the first user is taken and certificates are handled by the
+# migration), v3_scan ROOT (nodes v3 kept in files of their own: one JSON line each,
+# {label, units, node} or {label, units, skip}, optional note) and v3_prepare NODE
+# (install what the node needs before it starts, e.g. a server program).
 PROTO_HOOKS='label transport domain link_clients validate render_inbound share_uri client_outbound secrets prompt create rotate'
 PROTOCOLS=''
 # First page of the quick-deploy list, in this order; the rest are under 「更多协议」.
@@ -371,6 +378,9 @@ PROTO_JQ_DEFS='
   def clash_pin: if pinned then {fingerprint:.cert_sha256} else {} end;
   def surge_head($type): "\(.name|gsub("[,=]";" ")) = \($type), \(.host), \(.port)";
   def surge_pin: if pinned then ", server-cert-fingerprint-sha256=\(.cert_sha256)" else "" end;
+  # ws early data in the Sec-WebSocket-Protocol header, kept for nodes moved from v3
+  # whose sing-box clients send it; clients without early data still connect.
+  def early_data_server: if .early_data then {max_early_data:2048,early_data_header_name:"Sec-WebSocket-Protocol"} else {} end;
 '
 proto_register() {
     local type=$1 hook
@@ -484,6 +494,34 @@ proto_vless_retarget_label() { printf '切换 Reality 目标（携程 / 西瓜�
 proto_vless_retarget_select() { reality_target_select; }
 # REPLY = JSON fields to merge, or empty when the node already uses the target.
 proto_vless_retarget() { handshake_retarget "$@"; }
+# v3 Reality: the handshake server is the SNI, and v3 links use its fixed non-empty
+# shortId, which the node keeps so clients need no change.
+proto_vless_v3_import() {
+    local in=$1 public
+    jq -e '.type == "vless" and .tls.reality.enabled == true' <<< "$in" >/dev/null || return 1
+    if ! jq -e '.transport == null' <<< "$in" >/dev/null; then
+        REPLY="v4 的 Reality 只支持 TCP Vision，不支持 $(jq -r '.transport.type' <<< "$in") 传输"; return 2
+    fi
+    # srm uses one name for the handshake target and the SNI clients send.
+    jq -e '(.tls.reality.handshake.server_port // 443) == 443 and .tls.reality.handshake.server == .tls.server_name and .users[0].flow == "xtls-rprx-vision"' <<< "$in" >/dev/null ||
+        { REPLY='握手目标不是「SNI 同名域名:443」或没有 Vision 流控，v4 不支持'; return 2; }
+    REPLY=$(jq -c '{sni:.tls.reality.handshake.server,uuid:(.users[0].uuid|ascii_downcase),private_key:.tls.reality.private_key,
+        short_id:([.tls.reality.short_id[]?|select(test("^[a-f0-9]{16}$"))][0])}' <<< "$in") || return 1
+    jq -e '.short_id and (.private_key|type == "string")' <<< "$REPLY" >/dev/null || { REPLY='缺少 16 位 shortId 或私钥'; return 2; }
+    public=$(reality_public_key "$(jq -r .private_key <<< "$REPLY")") || { REPLY='私钥无法读取'; return 2; }
+    REPLY=$(jq -c --arg p "$public" '. + {public_key:$p}' <<< "$REPLY")
+}
+# X25519 public key of a Reality private key (both base64url without padding): the raw
+# key is wrapped in its PKCS#8 header so openssl can derive the public half.
+reality_public_key() {
+    local key out
+    key=$(printf '%s' "$1" | tr '_-' '/+')
+    [[ $key =~ ^[A-Za-z0-9+/]{43}$ ]] || return 1
+    out=$({ printf '\x30\x2e\x02\x01\x00\x30\x05\x06\x03\x2b\x65\x6e\x04\x22\x04\x20'; printf '%s=' "$key" | openssl base64 -d -A; } |
+        openssl pkey -inform DER -pubout -outform DER 2>/dev/null | tail -c 32 | openssl base64 -A | tr '+/' '-_' | tr -d '=') || return 1
+    [[ $out =~ ^[A-Za-z0-9_-]{43}$ ]] && printf '%s\n' "$out"
+}
+
 # Reality and ShadowTLS borrow the TLS 1.3 handshake of the same vetted sites.
 # Without --sni the target is picked at create time (handshake_target_ready).
 handshake_target_prompt() {
@@ -620,6 +658,14 @@ with_uuid() {
     REPLY=$(jq -c --arg v "$value" '. + {uuid:$v}' <<< "${REPLY:-null}")
 }
 UUID_VALID='(.uuid|test("^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$"))'
+# v3_import of a TLS protocol without a transport: an INBOUND of sing-box TYPE with a
+# certificate; FIELDS (jq) are taken from it along with the SNI.
+v3_tls_import() {
+    local in=$1 type=$2 fields=$3
+    jq -e --arg t "$type" '.type == $t and .tls.enabled == true and .tls.reality.enabled != true' <<< "$in" >/dev/null || return 1
+    jq -e '.transport == null' <<< "$in" >/dev/null || { REPLY="v4 不支持这种节点带 $(jq -r .transport.type <<< "$in") 传输"; return 2; }
+    REPLY=$(jq -c "{sni:.tls.server_name} + ($fields)" <<< "$in")
+}
 
 # --- AnyTLS ------------------------------------------------------------------
 proto_anytls_label() { printf 'AnyTLS'; }
@@ -639,6 +685,7 @@ proto_anytls_secrets() { printf '%s' '.password'; }
 proto_anytls_prompt() { tls_prompt; }
 proto_anytls_create() { tls_create && with_password; }
 proto_anytls_rotate() { REPLY=''; with_password; }
+proto_anytls_v3_import() { v3_tls_import "$1" anytls '{password:.users[0].password}'; }
 
 # --- Hysteria2 ---------------------------------------------------------------
 proto_hysteria2_label() { printf 'Hysteria2'; }
@@ -662,6 +709,10 @@ proto_hysteria2_secrets() { printf '%s' '.password'; }
 proto_hysteria2_prompt() { tls_prompt selfsigned; }
 proto_hysteria2_create() { tls_create && with_password; }
 proto_hysteria2_rotate() { REPLY=''; with_password; }
+proto_hysteria2_v3_import() {
+    if jq -e '.type == "hysteria2" and .obfs != null' <<< "$1" >/dev/null; then REPLY='带 obfs 混淆的 Hysteria2，v4 不支持'; return 2; fi
+    v3_tls_import "$1" hysteria2 '{password:.users[0].password}'
+}
 
 # --- Snell v6 / v5 + ShadowTLS v3 --------------------------------------------
 # The official snell-server runs as its own service srm-snell@<node id> and listens
@@ -765,7 +816,8 @@ proto_snell_domain() { printf 'none'; }
 proto_snell_link_clients() { :; }
 proto_snell_hint() { printf 'Surge 用户 · 不需要域名'; }
 proto_snell_validate() {
-    printf '%s' '(.sni|text) and (.psk|test("^[a-f0-9]{32}$")) and (.shadowtls_password|test("^[a-f0-9]{32}$")) and
+    # New nodes get 32 hex digits; nodes moved from v3 keep their letters and digits.
+    printf '%s' '(.sni|text) and (.psk|test("^[A-Za-z0-9._~-]{8,255}$")) and (.shadowtls_password|test("^[A-Za-z0-9._~-]{8,255}$")) and
       (.local_port|type == "number" and floor == . and . >= 1 and . <= 65535) and
       ((.snell_version == 6 and (.snell_mode == "default" or .snell_mode == "unshaped")) or (.snell_version == 5 and .snell_mode == null))'
 }
@@ -832,18 +884,20 @@ proto_snell_variant() {
 proto_snell_create() {
     local psk password local_port
     handshake_target_ready && snell_install "$proto_version" || return 1
-    psk=$(random_hex 16) && password=$(random_hex 16) || return 1
-    # snell-server listens on its own loopback port, never the node port ($port of node_add),
-    # and below Linux's default ephemeral range (32768–60999): a source port of a live
-    # connection could otherwise block snell-server from binding it again on restart.
-    local tries
-    for ((tries=0; tries<100; tries++)); do
-        local_port=$(choose_port) || return 1
-        (( local_port < 32768 )) && [[ $local_port != "$port" ]] && break
-    done
-    (( tries < 100 )) || { err '未找到空闲的本机端口。'; return 1; }
+    psk=$(random_hex 16) && password=$(random_hex 16) && local_port=$(snell_local_port "$port") || return 1
     REPLY=$(jq -nc --argjson v "$proto_version" --arg m "$proto_mode" --arg psk "$psk" --arg pw "$password" --argjson lp "$local_port" \
         '{snell_version:$v} + (if $v == 6 then {snell_mode:$m} else {} end) + {psk:$psk,shadowtls_password:$pw,local_port:$lp}')
+}
+# snell-server listens on its own loopback port, never the node port PORT, and below
+# Linux's default ephemeral range (32768–60999): a source port of a live connection
+# could otherwise block snell-server from binding it again on restart.
+snell_local_port() {
+    local tries candidate
+    for ((tries=0; tries<100; tries++)); do
+        candidate=$(choose_port) || return 1
+        if (( candidate < 32768 )) && [[ $candidate != "$1" ]]; then printf '%s\n' "$candidate"; return 0; fi
+    done
+    err '未找到空闲的本机端口。'; return 1
 }
 proto_snell_rotate() {
     local psk password
@@ -853,6 +907,40 @@ proto_snell_rotate() {
 proto_snell_retarget_label() { printf '切换 ShadowTLS 握手目标（携程 / 西瓜视频）'; }
 proto_snell_retarget_select() { reality_target_select; }
 proto_snell_retarget() { handshake_retarget "$@"; }
+# v3 kept each Snell + ShadowTLS node in snell-shadowtls/nodes/<id>.env (shell
+# assignments, read as text and never sourced), served by snell-server v4 or v5 behind
+# the standalone shadow-tls binary, units dodo258-snell-<id> and dodo258-shadowtls-<id>.
+# Both versions move to snell-server v5, which accepts v4 clients (kb.nssurge.com
+# release notes), so the Surge lines in use keep working.
+proto_snell_v3_scan() {
+    local file id version port target target_port psk password dns units node note label skip local_port pattern='^[A-Za-z0-9._~-]{8,255}$'
+    for file in "$1"/snell-shadowtls/nodes/*.env; do
+        [[ -f $file ]] || continue
+        id=$(env_value "$file" nodeId); version=$(env_value "$file" snellVersion); port=$(env_value "$file" publicPort)
+        target=$(env_value "$file" targetDomain); target_port=$(env_value "$file" targetPort)
+        psk=$(env_value "$file" snellPSK); password=$(env_value "$file" shadowTLSPassword); dns=$(env_value "$file" snellNodeDNS)
+        units='[]'; node=''; note=''
+        [[ ! $id =~ ^[A-Za-z0-9_.-]+$ ]] || units=$(jq -nc --arg id "$id" '["dodo258-snell-\($id).service","dodo258-shadowtls-\($id).service"]')
+        label="Snell v${version:-?} + ShadowTLS（端口 ${port:-?}，${file##*/}）" skip=''
+        if [[ $units == '[]' ]]; then skip='节点文件缺少有效的 nodeId'
+        elif [[ $version != 4 && $version != 5 ]]; then skip='只能迁移 Snell v4 和 v5'
+        elif ! valid_port "$port"; then skip='端口无效'
+        elif [[ ${target_port:-443} != 443 ]] || ! valid_domain "$target"; then skip='ShadowTLS 握手目标不是「域名:443」，v4 不支持'
+        elif [[ ! $psk =~ $pattern || ! $password =~ $pattern ]]; then skip='PSK 或 ShadowTLS 密码含 v4 不支持的字符'
+        else
+            local_port=$(snell_local_port "$port") || return 1
+            node=$(jq -nc --argjson port "$port" --arg sni "$target" --arg psk "$psk" --arg pw "$password" --argjson lp "$local_port" \
+                '{type:"snell",port:$port,sni:$sni,snell_version:5,psk:$psk,shadowtls_password:$pw,local_port:$lp}')
+            [[ $version != 4 ]] || note='Snell v4 节点改由 snell-server v5 运行（兼容 v4 客户端），Surge 里原来的配置行不用改。'
+            [[ -z $dns ]] || note+="节点 DNS（$dns）不迁移，snell-server 改用系统 DNS。"
+        fi
+        jq -nc --arg label "$label" --argjson units "$units" --arg skip "$skip" --arg node "$node" --arg note "$note" \
+            '{label:$label,units:$units} + (if $skip != "" then {skip:$skip} else {node:($node|fromjson)} end) + (if $note != "" then {note:$note} else {} end)'
+    done
+}
+proto_snell_v3_prepare() { snell_install "$(jq -r .snell_version <<< "$1")"; }
+# Value of KEY='value' in a file of shell assignments, without running it.
+env_value() { sed -n "s/^$2='\(.*\)'\$/\1/p" "$1" | head -n 1; }
 proto_snell_sidecar() { printf '%s' '"srm-snell@\(.id).service"'; }
 proto_snell_program_label() { printf 'Snell'; }
 proto_snell_program_key() { printf '%s' '"v\(.snell_version)"'; }
@@ -938,6 +1026,7 @@ proto_tuic_secrets() { printf '%s' '.uuid,.password'; }
 proto_tuic_prompt() { tls_prompt selfsigned; }
 proto_tuic_create() { tls_create && with_uuid && with_password; }
 proto_tuic_rotate() { REPLY=''; with_uuid && with_password; }
+proto_tuic_v3_import() { v3_tls_import "$1" tuic '{uuid:(.users[0].uuid|ascii_downcase),password:.users[0].password}'; }
 
 # --- VLESS + TLS (tcp Vision / ws / grpc / httpupgrade) ----------------------
 # Node field "transport" picks the stream; ws and httpupgrade carry a random
@@ -950,11 +1039,12 @@ proto_vlesstls_validate() {
     printf '%s and %s and %s' "$(tls_validate)" "$UUID_VALID" '(
       (.transport == "tcp") or
       ((.transport == "ws" or .transport == "httpupgrade") and (.path|test("^/[A-Za-z0-9_-]+$"))) or
-      (.transport == "grpc" and (.service_name|test("^[A-Za-z0-9_-]+$"))))'
+      (.transport == "grpc" and (.service_name|test("^[A-Za-z0-9_-]+$")))) and
+      (.early_data == null or (.early_data == true and .transport == "ws"))'
 }
 STREAM_JQ_DEFS='
   def stream_alpn: if .transport == "grpc" then ["h2"] elif .transport == "tcp" then null else ["http/1.1"] end;
-  def stream_server: if .transport == "ws" then {transport:{type:"ws",path:.path}}
+  def stream_server: if .transport == "ws" then {transport:({type:"ws",path:.path} + early_data_server)}
     elif .transport == "httpupgrade" then {transport:{type:"httpupgrade",path:.path}}
     elif .transport == "grpc" then {transport:{type:"grpc",service_name:.service_name}} else {} end;
   def stream_client: if .transport == "ws" then {transport:{type:"ws",path:.path,headers:{Host:.sni}}}
@@ -1009,6 +1099,17 @@ proto_vlesstls_create() {
       (if $t == "grpc" then {service_name:$r} elif $t == "tcp" then {} else {path:("/"+$r)} end)' <<< "$REPLY")
 }
 proto_vlesstls_rotate() { REPLY=''; with_uuid; }
+proto_vlesstls_v3_import() {
+    local in=$1 stream
+    jq -e '.type == "vless" and .tls.enabled == true and .tls.reality.enabled != true' <<< "$in" >/dev/null || return 1
+    stream=$(jq -c '.transport as $t |
+      if $t == null then (if .users[0].flow == "xtls-rprx-vision" then {transport:"tcp"} else empty end)
+      elif $t.type == "ws" then {transport:"ws",path:$t.path} + (if ($t.max_early_data // 0) > 0 then {early_data:true} else {} end)
+      elif $t.type == "httpupgrade" then {transport:"httpupgrade",path:$t.path}
+      elif $t.type == "grpc" then {transport:"grpc",service_name:$t.service_name} else empty end' <<< "$in")
+    [[ -n $stream ]] || { REPLY='v4 的 VLESS TLS 只支持 Vision 流控的 TCP、ws、grpc、httpupgrade'; return 2; }
+    REPLY=$(jq -c --argjson s "$stream" '{sni:.tls.server_name,uuid:(.users[0].uuid|ascii_downcase)} + $s' <<< "$in")
+}
 
 # --- Trojan ------------------------------------------------------------------
 proto_trojan_label() { printf 'Trojan'; }
@@ -1027,6 +1128,7 @@ proto_trojan_secrets() { printf '%s' '.password'; }
 proto_trojan_prompt() { tls_prompt; }
 proto_trojan_create() { tls_create && with_password; }
 proto_trojan_rotate() { REPLY=''; with_password; }
+proto_trojan_v3_import() { v3_tls_import "$1" trojan '{password:.users[0].password}'; }
 
 # --- VMess (TLS + ws) --------------------------------------------------------
 # alterId 0: VMess AEAD only. Kept for older clients.
@@ -1034,10 +1136,10 @@ proto_vmess_label() { printf 'VMess TLS+ws'; }
 proto_vmess_transport() { printf 'tcp'; }
 proto_vmess_domain() { printf 'required'; }
 proto_vmess_link_clients() { printf 'Shadowrocket v2rayN'; }
-proto_vmess_validate() { printf '%s and %s and %s' "$(tls_validate)" "$UUID_VALID" '(.path|test("^/[A-Za-z0-9_-]+$"))'; }
+proto_vmess_validate() { printf '%s and %s and %s' "$(tls_validate)" "$UUID_VALID" '(.path|test("^/[A-Za-z0-9_-]+$")) and (.early_data == null or .early_data == true)'; }
 proto_vmess_render_inbound() {
     printf '%s' '[base_inbound + {type:"vmess",users:[{name:.id,uuid:.uuid,alterId:0}],
-      tls:({enabled:true,server_name:.sni,alpn:["http/1.1"]} + tls_files),transport:{type:"ws",path:.path}}]'
+      tls:({enabled:true,server_name:.sni,alpn:["http/1.1"]} + tls_files),transport:({type:"ws",path:.path} + early_data_server)}]'
 }
 # v2rayN format: vmess:// + base64 of a JSON object with string values.
 proto_vmess_share_uri() {
@@ -1062,6 +1164,14 @@ proto_vmess_create() {
     REPLY=$(jq -c --arg r "/$route" '. + {path:$r}' <<< "$REPLY")
 }
 proto_vmess_rotate() { REPLY=''; with_uuid; }
+proto_vmess_v3_import() {
+    local in=$1
+    jq -e '.type == "vmess"' <<< "$in" >/dev/null || return 1
+    jq -e '.tls.enabled == true and .transport.type == "ws" and (.users[0].alterId // 0) == 0' <<< "$in" >/dev/null ||
+        { REPLY='v4 的 VMess 只支持 TLS + ws（alterId 0）'; return 2; }
+    REPLY=$(jq -c '{sni:.tls.server_name,uuid:(.users[0].uuid|ascii_downcase),path:.transport.path}
+        + (if (.transport.max_early_data // 0) > 0 then {early_data:true} else {} end)' <<< "$in")
+}
 
 # --- Naive -------------------------------------------------------------------
 # HTTP/2 over TLS only (no QUIC). Naive clients connect by the certificate domain,
@@ -1070,11 +1180,12 @@ proto_naive_label() { printf 'Naive'; }
 proto_naive_transport() { printf 'tcp'; }
 proto_naive_domain() { printf 'required'; }
 proto_naive_link_clients() { printf 'v2rayN'; }
-proto_naive_validate() { printf '%s and (.username|test("^[a-f0-9]{12}$")) and (.password|text)' "$(tls_validate)"; }
+# New nodes get 12 hex digits; nodes moved from v3 keep names like "abcd1234-singbox_naive".
+proto_naive_validate() { printf '%s and (.username|test("^[A-Za-z0-9._-]{1,64}$")) and (.password|text)' "$(tls_validate)"; }
 proto_naive_render_inbound() {
     printf '%s' '[base_inbound + {type:"naive",network:"tcp",users:[{username:.username,password:.password}],tls:({enabled:true,server_name:.sni} + tls_files)}]'
 }
-proto_naive_share_uri() { printf '%s' '"naive+https://\(.username):\(.password|@uri)@\(.sni):\(.port)#\(.name|@uri)"'; }
+proto_naive_share_uri() { printf '%s' '"naive+https://\(.username|@uri):\(.password|@uri)@\(.sni):\(.port)#\(.name|@uri)"'; }
 proto_naive_client_outbound() { printf '%s' 'base_outbound + {type:"naive",username:.username,password:.password,tls:tls_client}'; }
 proto_naive_secrets() { printf '%s' '.username,.password'; }
 proto_naive_prompt() { tls_prompt; }
@@ -1084,6 +1195,7 @@ proto_naive_create() {
     REPLY=$(jq -c --arg u "$user" '. + {username:$u}' <<< "$REPLY")
 }
 proto_naive_rotate() { REPLY=''; with_password; }
+proto_naive_v3_import() { v3_tls_import "$1" naive '{username:.users[0].username,password:.users[0].password}'; }
 
 # --- Hysteria v1 (older clients only) ----------------------------------------
 # Clients must state their bandwidth; links and snippets use 30 Mbps up and
@@ -1596,6 +1708,9 @@ firewall_renew() (
 )
 # Nodes using a domain certificate (Let's Encrypt or imported); self-signed nodes
 # keep their own ten-year certificate, pinned by clients, and are never renewed.
+# Origins (active/renewal-source): acme (renewed here), import (renewed by its own
+# tool) and v3 (moved from v3, whose renewal job is off: within 30 days of expiry a
+# new Let's Encrypt certificate is requested, which turns it into acme).
 CERT_NODES='.cert_dir != null and .cert_sha256 == null'
 ensure_acme() {
     [[ -x $ACME ]] && return 0
@@ -1624,7 +1739,7 @@ cert_valid() {
 }
 activate_cert() {
     local domain=$1 source=$2 origin=${3:-import} dir gen old='' active=0
-    case $origin in acme|import) ;; *) return 1;; esac
+    case $origin in acme|import|v3) ;; *) return 1;; esac
     valid_domain "$domain" && cert_valid "$source/fullchain.pem" "$source/key.pem" "$domain" || { err '证书校验失败。'; return 1; }
     dir=$DATA/certs/$domain
     install -d -m 750 -o root -g srm "$dir" || return 1
@@ -1658,10 +1773,12 @@ copy_acme_cert() {
         activate_cert "$domain" "$tmp" acme || rc=1
     return "$rc"
 }
+# issue_certificate DOMAIN MODE [EMAIL] [WEBROOT] [force]: force requests one even
+# while the current certificate is still valid.
 issue_certificate() (
     local domain=$1 mode=$2 email=${3:-} webroot=${4:-} rc=0 probe
     valid_domain "$domain" || exit 1
-    if cert_reusable "$domain"; then msg '复用有效证书。'; exit 0; fi
+    if [[ ${5:-} != force ]] && cert_reusable "$domain"; then msg '复用有效证书。'; exit 0; fi
     if [[ $mode == auto ]]; then
         mode=$(cert_auto_mode) || { err '80 和 443 已被占用（或留给正在部署的节点），请改用现有网站目录验证（--cert webroot）或导入证书（--cert import）。'; exit 1; }
         msg "自动选择证书验证方式：$mode"
@@ -1763,6 +1880,12 @@ renew_certificates() {
     [[ -f $STATE ]] || return 0
     local domain rc failures=0
     while IFS= read -r domain; do
+        if [[ $(certificate_source "$domain") == v3 ]]; then
+            openssl x509 -in "$DATA/certs/$domain/active/fullchain.pem" -noout -checkend 2592000 >/dev/null 2>&1 && continue
+            msg "从旧版迁移来的证书 $domain 30 天内到期，向 Let's Encrypt 申请新证书。"
+            issue_certificate "$domain" auto '' '' force || { err "证书申请失败：${domain}；保留当前证书，明天再试。"; failures=$((failures+1)); }
+            continue
+        fi
         [[ $(certificate_source "$domain") == acme ]] || continue
         # Record a verified legacy association before acme.sh replaces its export.
         # Otherwise a failed activation makes the still-active old cert look imported.
@@ -1790,7 +1913,7 @@ certificate_source() {
     local domain=$1 active=$DATA/certs/$1/active account=$SRM_ROOT/acme-accounts/$1 value
     if [[ -f $active/renewal-source ]]; then
         value=$(cat "$active/renewal-source") || return 1
-        case $value in acme|import) printf '%s\n' "$value";; *) printf 'unknown\n';; esac
+        case $value in acme|import|v3) printf '%s\n' "$value";; *) printf 'unknown\n';; esac
     elif [[ -f $account/${domain}_ecc/$domain.conf && -f $account/export/fullchain.pem ]] &&
          cmp -s "$account/export/fullchain.pem" "$active/fullchain.pem"; then
         # Legacy releases had no origin marker. An account directory alone is not proof.
@@ -1818,6 +1941,7 @@ certificate_status() {
         case $source in
           acme) source="Let's Encrypt 自动续期";;
           import) source='外部导入：由原工具续期后重新导入';;
+          v3) source="从旧版迁移：到期前 30 天自动向 Let's Encrypt 重新申请";;
           *) source='来源标记异常：暂不自动续期';;
         esac
         printf '\n域名：%s（%s 个节点共用）\n来源：%s\n' "$domain" "$count" "$source"
@@ -2761,6 +2885,364 @@ restart_nodes() {
     if [[ $(jq '[.nodes[]|select(.enabled)]|length' "$STATE") == 0 ]]; then msg '没有启用的节点。'; return 0; fi
     "$CORE" check -c "$DATA/current/config.json" && sidecars_sync "$STATE" && restart_unit "$SERVICE" && service_healthy "$STATE"
 }
+# Moving a v3 installation (the v2ray-agent based install.sh) to srm. V3_ROOT is only
+# ever read: nodes come from v3's sing-box configuration fragments (including the
+# 30_–33_ multi-instance files) with their keys and certificates, and from protocols
+# that kept files of their own (registry hook v3_scan). The registry hooks v3_import,
+# v3_scan and v3_prepare hold everything protocol-specific.
+V3_ROOT=/etc/v2ray-agent
+V3_UNIT_DIR=/etc/systemd/system
+# Crontab lines of v3 that renew certificates or update geo data and restart v3's
+# services; after moving they are commented out, never deleted.
+V3_CRON_JOBS='RenewTLS UpdateGeo'
+MIGRATE_MARK='# srm 迁移后停用：'
+# Settings-only fragments of v3 that need nothing in srm.
+V3_PLAIN_FILES='log.json sniff.json'
+# Offered when v3 is there and nothing has been moved yet; no network, no root files
+# beyond a directory listing.
+migrate_pending() {
+    [[ -d $V3_ROOT && ! -f $DATA/migrated-v3.json ]] || return 1
+    compgen -G "$V3_ROOT/sing-box/conf/config/*.json" >/dev/null || compgen -G "$V3_ROOT/*/nodes/*.env" >/dev/null
+}
+# Reads V3_ROOT into the plan file $1: {nodes:[{node,label,cert,units,note}],skipped:[{label,reason}],units:[]}.
+# Nodes get their final id here; host is set when applying.
+migrate_scan() {
+    local plan=$1 file base inbound conf=$V3_ROOT/sing-box/conf/config type line units=() i
+    [[ -d $V3_ROOT ]] || { err "没有找到旧版安装（$V3_ROOT）。"; return 1; }
+    printf '%s\n' '{"nodes":[],"skipped":[],"units":[]}' > "$plan" || return 1
+    for file in "$conf"/*.json; do
+        [[ -f $file ]] || continue
+        base=${file##*/}
+        if ! jq -e 'type == "object"' "$file" >/dev/null 2>&1; then migrate_skip "$plan" "$base" '文件无法解析'; continue; fi
+        if jq -e '.inbounds|type == "array" and length > 0' "$file" >/dev/null; then
+            while IFS= read -r inbound; do migrate_inbound "$plan" "$base" "$inbound" || return 1; done < <(jq -c '.inbounds[]' "$file")
+        elif [[ " $V3_PLAIN_FILES " == *" $base "* ]] || { [[ $base == dns.json ]] && jq -e '(.dns.rules // [])|length == 0' "$file" >/dev/null; }; then
+            continue
+        else
+            migrate_skip "$plan" "分流 / 出站设置 $base" 'v4 的分流按平台规则设置，不能自动迁移；迁移后在菜单「3. 流媒体分流」里重新设置'
+        fi
+    done
+    # The sing-box service of v3 stops only when at least one of its nodes moves.
+    if jq -e '.nodes|length > 0' "$plan" >/dev/null; then
+        [[ ! -f $V3_UNIT_DIR/dodo258-sing-box.service ]] || units+=(dodo258-sing-box.service)
+        # Older releases used the upstream unit name.
+        ! grep -qF "$V3_ROOT/" "$V3_UNIT_DIR/sing-box.service" 2>/dev/null || units+=(sing-box.service)
+    fi
+    for type in $PROTOCOLS; do
+        proto_has "$type" v3_scan || continue
+        while IFS= read -r line; do
+            [[ -n $line ]] || continue
+            migrate_scanned "$plan" "$line" || return 1
+        done < <(proto_call "$type" v3_scan "$V3_ROOT")
+    done
+    for file in "$V3_ROOT"/xray/conf/*.json; do
+        [[ -f $file ]] || continue
+        while IFS=$'\t' read -r type i; do
+            migrate_skip "$plan" "Xray $type（端口 $i）" 'v4 只用 sing-box；旧 Xray 服务继续运行，迁移不会停掉它'
+        done < <(jq -r '.inbounds[]?|select(.port != null and (.listen // "") != "127.0.0.1")|[.protocol,(.port|tostring)]|@tsv' "$file" 2>/dev/null)
+    done
+    [[ ! -d $V3_ROOT/website-manager ]] || migrate_skip "$plan" '网站' 'v4 不管理网站；nginx 和网站文件保持原样'
+    if compgen -G "$V3_ROOT/subscribe*" >/dev/null; then
+        migrate_skip "$plan" '订阅链接' 'v4 不提供订阅；已导入的节点照常可用，新设备请用菜单「2. 节点管理」里的分享链接'
+    fi
+    local tmp
+    tmp=$(mktemp) || return 1
+    jq --args '.units = ([$ARGS.positional[], .nodes[].units[]]|unique)' ${units[@]+"${units[@]}"} < "$plan" > "$tmp" && mv "$tmp" "$plan"
+}
+# migrate_skip PLAN LABEL REASON [stops]: "stops" marks a node of v3's sing-box service,
+# which stops with the service when other nodes move.
+migrate_skip() {
+    local tmp
+    tmp=$(mktemp) || return 1
+    jq --arg l "$2" --arg r "$3" --arg s "${4:-}" '.skipped += [{label:$l,reason:$r} + (if $s == "" then {} else {stops:true} end)]' "$1" > "$tmp" && mv "$tmp" "$1"
+}
+# A node from a v3_scan line or from an inbound; checks what every node needs and adds it.
+migrate_add() {
+    local plan=$1 label=$2 node=$3 cert=${4:-null} unit_list=${5:-[]} note=${6:-} port id taken tmp check stops=''
+    # Nodes without units of their own are served by v3's sing-box service.
+    [[ $unit_list != '[]' ]] || stops=stops
+    port=$(jq -r .port <<< "$node")
+    valid_port "$port" || { migrate_skip "$plan" "$label" '端口无效' $stops; return 0; }
+    taken=$({ [[ ! -f $STATE ]] || jq -r --argjson p "$port" '.nodes[]|select(.port == $p or .local_port == $p)|.name' "$STATE"
+              jq -r --argjson p "$port" '.nodes[].node|select(.port == $p or .local_port == $p)|.name' "$plan"; } | head -n 1)
+    [[ -z $taken ]] || { migrate_skip "$plan" "$label" "端口 $port 已被 srm 的节点「$taken」使用" $stops; return 0; }
+    id=$(random_hex 8) || return 1
+    node=$(jq -c --arg id "$id" --arg name "$(jq -r .type <<< "$node")-$port" '{id:$id,name:$name} + . + {enabled:true}' <<< "$node") || return 1
+    if [[ $cert != null ]]; then node=$(jq -c --argjson c "$cert" --arg dir "$(migrate_cert_dir "$cert" "$id")" '. + {cert_dir:$dir} + ($c.pins // {})' <<< "$node") || return 1; fi
+    # Anything v4 would refuse is reported now, not when applying.
+    check=$(mktemp) || return 1
+    jq -n --argjson n "$node" '{schema:2,nodes:[$n + {host:"192.0.2.1"}],policies:[],unlock_dns:null,egress:null}' > "$check"
+    if ! validate_state "$check" 2>/dev/null; then rm -f "$check"; migrate_skip "$plan" "$label" '节点数据 v4 不接受（字段格式不符）' $stops; return 0; fi
+    rm -f "$check"
+    tmp=$(mktemp) || return 1
+    jq --argjson n "$node" --arg l "$label" --argjson c "$cert" --argjson u "$unit_list" --arg note "$note" \
+        '.nodes += [{node:$n,label:$l,cert:$c,units:$u} + (if $note == "" then {} else {note:$note} end)]' "$plan" > "$tmp" && mv "$tmp" "$plan"
+}
+migrate_scanned() {
+    local plan=$1 line=$2 label
+    label=$(jq -r .label <<< "$line") || return 1
+    if jq -e 'has("skip")' <<< "$line" >/dev/null; then migrate_skip "$plan" "$label" "$(jq -r .skip <<< "$line")"; return; fi
+    migrate_add "$plan" "$label" "$(jq -c .node <<< "$line")" null "$(jq -c .units <<< "$line")" "$(jq -r '.note // ""' <<< "$line")"
+}
+migrate_inbound() {
+    local plan=$1 file=$2 in=$3 label port type rc fields='' reason='' cert=null note=''
+    port=$(jq -r '.listen_port // empty' <<< "$in")
+    label="$(jq -r '.type // "?"' <<< "$in")（端口 ${port:-?}，$file）"
+    case $(jq -r '.listen // "::"' <<< "$in") in
+      127.0.0.1|::1|localhost) migrate_skip "$plan" "$label" '只监听本机、由 nginx 转发的节点，v4 不使用 nginx' stops; return 0;;
+    esac
+    for type in $PROTOCOLS; do
+        proto_has "$type" v3_import || continue
+        rc=0; proto_call "$type" v3_import "$in" || rc=$?
+        case $rc in 0) fields=$REPLY; break;; 2) reason=$REPLY; break;; esac
+    done
+    [[ -z $fields$reason ]] || label="$(proto_call "$type" label)（端口 $port，$file）"
+    if [[ -n $reason ]]; then migrate_skip "$plan" "$label" "$reason" stops; return 0; fi
+    [[ -n $fields ]] || { migrate_skip "$plan" "$label" 'v4 不支持这种节点' stops; return 0; }
+    if jq -e '.tls.certificate_path' <<< "$in" >/dev/null; then
+        migrate_cert "$type" "$(jq -r .tls.certificate_path <<< "$in")" "$(jq -r '.tls.key_path // ""' <<< "$in")" "$(jq -r '.sni // ""' <<< "$fields")" ||
+            { migrate_skip "$plan" "$label" "$REPLY" stops; return 0; }
+        cert=$REPLY
+    fi
+    if jq -e '(.users|length) > 1' <<< "$in" >/dev/null; then
+        note="这个端口还有 $(( $(jq '.users|length' <<< "$in") - 1 )) 个用户（$(jq -r '[.users[1:][]|.name // .username // "?"]|join("、")' <<< "$in")）不迁移，v4 每个节点只保留第一个用户。"
+    fi
+    migrate_add "$plan" "$label" "$(jq -c --arg t "$type" --argjson p "$port" '. + {type:$t,port:$p}' <<< "$fields")" "$cert" '[]' "$note"
+}
+# REPLY = the certificate of a TLS node: {kind:"ca",domain,cert,key} or, for a
+# self-signed one (only protocols whose clients pin it), {kind:"self",cert,key,pins}.
+# On failure REPLY is the reason.
+migrate_cert() {
+    local type=$1 cert=$2 key=$3 domain=$4 subject issuer pin pubkey
+    [[ -r $cert && -r $key ]] || { REPLY="证书文件不存在：$cert"; return 1; }
+    subject=$(openssl x509 -in "$cert" -noout -subject 2>/dev/null) && issuer=$(openssl x509 -in "$cert" -noout -issuer 2>/dev/null) ||
+        { REPLY="证书无法读取：$cert"; return 1; }
+    if [[ ${subject#subject=} == "${issuer#issuer=}" ]]; then
+        [[ $(proto_call "$type" domain) == optional ]] || { REPLY='自签证书只能用于客户端能校验证书指纹的协议'; return 1; }
+        cert_valid "$cert" "$key" "$domain" || { REPLY='自签证书与 SNI / 私钥不匹配，或已到期'; return 1; }
+        pin=$(openssl x509 -in "$cert" -outform der | openssl dgst -sha256 | awk '{print $NF}') &&
+            pubkey=$(openssl x509 -in "$cert" -pubkey -noout | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | openssl base64 -A) || return 1
+        REPLY=$(jq -nc --arg c "$cert" --arg k "$key" --arg pin "$pin" --arg pub "$pubkey" '{kind:"self",cert:$c,key:$k,pins:{cert_sha256:$pin,pubkey_sha256:$pub}}')
+        return 0
+    fi
+    valid_domain "$domain" && cert_valid "$cert" "$key" "$domain" || { REPLY="证书不是 $domain 的、已到期或与私钥不匹配"; return 1; }
+    REPLY=$(jq -nc --arg d "$domain" --arg c "$cert" --arg k "$key" '{kind:"ca",domain:$d,cert:$c,key:$k}')
+}
+migrate_cert_dir() {
+    if [[ $(jq -r .kind <<< "$1") == self ]]; then printf '%s\n' "$DATA/selfsigned/$2"
+    else printf '%s\n' "$DATA/certs/$(jq -r .domain <<< "$1")/active"; fi
+}
+# What moves, what does not, and what applying does.
+migrate_show() {
+    local plan=$1 count
+    msg "发现旧版（v3）安装：$V3_ROOT"
+    count=$(jq '.nodes|length' "$plan")
+    if [[ $count == 0 ]]; then msg $'\n没有可以迁移的节点。'
+    else
+        msg $'\n能迁移的节点（端口、密码和密钥都不变，正在用的客户端不用改）：'
+        jq -r '.nodes|to_entries[]|"  \(.key+1). \(.value.label)"
+            + (if .value.node.sni then " · \(.value.node.sni)" else "" end)
+            + (if .value.cert.kind == "self" then " · 自签证书" else "" end)
+            + (if .value.note then "\n     说明：\(.value.note)" else "" end)' "$plan"
+    fi
+    if jq -e '.skipped|length > 0' "$plan" >/dev/null; then
+        msg $'\n不能迁移：'
+        jq -r '.skipped[]|"  - \(.label)：\(.reason)"' "$plan"
+    fi
+    [[ $count != 0 ]] || return 0
+    msg $'\n迁移时会：'
+    msg "  - 停止并停用旧服务：$(jq -r '.units|join("、")' "$plan")$(jq -r 'if any(.skipped[]; .stops) and any(.units[]; test("sing-box")) then "；上面不能迁移的旧 sing-box 节点随之停止" else "" end' "$plan")"
+    msg '  - 由 srm 在原端口启动这些节点；启动或健康检查失败就恢复旧服务'
+    msg "  - 注释掉旧版定时任务（${V3_CRON_JOBS// /、}），行首加 #，不删除"
+    if jq -e 'any(.nodes[]; .cert.kind == "ca")' "$plan" >/dev/null; then
+        msg "  - 证书改由 srm 续期：到期前 30 天自动向 Let's Encrypt 重新申请"
+    fi
+    msg "  - $V3_ROOT 里的文件一个字节都不改"
+}
+# Menu: preview, then 「确认 / 返回」 (Enter = back).
+migrate_menu() {
+    local plan rc=0
+    plan=$(mktemp) || return 1
+    migrate_scan "$plan" && migrate_show "$plan" || rc=1
+    if [[ $rc == 0 ]] && jq -e '.nodes|length > 0' "$plan" >/dev/null; then
+        msg $'\n  1. 确认迁移（服务会重启，连接断开几秒）\n  0. 返回'
+        ask '请选择' 0 && [[ $REPLY == 1 ]] && { with_lock migrate_apply "$SRM_SELF" || rc=1; }
+    fi
+    rm -f "$plan"
+    return "$rc"
+}
+# First screen of the menu while v3 is there and nothing has moved yet.
+migrate_offer() {
+    msg $'\n发现旧版节点（'"$V3_ROOT"$'），要迁移过来吗？\n  1. 是，先看看能迁移哪些\n  0. 否（以后在菜单「9. 迁移旧版节点」里也能迁移）'
+    ask '请选择' 1 || return 0
+    [[ $REPLY == 1 ]] || return 0
+    migrate_menu || true
+}
+# srm migrate [--apply] [--yes] [--host ADDR]: a preview by default.
+migrate_command() {
+    local apply=0 assume_yes=0 opt_host='' plan rc=0
+    while (( $# )); do
+        case $1 in
+          --apply) apply=1;;
+          -y|--yes) assume_yes=1;;
+          --host) [[ -n ${2:-} ]] || { err '--host 需要一个值。'; return 1; }; opt_host=$2; shift;;
+          *) err '用法：srm migrate [--apply] [--yes] [--host 地址]'; return 1;;
+        esac
+        shift
+    done
+    require_root || return 1
+    if [[ $apply == 0 ]]; then
+        plan=$(mktemp) || return 1
+        migrate_scan "$plan" && migrate_show "$plan" || rc=1
+        [[ $rc != 0 ]] || msg $'\n以上只是预览，没有改动。加 --apply 执行迁移。'
+        rm -f "$plan"; return "$rc"
+    fi
+    if [[ $assume_yes != 1 ]]; then
+        plan=$(mktemp) || return 1
+        migrate_scan "$plan" && migrate_show "$plan" || rc=1
+        rm -f "$plan"
+        [[ $rc == 0 ]] || return 1
+        msg $'\n  1. 确认迁移（服务会重启，连接断开几秒）\n  0. 返回'
+        ask '请选择' 0 && [[ $REPLY == 1 ]] || { err '没有迁移。'; return 1; }
+    fi
+    with_lock migrate_apply "$SRM_SELF"
+}
+# Under the lock, already confirmed. Old services stop only after the new configuration
+# passed sing-box check; when srm cannot take over their ports, they come back.
+migrate_apply() {
+    local self=$1 plan candidate config tmp node unit host units=() created=() rc=0
+    plan=$(mktemp) && candidate=$(mktemp) && config=$(mktemp) || return 1
+    migrate_scan "$plan" || { rm -f "$plan" "$candidate" "$config"; return 1; }
+    if ! jq -e '.nodes|length > 0' "$plan" >/dev/null; then rm -f "$plan" "$candidate" "$config"; err '没有可以迁移的节点。'; return 1; fi
+    host=${opt_host:-}
+    if [[ -z $host ]]; then
+        msg '检测本机公网 IP…'
+        if detect_public_ip; then host=$PUBLIC_IP
+        elif [[ ${assume_yes:-0} == 1 ]]; then rm -f "$plan" "$candidate" "$config"; err '没有检测到本机公网 IP，非交互模式缺少参数：--host'; return 1
+        else
+            while :; do
+                ask '没有检测到本机公网 IP，请填写客户端连接用的 IP 或域名' || { rm -f "$plan" "$candidate" "$config"; return 1; }
+                host=$REPLY; valid_host "$host" && break
+                err '地址不合法，例如 203.0.113.5 或 vpn.example.com。'
+            done
+        fi
+    fi
+    valid_host "$host" || { rm -f "$plan" "$candidate" "$config"; err '地址不合法。'; return 1; }
+    [[ -f $SRM_ROOT/.srm-owned ]] || setup "$self" || { rm -f "$plan" "$candidate" "$config"; return 1; }
+    ensure_dependencies || { rm -f "$plan" "$candidate" "$config"; return 1; }
+    # Programs and certificates first; nothing of v3 has been touched yet.
+    while IFS= read -r node; do
+        ! proto_has "$(jq -r .node.type <<< "$node")" v3_prepare || proto_call "$(jq -r .node.type <<< "$node")" v3_prepare "$(jq -c .node <<< "$node")" || rc=1
+        [[ $rc == 0 ]] || break
+        migrate_install_cert "$node" || { rc=1; break; }
+        [[ $(jq -r '.cert.kind // ""' <<< "$node") != self ]] || created+=("$DATA/selfsigned/$(jq -r .node.id <<< "$node")")
+    done < <(jq -c '.nodes[]' "$plan")
+    if [[ $rc == 0 ]]; then
+        tmp=$(new_candidate) || rc=1
+        if [[ $rc == 0 ]]; then
+            local listen='::'
+            [[ $(sysctl -n net.ipv6.conf.all.disable_ipv6 2>/dev/null) != 1 ]] || listen=0.0.0.0
+            jq --slurpfile p "$plan" --arg host "$host" --arg listen "$listen" \
+                '.nodes += [$p[0].nodes[].node + {host:$host} + (if $listen == "::" then {} else {listen:$listen} end)]' "$tmp" > "$candidate" || rc=1
+            rm -f "$tmp"
+        fi
+    fi
+    # The whole configuration must pass before any old service stops.
+    if [[ $rc == 0 ]] && ! { validate_state "$candidate" && render_config "$candidate" > "$config" && "$CORE" check -c "$config"; }; then
+        err '迁移后的配置没有通过 sing-box 校验，旧服务没有停止。'; rc=1
+    fi
+    if [[ $rc != 0 ]]; then
+        rm -rf "$plan" "$candidate" "$config" ${created[@]+"${created[@]}"}
+        err '迁移没有执行，旧版节点保持原样。'; return 1
+    fi
+    while IFS= read -r unit; do [[ -z $unit ]] || units+=("$unit"); done < <(jq -r '.units[]' "$plan")
+    # Interrupted from here on, the old services come back as well.
+    trap 'migrate_restore_units; exit 130' INT TERM HUP
+    migrate_stop_units ${units[@]+"${units[@]}"} || rc=1
+    if [[ $rc == 0 ]]; then
+        msg '应用新配置，srm 接管原端口…'
+        apply_state "$candidate" || rc=1
+    fi
+    if [[ $rc != 0 ]]; then
+        migrate_restore_units || err "旧服务没能全部恢复，请检查：systemctl status ${units[*]:-}"
+        rm -rf "$plan" "$candidate" "$config" ${created[@]+"${created[@]}"}
+        trap - INT TERM HUP
+        err '迁移失败，已恢复旧服务；旧版节点保持原样。'; return 1
+    fi
+    trap - INT TERM HUP
+    migrate_cron || err '旧版定时任务没能注释掉，请手动在 crontab -e 里给它们的行首加 #。'
+    if jq -e 'any(.nodes[]; .cert.kind == "ca")' "$plan" >/dev/null; then install_renew_timer || err '证书续期定时任务注册失败。'; fi
+    jq -n --arg at "$(date '+%F %T')" --slurpfile p "$plan" '{migrated_at:$at,units:$p[0].units,nodes:[$p[0].nodes[].node.id]}' > "$DATA/migrated-v3.json"
+    msg $'\n迁移完成：'
+    jq -r '.nodes[]|"  \(.node.name) · 端口 \(.node.port)"' "$plan"
+    msg '在菜单「2. 节点管理」里能看到这些节点的分享链接、二维码和各客户端配置。'
+    msg "旧版文件仍在 $V3_ROOT，没有改动；确认一切正常后可自行删除。"
+    local vasma
+    vasma=$(command -v vasma 2>/dev/null) || vasma=''
+    [[ -z $vasma || $(readlink -f "$vasma") == "$SRM_ROOT/manager.sh" ]] || msg '旧版的 vasma 命令仍打开旧脚本，以后请输入 srm 打开菜单。'
+    rm -f "$plan" "$candidate" "$config"
+}
+# Certificates the node needs inside srm's own directories (copies; v3 files stay as they are).
+migrate_install_cert() {
+    local entry=$1 kind dir tmp domain cert_rc
+    kind=$(jq -r '.cert.kind // ""' <<< "$entry")
+    case $kind in
+      self)
+        dir=$DATA/selfsigned/$(jq -r .node.id <<< "$entry")
+        install -d -m 750 "$DATA/selfsigned" "$dir" && chgrp srm "$DATA/selfsigned" "$dir" &&
+            install -m 640 "$(jq -r .cert.cert <<< "$entry")" "$dir/fullchain.pem" &&
+            install -m 640 "$(jq -r .cert.key <<< "$entry")" "$dir/key.pem" && chgrp srm "$dir/fullchain.pem" "$dir/key.pem";;
+      ca)
+        domain=$(jq -r .cert.domain <<< "$entry")
+        # A valid certificate srm already has for the domain stays.
+        cert_reusable "$domain" && return 0
+        tmp=$(mktemp -d) || return 1
+        cp "$(jq -r .cert.cert <<< "$entry")" "$tmp/fullchain.pem" && cp "$(jq -r .cert.key <<< "$entry")" "$tmp/key.pem" && activate_cert "$domain" "$tmp" v3
+        cert_rc=$?; rm -rf "$tmp"; return "$cert_rc";;
+    esac
+}
+# Stops and disables UNITS, remembering what each was, so migrate_restore_units can
+# put them back. Disabled as well: a reboot must not start them next to srm.
+MIGRATE_RESTORE=''
+migrate_stop_units() {
+    local unit active enabled
+    MIGRATE_RESTORE=''
+    for unit in "$@"; do
+        active=0; enabled=0
+        systemctl is-active --quiet "$unit" && active=1
+        systemctl is-enabled --quiet "$unit" 2>/dev/null && enabled=1
+        MIGRATE_RESTORE+="$unit $active $enabled"$'\n'
+        msg "停止旧服务 $unit"
+        if ! systemctl disable --now "$unit" >/dev/null 2>&1 && systemctl is-active --quiet "$unit"; then
+            err "$unit 停不下来。"; return 1
+        fi
+    done
+}
+migrate_restore_units() {
+    local unit active enabled failures=0
+    while read -r unit active enabled; do
+        [[ -n $unit ]] || continue
+        [[ $enabled == 0 ]] || systemctl enable "$unit" >/dev/null 2>&1 || failures=1
+        if [[ $active == 1 ]]; then
+            msg "恢复旧服务 $unit"
+            systemctl start "$unit" && systemctl is-active --quiet "$unit" || failures=1
+        fi
+    done <<< "$MIGRATE_RESTORE"
+    return "$failures"
+}
+# Comments out v3's own cron jobs (V3_CRON_JOBS run by V3_ROOT/install.sh).
+migrate_cron() {
+    local current updated job pattern=''
+    current=$(crontab -l 2>/dev/null) || return 0
+    for job in $V3_CRON_JOBS; do pattern+="${pattern:+|}$job"; done
+    updated=$(awk -v root="$V3_ROOT/install.sh" -v jobs="^($pattern)\$" -v mark="$MIGRATE_MARK" '
+        { n = split($0, f, /[ \t]+/); hit = 0
+          for (i = 1; i < n; i++) if (f[i] == root && f[i+1] ~ jobs) hit = 1
+          if (hit && $0 !~ /^[ \t]*#/) print mark $0; else print }' <<< "$current") || return 1
+    [[ $updated != "$current" ]] || return 0
+    printf '%s\n' "$updated" | crontab - || return 1
+    msg "已注释掉旧版定时任务（${V3_CRON_JOBS// /、}）。"
+}
 menu_header() {
     local status='未部署' counts='0 / 0' renew='未配置' routing='未启用' updates color='' reset=''
     if use_color; then color=$'\033[1;36m'; reset=$'\033[0m'; fi
@@ -2788,6 +3270,8 @@ main_menu() {
     require_linux || return 1
     # Leaving quick deploy without a node is fine here; `srm add` treats it as a failure.
     local IN_MENU=1
+    # A v3 installation whose nodes have not moved: offered before anything else.
+    if migrate_pending; then menu_header; migrate_offer; fi
     # No node yet: straight into quick deploy; 0 there shows the menu.
     if [[ ! -f $STATE ]] || ! jq -e '.nodes|length > 0' "$STATE" >/dev/null 2>&1; then
         menu_header
@@ -2795,7 +3279,9 @@ main_menu() {
     fi
     while :; do
         menu_header
-        msg $'  1. 添加节点 · 快速部署\n  2. 节点管理 · 原始链接 / 二维码\n  3. 流媒体分流 · 解锁 DNS / 代理出口\n  4. 运行状态 · 日志 / 重启 / 防火墙\n  5. 更新 · 新版本检查 / 回滚\n  6. BBR 与系统检测\n  7. 卸载\n  8. 证书管理 · 到期时间 / 自动续期\n\n  0. 退出\n'
+        msg $'  1. 添加节点 · 快速部署\n  2. 节点管理 · 原始链接 / 二维码\n  3. 流媒体分流 · 解锁 DNS / 代理出口\n  4. 运行状态 · 日志 / 重启 / 防火墙\n  5. 更新 · 新版本检查 / 回滚\n  6. BBR 与系统检测\n  7. 卸载\n  8. 证书管理 · 到期时间 / 自动续期'
+        ! migrate_pending || msg '  9. 迁移旧版节点 · 发现 v3 安装'
+        msg $'\n  0. 退出\n'
         ask '请选择' || return 0
         case $REPLY in
           1) with_lock node_add "$SRM_SELF";;
@@ -2809,6 +3295,7 @@ main_menu() {
             yesno '当前内核支持时自动开启 BBR + FQ（不更换内核、不重启）' && with_lock bbr_enable;;
           7) with_lock uninstall; [[ -f $SRM_ROOT/.srm-owned ]] || return 0;;
           8) certificate_menu;;
+          9) if migrate_pending; then migrate_menu; else err '无效选项。'; fi;;
           *) err '无效选项。';;
         esac
     done
@@ -2876,6 +3363,9 @@ srm $SRM_VERSION：sing-box 节点管理（$(proto_labels)）
                           更新 sing-box 或 $(program_labels) 会重启服务、断开连接几秒，--yes 跳过确认
   srm update-check [on|off|status|run]
                           每日检查新版本（只查版本号，不下载、不重启）：开启、关闭、查看（默认）、立即检查
+  srm migrate [--apply] [--yes] [--host 地址]
+                          迁移旧版（v3，$V3_ROOT）的节点：默认只预览能迁移和不能迁移的内容；
+                          --apply 执行（停止旧服务，srm 在原端口接管，失败恢复旧服务），--yes 不再确认
   srm uninstall [--yes]   卸载（默认需要确认）
   srm render STATE        用 state 文件生成 sing-box 配置（调试用）
   srm version             版本
@@ -2949,6 +3439,7 @@ main() {
           run) require_linux && update_check_run;;
           *) err '用法：srm update-check [on|off|status|run]'; return 1;;
         esac;;
+      migrate) shift; migrate_command "$@";;
       uninstall)
         case ${2:-} in -y|--yes) assume_yes=1;; '') ;; *) err '用法：srm uninstall [--yes]'; return 1;; esac
         with_lock uninstall;;

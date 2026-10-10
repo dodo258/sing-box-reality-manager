@@ -1,0 +1,22 @@
+{
+  "dns": {
+    "servers": [
+      {
+        "tag": "managedMultiDNS_hk1",
+        "type": "udp",
+        "server": "192.0.2.54"
+      }
+    ],
+    "rules": [
+      {
+        "inbound": [
+          "AnyTLSMulti31445"
+        ],
+        "domain_regex": [
+          "^(.*\\.)?disneyplus\\.com$"
+        ],
+        "server": "managedMultiDNS_hk1"
+      }
+    ]
+  }
+}

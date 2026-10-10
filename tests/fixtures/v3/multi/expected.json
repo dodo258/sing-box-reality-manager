@@ -1,0 +1,27 @@
+{
+  "nodes": [
+    {"name": "vless-31443", "type": "vless", "port": 31443, "enabled": true, "sni": "www.example.com",
+     "uuid": "0a1b2c3d-1111-4222-8333-444455556666", "private_key": "6EtYN-a8EpE--3kLi-fNIeq5gNbyQEUD6XjD62Nz2Xo",
+     "public_key": "Qx1d9gj9YQVAo1mzznlkxp4vrQ-yRiFS7lMURE4wogs", "short_id": "6ba85179e30d4fc2"},
+    {"name": "vless-31444", "type": "vless", "port": 31444, "enabled": true, "sni": "www.example.org",
+     "uuid": "1b2c3d4e-2222-4333-8444-555566667777", "private_key": "iFWoJwv66IsdLsEdMPfvvVPYdm524dtI3bTJTkdOgWY",
+     "public_key": "dF9FBWsOeEZlcQTN_9k2SPXBzjFtL8XFY-qV_-MPBDg", "short_id": "6ba85179e30d4fc2"},
+    {"name": "vless-31449", "type": "vless", "port": 31449, "enabled": true, "sni": "www.example.net",
+     "uuid": "3d4e5f60-4444-4555-8666-777788889999", "private_key": "UAaTaPchwzGAReB5KhR1E-OoG_iLe-xrfM5B2aiVz0c",
+     "public_key": "_GdiOAjvqBx_kBcdAsLLC9AZbqnWFT3VQ2mVzI3LIQI", "short_id": "6ba85179e30d4fc2"},
+    {"name": "anytls-31445", "type": "anytls", "port": 31445, "enabled": true, "sni": "vpn.example.com",
+     "password": "4e5f6071-5555-4666-8777-88889999aaaa", "cert_dir": "certs/vpn.example.com/active"}
+  ],
+  "notes": {"vless-31444": "这个端口还有 1 个用户（bob-VLESS_Reality_Vision）不迁移，v4 每个节点只保留第一个用户。"},
+  "skipped": [
+    "VLESS Reality（端口 31446，08_VLESS_vision_gRPC_inbounds.json）",
+    "vmess（端口 31306，11_VMess_HTTPUpgrade_inbounds.json）",
+    "socks（端口 31447，20_socks5_inbounds.json）",
+    "分流 / 出站设置 31_VLESS_vision_reality_multi_dns_jp1.json",
+    "分流 / 出站设置 33_anytls_multi_dns_hk1.json",
+    "Xray vless（端口 31448）",
+    "网站",
+    "订阅链接"
+  ],
+  "units": ["dodo258-sing-box.service"]
+}

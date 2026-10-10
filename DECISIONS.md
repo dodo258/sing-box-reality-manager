@@ -144,3 +144,20 @@
 - 备选/被否决的方案：每个协议都问端口和节点名、Snell 版本另问（Snell 会有 3 个问题，超过方案的上限）；用第三方 GeoIP 接口查地区（多一个请求，Cloudflare trace 一次就带国家代码）；域名解析不对直接拒绝（开了 CDN 代理的用户也能用 http-01 申请证书，所以菜单留「仍然申请」，命令行留 webroot/import）；Shadowrocket 按协议全部列出（没有官方清单，不确定的宁可不列）。
 - 没验证：Shadowrocket、v2rayN 的实际导入（没有 iOS/Windows 环境，只按源码和链接格式）；真实 Cloudflare trace 和 `getent` 只在代码里调用，测试里用替身；真实 Let's Encrypt 申请仍没有在测试里跑。
 - 拍板人：Claude
+
+## 2026-10-10 旧版迁移（srm migrate）的取舍
+- 决定：
+  - 协议相关的读取都放在注册表的可选钩子里：`v3_import`（把 v3 sing-box 配置里的一个 inbound 转成节点字段；不是本协议返回 1，是本协议但迁不了返回 2 和原因）、`v3_scan`（v3 自己存文件的节点，目前只有 Snell 的 `snell-shadowtls/nodes/*.env`，按文本解析，不 source）、`v3_prepare`（应用前安装节点需要的程序，Snell 装 v5）。`lib/migrate.sh` 只做通用部分：逐个读 `sing-box/conf/config/*.json`（含 `30_`–`33_`）、证书、停启服务、crontab、菜单。
+  - 凭据原样保留，正在用的客户端不用改：Reality 的公钥由私钥用 openssl 推出（不依赖 `reality_key` / `.key` 文件，CI 用真实核心核对过推导结果）；shortId 沿用 v3 链接里那个固定值 `6ba85179e30d4fc2`（v3 所有部署共用，想换成独立的 shortId 只能重新部署节点）。ws 的 early data（v3 的 sing-box 客户端会发）用节点字段 `early_data` 保留，服务端加 `max_early_data 2048 / Sec-WebSocket-Protocol`；实测去掉这个字段 v3 客户端就连不上，不带 early data 的客户端照常能连。Naive 用户名、Snell 的 PSK / ShadowTLS 密码放宽为字母数字和 `._~-`（新部署仍是随机十六进制）。
+  - 同一端口有多个用户时只迁移第一个，其余用户在预览里逐个列名字（v4 每个节点一个凭据）。Snell v4 节点改由 snell-server v5 运行（v5 兼容 v4 客户端），节点 DNS 设置不迁移；ShadowTLS / Reality 握手目标不是「同名域名:443」的不迁移。
+  - 迁不了的都列出原因：Reality + gRPC、经 nginx 转发（只监听本机）的节点、socks 等 v4 没有的入站、分流和出站设置文件（含 `31_` / `33_` 节点级 DNS 分流：v3 用的是 geosite 规则集和正则，v4 只有平台域名后缀规则，自动转换不可靠，提示到菜单「3. 流媒体分流」重设）、Xray 核心的节点、网站、订阅。
+  - 证书：域名证书复制进 srm 的证书目录，来源标记为新的 `v3`；v3 的续期定时任务停用后，srm 每日续期检查在到期前 30 天对它向 Let's Encrypt 重新申请，成功后变成普通的 `acme` 证书。srm 已有同域名的有效证书时沿用 srm 的。自签证书（v3 Hysteria2 无域名模式）复制到 `selfsigned/<节点ID>`，并算出指纹，只用于能校验指纹的协议。
+  - 执行顺序：先装好 srm、准备程序和证书、生成完整配置并通过 `sing-box check`，这之前旧服务一点不动；然后停止并停用（disable，防止重启后两边抢端口）这些节点所属的旧服务，再走正常的 apply_state 事务。失败或被中断就按原来的运行 / 开机自启状态恢复旧服务。只停有节点迁走的服务：`dodo258-sing-box`（以及指向 `/etc/v2ray-agent` 的旧名 `sing-box.service`）、迁走的 Snell 节点的 `dodo258-snell-*` / `dodo258-shadowtls-*`。
+  - **和方案不同：不停 Xray 服务**。方案写了停 `dodo258-xray`，但 Xray 的节点 v4 一个都迁不了，也不会跟 srm 抢端口，停掉只会让这些用户断线；预览里写明「旧 Xray 服务继续运行」。
+  - crontab 只注释 `/etc/v2ray-agent/install.sh RenewTLS` 和 `UpdateGeo` 两类（它们会重启旧服务），行首加「# srm 迁移后停用：」；网站发布 `WebsitePublish` 不动，网站本来就不迁移。
+  - 菜单：发现 `/etc/v2ray-agent` 且还没迁移过时，打开菜单第一屏（在快速部署之前）问「发现旧版节点，要迁移过来吗？」，回车 = 先看能迁和不能迁的内容（只读本地文件，不联网），再「1. 确认迁移 / 0. 返回」，回车 = 返回。选「否」后主菜单多一项「9. 迁移旧版节点」。迁移成功写 `/var/lib/srm/migrated-v3.json`，之后不再提示。命令行 `srm migrate` 默认只预览，`--apply` 执行（不带 `--yes` 会再确认），`--host` 指定客户端连接地址（默认部署时查一次公网 IP，和快速部署一样）。
+  - 迁移后的节点名为「协议-端口」（如 `vless-443`），节点管理里可改。
+- 理由：方案「迁移」一节和待办验收标准；正在用的客户端不用改是迁移对用户最重要的一点，所以凭据、端口、证书都原样保留，宁可把迁不了的列清楚。
+- 备选/被否决的方案：读 `reality_key` 取公钥（文件可能过期或缺失）；把多用户拆成多个节点（同一端口只能有一个节点）；把 v3 的 DNS 分流转换成平台规则（geosite 规则集离线没法展开成域名列表）；迁移时立即重新申请证书（80/443 可能被 nginx 或节点占着，失败会卡住迁移）；导入证书按 `import` 处理（v3 续期停了以后没人续，最多 90 天后节点全断）。
+- 没验证：没有在真实的 v3 服务器上跑过（用 5 份按 v3 源码写出的脱敏样本，加 CI 里真实 systemd 的替身服务）；Reality 的真实流量（握手要访问外网目标，只做了 `sing-box check` 和公钥核对）；v3 证书到期前的真实 Let's Encrypt 重新申请（只有单元测试）。
+- 拍板人：Claude
