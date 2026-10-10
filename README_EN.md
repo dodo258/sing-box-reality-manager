@@ -6,6 +6,22 @@ Language: [简体中文](README.md) | [English](README_EN.md)
 
 This is an AGPL-3.0 modified branch focused on `sing-box`-first deployment, multi-instance Reality / AnyTLS+TLS certificate / Snell+ShadowTLS management, node-level DNS routing, and lightweight website management.
 
+## Installation
+
+Verify the script source and repository URL before running it as `root`:
+
+```bash
+wget -P /root -N --no-check-certificate "https://raw.githubusercontent.com/dodo258/sing-box-reality-manager/main/install.sh" && chmod 700 /root/install.sh && /root/install.sh
+```
+
+After installation:
+
+```bash
+vasma
+```
+
+For client configs, the Stash / Clash Mi self-hosted templates (VLESS Reality) in [dodo-rules](https://github.com/dodo258/dodo-rules) work out of the box — fill in the node parameters printed by the script.
+
 ## Recommended Flow
 
 For normal stable usage, start with:
@@ -62,20 +78,6 @@ Common management entries:
 * Snell+ShadowTLS is intended for single-user VPS usage; avoid shared multi-user machines.
 * Reality and Shadow-TLS target domains depend on the external network environment and may need future re-testing.
 
-## Installation
-
-Verify the script source and repository URL before running it as `root`:
-
-```bash
-wget -P /root -N --no-check-certificate "https://raw.githubusercontent.com/dodo258/sing-box-reality-manager/main/install.sh" && chmod 700 /root/install.sh && /root/install.sh
-```
-
-After installation:
-
-```bash
-vasma
-```
-
 ## Documentation
 
 * [Reality Target Domain Recommendations](documents/reality_target_domains.md)
@@ -86,7 +88,7 @@ vasma
 ## Modified Branch Notes
 
 * Maintainer: [dodo258](https://github.com/dodo258)
-* Baseline: stable `dodo258-v2ray-agent` copy
+* Upstream: [mack-a/v2ray-agent](https://github.com/mack-a/v2ray-agent), reworked to be `sing-box`-first with promotional content removed
 * Attribution: upstream source and license notes are retained in [NOTICE.md](NOTICE.md)
 
 ## License

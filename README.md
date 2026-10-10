@@ -6,6 +6,22 @@
 
 这是一个 AGPL-3.0 魔改版分支仓库。它以 `sing-box` 优先，围绕 Reality、AnyTLS+TLS证书、Snell+ShadowTLS 多实例节点管理、节点级 DNS 分流和轻量网站管理做了整理。
 
+## 安装
+
+请先确认脚本来源和仓库地址无误，再以 `root` 执行：
+
+```bash
+wget -P /root -N --no-check-certificate "https://raw.githubusercontent.com/dodo258/sing-box-reality-manager/main/install.sh" && chmod 700 /root/install.sh && /root/install.sh
+```
+
+安装完成后执行：
+
+```bash
+vasma
+```
+
+客户端配置可以直接用 [dodo-rules](https://github.com/dodo258/dodo-rules) 里的 Stash / Clash Mi 自建节点模板（VLESS Reality），把脚本输出的节点参数填进去即可。
+
 ## 推荐用法
 
 新手或日常稳定使用，优先走：
@@ -62,20 +78,6 @@
 * Snell+ShadowTLS 更适合单用户 VPS，不建议在多人共享机器上使用。
 * Reality / Shadow-TLS 目标域名依赖外部网络环境，必要时需要重新筛选。
 
-## 安装
-
-请先确认脚本来源和仓库地址无误，再以 `root` 执行：
-
-```bash
-wget -P /root -N --no-check-certificate "https://raw.githubusercontent.com/dodo258/sing-box-reality-manager/main/install.sh" && chmod 700 /root/install.sh && /root/install.sh
-```
-
-安装完成后执行：
-
-```bash
-vasma
-```
-
 ## 文档
 
 * [Reality 目标域名推荐](documents/reality_target_domains.md)
@@ -86,7 +88,7 @@ vasma
 ## 魔改说明
 
 * 当前维护: [dodo258](https://github.com/dodo258)
-* 基线来源: `dodo258-v2ray-agent` 稳定版本副本
+* 上游项目: [mack-a/v2ray-agent](https://github.com/mack-a/v2ray-agent)，在其基础上改为 `sing-box` 优先并去除推广内容
 * 合规说明: 原项目出处与许可证说明见 [NOTICE.md](NOTICE.md)
 
 ## 许可证
