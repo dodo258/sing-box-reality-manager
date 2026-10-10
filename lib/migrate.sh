@@ -135,7 +135,7 @@ migrate_inbound() {
     fi
     # v4 nodes have one user each: the first one moves, the others are listed.
     migrate_add "$plan" "$label" "$(jq -c --arg t "$type" --argjson p "$port" '. + {type:$t,port:$p}' <<< "$fields")" "$cert" '[]' '' \
-        "$(jq -c '[.users|to_entries[]|.value.name // .value.username // .value.email // "第 \(.key+1) 个用户"]' <<< "$in")"
+        "$(jq -c '[.users // []|to_entries[]|.value.name // .value.username // .value.email // "第 \(.key+1) 个用户"]' <<< "$in")"
 }
 # REPLY = the certificate of a TLS node: {kind:"ca",domain,cert,key} or, for a
 # self-signed one (only protocols whose clients pin it), {kind:"self",cert,key,pins}.
@@ -186,8 +186,9 @@ migrate_show() {
     msg '  - 由 srm 在原端口启动这些节点；启动或健康检查失败就恢复旧服务'
     if jq -e "($V3_REMAINS)|length > 0" "$plan" >/dev/null; then
         msg "  - 保留旧版定时任务（${V3_CRON_JOBS// /、}）：继续运行的 $(jq -r "($V3_REMAINS)|join(\"、\")" "$plan") 还要靠它续期证书（$V3_ROOT/tls）、更新 geo 数据"
-        if [[ -d $V3_ROOT/website-manager ]] && jq -e 'any(.units[]; test("sing-box"))' "$plan" >/dev/null && migrate_v3_restarts_singbox; then
-            msg "    注意：旧版续期证书时会重启旧 sing-box，这一步会失败（提示「sing-box重启失败」）并提前结束，网站的 nginx 会停着；证书续期那天（到期前一天凌晨）过后请打开网站看看，打不开就运行 systemctl start nginx"
+        # v3's renewal stops nginx first and starts it again only after reloadCore.
+        if { [[ -d $V3_ROOT/website-manager ]] || command -v nginx >/dev/null; } && jq -e 'any(.units[]; test("sing-box"))' "$plan" >/dev/null && migrate_v3_restarts_singbox; then
+            msg "    注意：旧版续期证书时会先停 nginx、再重启旧 sing-box，这一步会失败（提示「sing-box重启失败」）并提前结束，nginx 会停着（网站、经 nginx 转发的 Xray 节点和伪装页都打不开）；证书续期那天（到期前一天凌晨）过后请检查，打不开就运行 systemctl start nginx"
         fi
     else
         msg "  - 注释掉旧版定时任务（${V3_CRON_JOBS// /、}），行首加 #，不删除"
@@ -288,6 +289,9 @@ migrate_apply() {
     plan=$(mktemp) && candidate=$(mktemp) && config=$(mktemp) || return 1
     migrate_scan "$plan" || { rm -f "$plan" "$candidate" "$config"; return 1; }
     if ! jq -e '.nodes|length > 0' "$plan" >/dev/null; then rm -f "$plan" "$candidate" "$config"; err '没有可以迁移的节点。'; return 1; fi
+    # Without the preview (--yes) the users that stay behind are still named.
+    [[ ${assume_yes:-0} != 1 ]] || ! jq -e 'any(.nodes[]; .lost_users)' "$plan" >/dev/null ||
+        err "注意：这些用户迁移后将无法连接（v4 每个节点只有一个用户）：$(jq -r '[.nodes[].lost_users // [] | .[]]|join("、")' "$plan")"
     host=${opt_host:-}
     if [[ -z $host ]]; then
         msg '检测本机公网 IP…'
@@ -344,11 +348,13 @@ migrate_apply() {
         err '迁移失败，已恢复旧服务；旧版节点保持原样。'; return 1
     fi
     trap - INT TERM HUP
+    # The record also keeps the old units from starting (V3_BLOCK).
+    jq -n --arg at "$(date '+%F %T')" --slurpfile p "$plan" '{migrated_at:$at,units:$p[0].units,nodes:[$p[0].nodes[].node.id]}' > "$DATA/migrated-v3.json" ||
+        err "迁移记录 $DATA/migrated-v3.json 没能写入：旧版脚本仍可能启动旧服务，菜单也会再次提示迁移。"
     if jq -e "($V3_REMAINS)|length == 0" "$plan" >/dev/null; then
         migrate_cron || err '旧版定时任务没能注释掉，请手动在 crontab -e 里给它们的行首加 #。'
     fi
     if jq -e 'any(.nodes[]; .cert.kind == "ca")' "$plan" >/dev/null; then install_renew_timer || err '证书续期定时任务注册失败。'; fi
-    jq -n --arg at "$(date '+%F %T')" --slurpfile p "$plan" '{migrated_at:$at,units:$p[0].units,nodes:[$p[0].nodes[].node.id]}' > "$DATA/migrated-v3.json"
     msg $'\n迁移完成：'
     jq -r '.nodes[]|"  \(.node.name) · 端口 \(.node.port)"' "$plan"
     msg '在菜单「2. 节点管理」里能看到这些节点的分享链接、二维码和各客户端配置。'
@@ -405,8 +411,7 @@ migrate_restore_units() {
     # Unblocked first (V3_BLOCK), so they can start again.
     while read -r unit active enabled; do
         [[ -n $unit ]] || continue
-        rm -f "$V3_UNIT_DIR/$unit.d/$V3_BLOCK" || failures=1
-        rmdir "$V3_UNIT_DIR/$unit.d" 2>/dev/null || true
+        migrate_unblock "$unit" || failures=1
     done <<< "$MIGRATE_RESTORE"
     [[ -z $MIGRATE_RESTORE ]] || systemctl daemon-reload || failures=1
     while read -r unit active enabled; do
@@ -418,6 +423,14 @@ migrate_restore_units() {
         fi
     done <<< "$MIGRATE_RESTORE"
     return "$failures"
+}
+migrate_unblock() { rm -f "$V3_UNIT_DIR/$1.d/$V3_BLOCK" && { rmdir "$V3_UNIT_DIR/$1.d" 2>/dev/null || true; }; }
+# On uninstalling srm: the units it took over are no longer blocked (still disabled).
+migrate_unblock_recorded() {
+    local unit units=()
+    [[ -f $DATA/migrated-v3.json ]] || return 0
+    while IFS= read -r unit; do [[ -z $unit ]] || { migrate_unblock "$unit"; units+=("$unit"); }; done < <(jq -r '.units[]?' "$DATA/migrated-v3.json")
+    (( ${#units[@]} == 0 )) || msg "迁移时停用的旧版服务仍是停用状态，要继续用旧版：systemctl enable --now ${units[*]}"
 }
 # Comments out v3's own cron jobs (V3_CRON_JOBS run by V3_ROOT/install.sh).
 migrate_cron() {

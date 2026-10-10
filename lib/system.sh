@@ -300,6 +300,7 @@ uninstall() {
         "/etc/systemd/system/$CHECK_UNIT.service" "/etc/systemd/system/$CHECK_UNIT.timer"
     [[ $(readlink /usr/local/sbin/srm) != "$SRM_ROOT/manager.sh" ]] || rm -f /usr/local/sbin/srm
     [[ $(readlink /usr/local/sbin/vasma) != "$SRM_ROOT/manager.sh" ]] || rm -f /usr/local/sbin/vasma
+    migrate_unblock_recorded || true
     rm -rf "$SRM_ROOT" "$DATA"
     userdel srm || true
     systemctl daemon-reload

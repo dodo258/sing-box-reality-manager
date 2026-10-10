@@ -280,14 +280,20 @@ if grep -q 'xray' "$work/systemctl.log"; then fail 'systemctl called for Xray'; 
 systemctl stop dodo258-sing-box.service
 if systemctl start dodo258-sing-box.service; then fail 'v3 renewal could start the old sing-box again'; fi
 [[ ! -e $work/units/dodo258-sing-box.service.active ]] && jq -e '.nodes[0].port == 34443' "$STATE" >/dev/null || fail 'port not kept by srm'
-# Without srm's record (srm removed) the old unit starts again.
+# Uninstalling srm removes the block (the unit stays disabled); without srm's record the
+# old unit starts again in any case.
+cp "$DATA/migrated-v3.json" "$work/record"
+migrate_unblock_recorded > "$work/out" 2>&1
+[[ ! -e $work/systemd/dodo258-sing-box.service.d ]] && grep -q 'systemctl enable --now dodo258-sing-box.service' "$work/out" || fail 'uninstall left the block'
+mkdir -p "$work/systemd/dodo258-sing-box.service.d"
+printf '[Unit]\nAssertPathExists=!%s\n' "$DATA/migrated-v3.json" > "$work/systemd/dodo258-sing-box.service.d/srm-migrated.conf"
 rm "$DATA/migrated-v3.json"
 systemctl start dodo258-sing-box.service || fail 'old unit still blocked without srm'
 # A v3 whose renewal restarts sing-box (it serves socks5 too) leaves nginx stopped: the preview says so.
 load_fixture xray-site
 cp tests/fixtures/v3/multi/etc-v2ray-agent/sing-box/conf/config/20_socks5_inbounds.json "$work/v3/sing-box/conf/config/"
 main migrate > "$work/out" 2>&1
-grep -q '这一步会失败（提示「sing-box重启失败」）并提前结束，网站的 nginx 会停着' "$work/out" || { cat "$work/out"; fail 'nginx note'; }
+grep -q '这一步会失败（提示「sing-box重启失败」）并提前结束，nginx 会停着（网站、经 nginx 转发的 Xray 节点和伪装页都打不开）' "$work/out" || { cat "$work/out"; fail 'nginx note'; }
 # Only Snell nodes move: v3's sing-box keeps running, so its cron jobs stay.
 load_fixture snell
 cp "$work/crontab" "$work/crontab.before"
@@ -310,7 +316,11 @@ done
 grep -qxF '注意：上面列出的 1 个用户迁移后将无法连接。' docs/menu-preview.txt || fail 'docs/menu-preview.txt lacks the user warning'
 main <<< $'\n1\n0' > "$work/out" 2>&1 || fail 'users3 migrate'
 jq -e '.nodes[0].uuid == "9fa0b1c2-3333-4444-8555-2a2b2c2d2e2f"' "$STATE" >/dev/null || fail 'first user not moved'
-echo 'PASS a node with 3 users: the preview lists the 2 users that cannot connect afterwards, Enter goes back, 1 moves the first user'
+# --yes skips the preview; the users that stay behind are still named.
+load_fixture users3
+main migrate --apply --yes > "$work/out" 2>&1 || fail 'users3 --yes'
+grep -qF '这些用户迁移后将无法连接（v4 每个节点只有一个用户）：bob-VLESS_Reality_Vision、carol-VLESS_Reality_Vision' "$work/out" || { cat "$work/out"; fail 'users3 --yes warning'; }
+echo 'PASS a node with 3 users: the preview lists the 2 users that cannot connect afterwards, Enter goes back, 1 moves the first user; --yes names them too'
 
 # A certificate moved from v3 is renewed by a new Let's Encrypt request within 30 days of expiry.
 issue_certificate() { printf '%s\n' "$*" >> "$work/issued"; }
