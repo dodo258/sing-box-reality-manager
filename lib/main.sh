@@ -23,9 +23,16 @@ menu_header() {
 }
 main_menu() {
     require_linux || return 1
+    # Leaving quick deploy without a node is fine here; `srm add` treats it as a failure.
+    local IN_MENU=1
+    # No node yet: straight into quick deploy; 0 there shows the menu.
+    if [[ ! -f $STATE ]] || ! jq -e '.nodes|length > 0' "$STATE" >/dev/null 2>&1; then
+        menu_header
+        with_lock node_add "$SRM_SELF"
+    fi
     while :; do
         menu_header
-        msg $'  1. 部署节点\n  2. 节点管理 · 原始链接 / 二维码\n  3. 流媒体分流 · 解锁 DNS / 代理出口\n  4. 运行状态 · 日志 / 重启 / 防火墙\n  5. 更新 · 新版本检查 / 回滚\n  6. BBR 与系统检测\n  7. 卸载\n  8. 证书管理 · 到期时间 / 自动续期\n\n  0. 退出\n'
+        msg $'  1. 添加节点 · 快速部署\n  2. 节点管理 · 原始链接 / 二维码\n  3. 流媒体分流 · 解锁 DNS / 代理出口\n  4. 运行状态 · 日志 / 重启 / 防火墙\n  5. 更新 · 新版本检查 / 回滚\n  6. BBR 与系统检测\n  7. 卸载\n  8. 证书管理 · 到期时间 / 自动续期\n\n  0. 退出\n'
         ask '请选择' || return 0
         case $REPLY in
           1) with_lock node_add "$SRM_SELF";;
@@ -68,13 +75,16 @@ srm $SRM_VERSION：sing-box 节点管理（$(proto_labels)）
   srm                     打开管理菜单（常驻，做完回到菜单，输入 0 返回或退出）
   srm menu                同上
   srm install             只安装运行环境（核心、服务、srm / vasma 命令）
-  srm add [协议] [选项]   部署节点，协议：$PROTOCOLS
-                            --name 名称  --host 地址  --port 端口|random  --sni 域名
+  srm add [协议] [选项]   部署节点，协议：$PROTOCOLS；不写协议时打开快速部署列表
+                            --port 端口|random  --domain 证书域名（需要证书的协议；先检查解析到本机）
+                            --name 名称  --host 客户端连接的地址（默认自动检测本机公网 IP）
+                            --yes（不提问，未给的选项用默认值）  --json（结果输出为 JSON，其余信息写到 stderr）
+                            进阶：--sni 域名（Reality / ShadowTLS 的握手目标，或证书域名）
                             --cert auto|webroot|import|selfsigned（自签只用于客户端能校验证书指纹的协议）
                             --webroot 目录  --cert-file 文件  --key-file 文件  --email 邮箱
                             --transport tcp|ws|grpc|httpupgrade（只用于能选传输方式的协议）
                             --proto-version 6|5  --proto-mode default|unshaped（只用于 Snell：版本和 v6 模式）
-                            --bbr enable|keep  --yes（不提问，未给的选项用默认值）
+                            --bbr enable|keep
   srm list                列出节点：ID、名称、协议、端口、状态
   srm nodes               节点管理菜单：原始链接、二维码、启停、改端口、重置凭据
   srm node ID 操作 [值]   toggle | delete | rotate | port 端口 | name 名称 | retarget 目标域名
@@ -121,7 +131,8 @@ main() {
     done
     case ${1:-menu} in
       menu) main_menu;;
-      install) with_lock setup "$SRM_SELF";;
+      # Installed from a terminal: the menu opens right away (quick deploy without nodes).
+      install) with_lock setup "$SRM_SELF" || return 1; if [[ -t 0 && -t 1 ]]; then main_menu; fi;;
       add) shift; with_lock node_add "$SRM_SELF" "$@";;
       list) require_root && list_nodes;;
       nodes) require_linux && node_menu;;

@@ -112,6 +112,22 @@ echo 'PASS a node on port 853 starts under the unprivileged service user'
     ! systemctl is-active --quiet "$SERVICE" || exit 1
 )
 echo 'PASS self-signed TUIC and TCP+UDP Shadowsocks run under the service user'
+# The real menu, lock and transaction: 1 (添加节点), then only Enter deploys a running
+# VLESS Reality node and shows its summary. The public-IP lookup and the external
+# handshake check are replaced (tests/reality-live.sh covers the latter).
+(
+    source ./srm.sh
+    detect_public_ip() { PUBLIC_IP=127.0.0.1; PUBLIC_LOC=''; }
+    reality_target_check() { return 0; }
+    before=$(jq '.nodes|length' "$STATE")
+    out=$(main <<< $'1\n\n\n\n\n0' 2>&1) || { printf '%s\n' "$out"; exit 1; }
+    n=$(jq -c '.nodes[-1]' "$STATE")
+    [[ $(jq '.nodes|length' "$STATE") == $((before+1)) ]] && jq -e '.type=="vless" and .enabled and .host=="127.0.0.1"' <<< "$n" >/dev/null || { printf '%s\n' "$out"; exit 1; }
+    systemctl is-active --quiet "$SERVICE" && [[ -n $(ss -H -ltn "sport = :$(jq -r .port <<< "$n")") ]] || exit 1
+    grep -q '部署完成' <<< "$out" && grep -q '^vless://' <<< "$out" || { printf '%s\n' "$out"; exit 1; }
+    node_change "$(jq -r .id <<< "$n")" delete
+)
+echo 'PASS the real menu deploys a running VLESS Reality node with Enter only'
 # Snell v6 and v5 behind ShadowTLS through the real transaction and systemd: the
 # pinned official binaries download, snell-server runs as the service user on
 # loopback from the current generation, and toggling and deleting stop its unit.

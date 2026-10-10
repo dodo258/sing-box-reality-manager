@@ -45,13 +45,15 @@ echo 'PASS version and protocol list'
 ) || exit 1
 echo 'PASS subcommands pass their arguments to the right handler'
 # Every function the command line and the menus call exists in the bundle. Words
-# with an underscore are functions unless assigned, expanded or a registry hook name.
+# with an underscore are functions unless assigned, expanded, jq data (.cert_dir,
+# sing_box:) or a registry hook name.
 (
     source ./dist/srm
-    body=$(declare -f main main_menu status_menu node_menu update_menu routing_menu certificate_menu update_run)
+    body=$(declare -f main main_menu status_menu node_menu update_menu routing_menu certificate_menu update_run \
+        node_add node_add_main quick_pick quick_pick_more node_deploy cert_domain_confirm deploy_summary client_snippets deploy_json)
     hooks=$(compgen -A function | sed -nE 's/^proto_[a-z0-9]+_//p' | sort -u)
     for word in $(grep -oE '[a-z][a-z0-9]*_[a-z0-9_]+' <<< "$body" | sort -u); do
-        grep -qE "(^|[^a-z0-9_])$word=|\\\$\{?$word" <<< "$body" || grep -qx "$word" <<< "$hooks" || declare -F "$word" >/dev/null ||
+        grep -qE "(^|[^a-z0-9_])$word=|\\\$\{?$word|\\.$word|(^|[{,[:space:]])$word:" <<< "$body" || grep -qx "$word" <<< "$hooks" || declare -F "$word" >/dev/null ||
             fail "called but not defined: $word"
     done
 ) || exit 1

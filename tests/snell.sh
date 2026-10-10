@@ -188,18 +188,23 @@ last | jq -e '.snell_version==6 and .snell_mode=="default" and .sni=="www.ctrip.
   (.psk|test("^[a-f0-9]{32}$")) and (.shadowtls_password|test("^[a-f0-9]{32}$")) and .psk != .shadowtls_password and
   .local_port >= 10000 and .local_port < 32768 and .local_port != 20010' >/dev/null || { last; fail 'default fields'; }
 grep -q '= snell, 192.0.2.1, 20010, psk=' "$work/out" && grep -q 'Clash Meta (mihomo) 不支持 Snell v6' "$work/out" &&
-    grep -q '节点端口：20010/TCP' "$work/out" || { cat "$work/out"; fail 'deploy output'; }
+    grep -q '端口：20010/TCP ' "$work/out" && grep -q '── Surge：' "$work/out" || { cat "$work/out"; fail 'deploy output'; }
+# Shadowrocket and v2rayN cannot import the Surge line: no link, QR code or their sections.
+if grep -qE '── (分享链接|Shadowrocket|v2rayN)' "$work/out"; then cat "$work/out"; fail 'link clients for Snell'; fi
 [[ $(cat "$work/installed") == 6 && $(cat "$work/checked") == www.ctrip.com ]] || fail 'install / target check'
 node_add self snell --host 192.0.2.1 --proto-mode unshaped --sni www.ixigua.com --yes > /dev/null 2>&1 || fail 'deploy unshaped'
 last | jq -e '.snell_version==6 and .snell_mode=="unshaped" and .sni=="www.ixigua.com"' >/dev/null || fail 'unshaped fields'
 node_add self snell --host 192.0.2.1 --proto-version 5 --yes > /dev/null 2>&1 || fail 'deploy v5'
 last | jq -e '.snell_version==5 and (has("snell_mode")|not)' >/dev/null || fail 'v5 fields'
 [[ $(tail -n 1 "$work/installed") == 5 ]] || fail 'v5 binary installed'
-# Menu: version 2 = v5, then the handshake target; every answer has a default.
-node_add self <<< $'4\n\n192.0.2.1\n\n2\n2\ny' > "$work/out" 2>&1 || { cat "$work/out"; fail 'menu deploy'; }
-last | jq -e '.snell_version==5 and .sni=="www.ixigua.com"' >/dev/null || fail 'menu v5 fields'
-grep -q '1.v6（推荐' "$work/out" && grep -q 'Snell 版本 \[1\]' "$work/out" || { cat "$work/out"; fail 'menu text'; }
-node_add self <<< $'4\n\n192.0.2.1\n\n\n2\n\ny' > /dev/null 2>&1 || fail 'menu deploy unshaped'
+# Quick deploy (3): one question for version and mode, then the port; that makes two,
+# so the name takes its default. The handshake target is picked automatically.
+detect_public_ip() { PUBLIC_IP=192.0.2.1; }
+node_add self <<< $'3\n3\n\n\n' > "$work/out" 2>&1 || { cat "$work/out"; fail 'menu deploy'; }
+last | jq -e '.snell_version==5 and .sni=="www.ctrip.com" and .host=="192.0.2.1"' >/dev/null || fail 'menu v5 fields'
+grep -q '1. v6 · default 模式（推荐' "$work/out" && grep -q 'Snell 版本 \[1\]' "$work/out" || { cat "$work/out"; fail 'menu text'; }
+if grep -q '节点名称' "$work/out"; then fail 'a third question'; fi
+node_add self <<< $'3\n2\n\n\n' > /dev/null 2>&1 || fail 'menu deploy unshaped'
 last | jq -e '.snell_version==6 and .snell_mode=="unshaped" and .sni=="www.ctrip.com"' >/dev/null || fail 'menu v6 unshaped fields'
 before=$(sha256 "$STATE")
 for bad in 'snell --proto-version 4' 'snell --proto-mode unsafe-raw' 'snell --proto-version 5 --proto-mode default' \
@@ -235,8 +240,9 @@ echo 'PASS rotation renews PSK and ShadowTLS password; target switches within th
 
 # Pages: the client page explains the link, Clash Meta support and routing.
 export_node "$id" clients > "$work/clients" || fail 'clients page'
-grep -q '"type": "shadowtls"' "$work/clients" && grep -q '= snell, ' "$work/clients" && grep -q 'Clash Meta 不支持此协议' "$work/clients" &&
+grep -q '"type": "shadowtls"' "$work/clients" && grep -q '= snell, ' "$work/clients" &&
     grep -q '说明：Snell 没有通用的分享链接' "$work/clients" || { cat "$work/clients"; fail 'clients page content'; }
+if grep -q '── Clash Meta' "$work/clients"; then fail 'Clash Meta section for Snell v6'; fi
 export_node "$(jq -r '.nodes[]|select(.snell_version==5)|.id' "$STATE" | head -n 1)" clients > "$work/clients" || fail 'v5 clients page'
 grep -q '"obfs-opts"' "$work/clients" && grep -q 'QUIC 流量会回落到 TCP' "$work/clients" || { cat "$work/clients"; fail 'v5 clients page'; }
 export_node "$id" details > "$work/details" || fail details

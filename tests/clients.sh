@@ -143,15 +143,21 @@ echo 'PASS validation rejects malformed keys, UUIDs, transports, paths, pins and
 cp "$work/state.json" "$STATE"
 export_node 1000000000000003 clients > "$work/clients" || fail 'clients page'
 grep -q '"certificate_public_key_sha256"' "$work/clients" && grep -q '^- {"name":"tuic-self"' "$work/clients" &&
-    grep -q '^tuic-self = tuic-v5' "$work/clients" && grep -q "能填证书 SHA-256 指纹时填：$pin" "$work/clients" || { cat "$work/clients"; fail 'clients page content'; }
+    grep -q '^tuic-self = tuic-v5' "$work/clients" && grep -q "能填证书 SHA-256 指纹时填：$pin" "$work/clients" &&
+    grep -q '^tuic://' "$work/clients" && grep -q '── Shadowrocket：' "$work/clients" && grep -q '── v2rayN：' "$work/clients" || { cat "$work/clients"; fail 'clients page content'; }
+# Only the clients that support the protocol: Naive has no Surge, Clash Meta or Shadowrocket.
 export_node 100000000000000a clients > "$work/clients" || fail 'naive clients page'
-grep -q 'Clash Meta 不支持此协议' "$work/clients" && grep -q 'Surge 不支持此协议' "$work/clients" || fail 'unsupported clients'
+grep -q '── sing-box：' "$work/clients" && grep -q '── v2rayN：' "$work/clients" || { cat "$work/clients"; fail 'naive clients'; }
+if grep -qE '── (Surge|Clash Meta|Shadowrocket)' "$work/clients"; then cat "$work/clients"; fail 'unsupported clients listed'; fi
+export_node 100000000000000c clients > "$work/clients" || fail 'hysteria v1 clients page'
+grep -q '── Shadowrocket：' "$work/clients" || fail 'hysteria v1 Shadowrocket'
+if grep -qE '── (Surge|v2rayN)' "$work/clients"; then fail 'hysteria v1 lists Surge or v2rayN'; fi
 # Fixture certificates do not exist, so details end with an openssl error.
 export_node 100000000000000d details > "$work/details" 2>&1 || true
 grep -q "\"cert_sha256\": \"$pin\"" "$work/details" || fail 'pin shown in details'
 export_node 1000000000000002 details > "$work/details" 2>&1 || true
 if grep -q 'pw/1' "$work/details"; then fail 'details show the TUIC password'; fi
-echo 'PASS the client page lists sing-box, Clash Meta and Surge snippets and says which clients are unsupported'
+echo 'PASS the client page has one section per supported client (Surge, Clash Meta, sing-box, Shadowrocket, v2rayN) and leaves out the rest'
 
 # Non-interactive deployment with stubs for the system parts.
 printf '#!/usr/bin/env bash\ncase $2 in uuid) printf "%%s\\n" 0f2a6c1e-3b4d-4e5f-8a9b-$(openssl rand -hex 6);; esac\n' > "$work/core"
@@ -163,12 +169,15 @@ sysctl() { return 1; }
 chgrp() { :; }
 apply_state() { validate_state "$1" && cp "$1" "$STATE"; }
 issue_certificate() { printf '%s %s\n' "$1" "$2" >> "$work/issued"; }
+# This server is 192.0.2.1 and the test domains resolve to it.
+detect_public_ip() { PUBLIC_IP=192.0.2.1; }
+resolve_domain() { printf '192.0.2.1\n'; }
 jq '.nodes=[]' "$work/state.json" > "$STATE"
 last() { jq -c '.nodes[-1]' "$STATE"; }
 
 node_add self shadowsocks --host 192.0.2.1 --yes > "$work/out" 2>&1 || { cat "$work/out"; fail 'deploy shadowsocks'; }
 last | jq -e 'has("sni")|not' >/dev/null && last | jq -e '.method=="2022-blake3-aes-128-gcm" and (.password|test("^[A-Za-z0-9+/]{22}==$"))' >/dev/null || fail 'shadowsocks fields'
-grep -q '/TCP+UDP；' "$work/out" && grep -q '允许 TCP+UDP ' "$work/out" && grep -q '^ss://2022-blake3-aes-128-gcm:' "$work/out" || { cat "$work/out"; fail 'shadowsocks deploy output'; }
+grep -q '端口：[0-9]*/TCP+UDP ' "$work/out" && grep -q '放行入站 TCP+UDP [0-9]' "$work/out" && grep -q '^ss://2022-blake3-aes-128-gcm:' "$work/out" || { cat "$work/out"; fail 'shadowsocks deploy output'; }
 
 # TUIC and Hysteria without a domain default to a self-signed certificate whose
 # pins match the certificate on disk.
@@ -225,12 +234,12 @@ grep -q '非交互模式缺少参数：证书域名' "$work/out" || fail 'missin
 validate_state "$STATE" || fail 'deployed state invalid'
 echo 'PASS VLESS TLS (4 transports), VMess, Naive and Trojan deploy non-interactively; bad options change nothing'
 
-# The menu: TUIC on a server without a domain proposes the self-signed certificate.
+# The menu: TUIC (更多协议 → 2) without a domain gets a self-signed certificate, unasked.
 jq '.nodes=[]' "$work/state.json" > "$STATE"
-node_add self <<< $'6\n\n192.0.2.1\n\n\ny' > "$work/out" 2>&1 || { cat "$work/out"; fail 'menu deploy'; }
-grep -q '4.自签证书' "$work/out" && grep -q '证书方式 \[4\]' "$work/out" || { cat "$work/out"; fail 'self-signed not the default without a domain'; }
-last | jq -e '.type=="tuic" and .cert_sha256' >/dev/null || fail 'menu deployed tuic self-signed'
-echo 'PASS the menu offers a self-signed certificate as the default for TUIC without a domain'
+node_add self <<< $'5\n2\n\n\n\n' > "$work/out" 2>&1 || { cat "$work/out"; fail 'menu deploy'; }
+if grep -qE '证书方式|域名（' "$work/out"; then cat "$work/out"; fail 'asked about the certificate'; fi
+last | jq -e '.type=="tuic" and .cert_sha256 and .host=="192.0.2.1"' >/dev/null || { cat "$work/out"; last; fail 'menu deployed tuic self-signed'; }
+echo 'PASS the menu deploys TUIC without a domain on a self-signed certificate, without asking'
 
 # Rotation changes credentials and keeps the certificate and its pins.
 jq '.nodes=[]' "$work/state.json" > "$STATE"

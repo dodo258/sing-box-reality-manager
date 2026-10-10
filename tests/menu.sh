@@ -24,10 +24,13 @@ systemctl() { case $1 in is-active|is-enabled) return 3;; *) printf 'systemctl %
 journalctl() { printf 'journal fixture\n'; }
 sysctl() { printf 'net.ipv4.tcp_congestion_control = cubic\n'; }
 
-# Not installed yet: the header and an empty node list still work offline.
-main menu <<< $'2\n0' > "$work/fresh" 2>&1
+# Not installed yet: the menu opens on the quick-deploy list; 0 goes to the menu,
+# whose header and empty node list still work offline.
+main menu <<< $'0\n2\n0' > "$work/fresh" 2>&1
 grep -q '未部署' "$work/fresh"
+grep -q '快速部署' "$work/fresh" && grep -q '1. VLESS Reality' "$work/fresh" || fail 'quick deploy on a fresh machine'
 grep -q '尚无节点' "$work/fresh"
+[[ $(grep -c 'sing-box-reality-manager (srm)' "$work/fresh") == 3 ]] || fail 'quick deploy, then the menu twice'
 [[ ! -e $work/network-calls ]] || { cat "$work/network-calls"; exit 1; }
 echo 'PASS menu on a fresh machine opens without network access'
 

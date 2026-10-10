@@ -47,7 +47,7 @@ jobs:
           TEST_SNELL_V6: ${{ runner.temp }}/snell-server-v6
           TEST_SNELL_V5: ${{ runner.temp }}/snell-server-v5
         run: |
-          for test in cli menu protocols clients snell state local traffic snell-traffic updates firewall certificates-menu management; do
+          for test in cli menu quick protocols clients snell state local traffic snell-traffic updates firewall certificates-menu management; do
             echo "::group::tests/$test.sh"
             bash "tests/$test.sh"
             echo "::endgroup::"

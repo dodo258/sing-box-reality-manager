@@ -14,6 +14,10 @@ ensure_acme() {
     rm -rf "$tmp"
     return "$rc"
 }
+# A valid certificate for DOMAIN that deploying reuses instead of requesting one.
+cert_reusable() {
+    [[ -f $DATA/certs/$1/active/fullchain.pem ]] && cert_valid "$DATA/certs/$1/active/fullchain.pem" "$DATA/certs/$1/active/key.pem" "$1"
+}
 cert_valid() {
     local cert=$1 key=$2 domain=$3 a b
     openssl x509 -in "$cert" -noout -checkend 86400 >/dev/null 2>&1 &&
@@ -61,11 +65,9 @@ copy_acme_cert() {
 issue_certificate() (
     local domain=$1 mode=$2 email=${3:-} webroot=${4:-} rc=0 probe
     valid_domain "$domain" || exit 1
-    if [[ -f $DATA/certs/$domain/active/fullchain.pem ]] && cert_valid "$DATA/certs/$domain/active/fullchain.pem" "$DATA/certs/$domain/active/key.pem" "$domain"; then
-        msg '复用有效证书。'; exit 0
-    fi
+    if cert_reusable "$domain"; then msg '复用有效证书。'; exit 0; fi
     if [[ $mode == auto ]]; then
-        mode=$(cert_auto_mode) || { err '80 和 443 已被占用（或留给正在部署的节点），请选择现有网站目录验证。'; exit 1; }
+        mode=$(cert_auto_mode) || { err '80 和 443 已被占用（或留给正在部署的节点），请改用现有网站目录验证（--cert webroot）或导入证书（--cert import）。'; exit 1; }
         msg "自动选择证书验证方式：$mode"
     fi
     local challenge_port=80

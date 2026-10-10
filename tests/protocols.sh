@@ -58,8 +58,10 @@ before=$(sha256 "$STATE")
 if node_add self socks --name x --host 192.0.2.1 --port 20000 --yes > "$work/out" 2>&1; then fail 'node_add accepted socks'; fi
 grep -q '不支持的协议：socks' "$work/out" || fail 'node_add message'
 [[ $(sha256 "$STATE") == "$before" && ! -e $work/setup-called ]] || fail 'unknown protocol changed state'
+# Without --host the public IP is detected; when that fails, --yes cannot ask.
+detect_public_ip() { return 1; }
 if node_add self anytls --yes > "$work/out" 2>&1; then fail 'non-interactive add without --host accepted'; fi
-grep -q '非交互模式缺少参数' "$work/out" || fail 'missing option message'
+grep -q '非交互模式缺少参数：--host' "$work/out" || fail 'missing option message'
 if node_add self vless --host 192.0.2.1 --bogus 1 --yes 2>/dev/null; then fail 'unknown option accepted'; fi
 if node_add self vless --host 192.0.2.1 --sni example.com --yes 2>/dev/null; then fail 'unverified Reality target accepted'; fi
 [[ $(sha256 "$STATE") == "$before" ]] || fail 'rejected adds changed state'
@@ -106,6 +108,8 @@ echo 'PASS QR codes use only local qrencode and fall back to the link'
 (
     proto_demo_label() { printf 'Demo'; }
     proto_demo_transport() { printf 'udp'; }
+    proto_demo_domain() { printf 'none'; }
+    proto_demo_link_clients() { printf 'v2rayN'; }
     proto_demo_validate() { printf '%s' '(.password|text)'; }
     proto_demo_render_inbound() { printf '%s' '[base_inbound + {type:"demo",password:.password}]'; }
     proto_demo_share_uri() { printf '%s' '"demo://\(.password)@\(uri_host):\(.port)"'; }
@@ -120,6 +124,8 @@ echo 'PASS QR codes use only local qrencode and fall back to the link'
     render_config "$work/demo.json" | jq -e '.inbounds[-1]=={tag:"4444444444444444",listen:"::",listen_port:18104,type:"demo",password:"pw"}' >/dev/null || fail 'demo render'
     [[ $(node_json "$work/demo.json" 4444444444444444 | share_uri) == 'demo://pw@[2001:db8::1]:18104' ]] || fail 'demo link'
     [[ $(jq -c ".nodes[-1]|$(proto_jq_transports)" "$work/demo.json") == '["udp"]' ]] || fail 'demo transport'
+    # It also shows up under 「更多协议」 of the quick-deploy list, with the protocols without a domain.
+    [[ $(quick_more | tr '\n' ' ') == 'shadowsocks demo tuic hysteria vlesstls trojan vmess naive ' ]] || fail "demo in quick deploy: $(quick_more | tr '\n' ' ')"
 ) || exit 1
 echo 'PASS a new protocol plugs in by adding one block of hooks'
 

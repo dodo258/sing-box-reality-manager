@@ -146,6 +146,48 @@ core_download() {
     msg "改为安装本脚本测试过的 sing-box $CORE_VERSION。"
     core_fetch "$1" "$CORE_VERSION" "$(core_pinned_hash)"
 }
+# Public address of this server as the internet sees it (IPv4 first) and its country
+# code, looked up once when deploying; viewing nodes never needs it again.
+PUBLIC_IP=''
+PUBLIC_LOC=''
+detect_public_ip() {
+    [[ -z $PUBLIC_IP ]] || return 0
+    local family out ip
+    for family in 4 6; do
+        out=$(curl "-$family" --proto '=https' --fail --silent --connect-timeout 5 --max-time 8 https://www.cloudflare.com/cdn-cgi/trace 2>/dev/null) || continue
+        ip=$(sed -n 's/^ip=//p' <<< "$out" | head -n 1)
+        valid_ip "$ip" || continue
+        PUBLIC_IP=$ip
+        PUBLIC_LOC=$(sed -n 's/^loc=//p' <<< "$out" | head -n 1)
+        # XX: unknown, T1: Tor.
+        [[ $PUBLIC_LOC =~ ^[A-Z]{2}$ && $PUBLIC_LOC != XX && $PUBLIC_LOC != T1 ]] || PUBLIC_LOC=''
+        return 0
+    done
+    return 1
+}
+resolve_domain() { getent ahosts "$1" 2>/dev/null | awk '{print $1}' | sort -u; }
+# Checked before any certificate request, so a wrong DNS record is reported at once
+# instead of as a failed Let's Encrypt validation. HOST is the node's address.
+domain_resolves_here() {
+    local domain=$1 host=$2 addresses mine address
+    msg "检查域名 $domain 的解析…"
+    addresses=$(resolve_domain "$domain") || addresses=''
+    if [[ ! $host =~ ^[0-9.]+$ && $host != *:* ]]; then
+        # A domain as the node address and no public IP to compare with (NAT, no
+        # route to the lookup): nothing to check against, so it is not blocked.
+        if ! detect_public_ip; then msg '没有查到本机公网 IP，无法确认域名解析，跳过检查。'; return 0; fi
+        host=$PUBLIC_IP
+    fi
+    if [[ -z $addresses ]]; then
+        err "域名 $domain 还没有解析记录：请在域名服务商添加 A 记录指向本机 $host，生效后再试。"; return 1
+    fi
+    mine=$(printf '%s\n' "$host" "$PUBLIC_IP"; ip -o addr show 2>/dev/null | awk '{sub(/\/.*/, "", $4); print $4}')
+    while IFS= read -r address; do
+        grep -Fxq -- "$address" <<< "$mine" && return 0
+    done <<< "$addresses"
+    err "域名 $domain 解析到 $(paste -sd ' ' - <<< "$addresses")，不是本机 $host：请把 A 记录改成本机 IP（Cloudflare 要关掉代理，设为「仅 DNS」），生效后再试。"
+    return 1
+}
 port_free() {
     local port=$1 exclude=${2:-} output
     valid_port "$port" || return 1
@@ -294,11 +336,16 @@ client_note() { jq -r "$PROTO_JQ_DEFS $(proto_jq note empty)"; }
 #   share_uri        jq string: raw share link (Shadowrocket, v2rayN and others import it)
 #   client_outbound  jq object: sing-box client outbound
 #   secrets          jq paths hidden from node details
-#   prompt           ask protocol options; sets sni (empty when unused) plus its own option variables
+#   domain           none | optional | required: whether the protocol needs a domain for a
+#                    certificate (optional: a self-signed certificate without one)
+#   link_clients     apps that import the raw share link (Shadowrocket v2rayN), empty for none
+#   prompt           set protocol options from node_add's opt_* variables or their defaults
+#                    (no questions); sets sni (empty when unused or picked at create)
 #   create           generate credentials after confirmation; REPLY = JSON fields
 #   rotate           new credentials; REPLY = JSON fields to merge into the node
 # Optional: clash (jq object: Clash Meta / mihomo proxy), surge (jq string: Surge proxy line),
-# note (jq string shown with the client snippets), retarget_label / retarget_select /
+# note (jq string shown with the client snippets), hint (text in the quick-deploy list),
+# variant (the protocol's one menu question; sets node_add's opt_* variables), retarget_label / retarget_select /
 # retarget (change a TLS handshake target), and the sidecar pair for a protocol served
 # by its own program next to sing-box: sidecar (jq string: systemd unit of the node,
 # which listens on 127.0.0.1:.local_port) and sidecar_render NODE DIR (writes the
@@ -308,8 +355,10 @@ client_note() { jq -r "$PROTO_JQ_DEFS $(proto_jq note empty)"; }
 # (jq string: the program variant a node runs, e.g. "v6"), program_path KEY,
 # program_current KEY (installed version), program_latest KEY… (one network lookup;
 # prints KEY<TAB>VERSION lines) and program_fetch KEY VERSION TARGET (download and verify).
-PROTO_HOOKS='label transport validate render_inbound share_uri client_outbound secrets prompt create rotate'
+PROTO_HOOKS='label transport domain link_clients validate render_inbound share_uri client_outbound secrets prompt create rotate'
 PROTOCOLS=''
+# First page of the quick-deploy list, in this order; the rest are under 「更多协议」.
+QUICK_PROTOCOLS='vless hysteria2 snell anytls'
 PROTO_JQ_DEFS='
   def base_inbound: {tag:.id,listen:(.listen // "::"),listen_port:.port};
   def base_outbound: {tag:.name,server:.host,server_port:.port};
@@ -394,6 +443,9 @@ proto_labels() {
 REALITY_TARGETS='www.ctrip.com www.ixigua.com'
 proto_vless_label() { printf 'VLESS Reality'; }
 proto_vless_transport() { printf 'tcp'; }
+proto_vless_domain() { printf 'none'; }
+proto_vless_link_clients() { printf 'Shadowrocket v2rayN'; }
+proto_vless_hint() { printf '推荐 · 不需要域名 · 回车即可'; }
 proto_vless_validate() {
     printf '%s' '(.sni|text) and (.uuid|test("^[a-f0-9-]{36}$")) and (.private_key|text) and (.public_key|text) and (.short_id|test("^[a-f0-9]{16}$"))'
 }
@@ -414,7 +466,7 @@ proto_vless_secrets() { printf '%s' '.uuid,.private_key,.public_key,.short_id'; 
 proto_vless_prompt() { handshake_target_prompt; }
 proto_vless_create() {
     local pair private public uuid short
-    reality_target_check "$sni" || return 1
+    handshake_target_ready || return 1
     pair=$("$CORE" generate reality-keypair) || return 1
     private=$(printf '%s\n' "$pair" | awk '/PrivateKey:/{print $2}')
     public=$(printf '%s\n' "$pair" | awk '/PublicKey:/{print $2}')
@@ -433,12 +485,22 @@ proto_vless_retarget_select() { reality_target_select; }
 # REPLY = JSON fields to merge, or empty when the node already uses the target.
 proto_vless_retarget() { handshake_retarget "$@"; }
 # Reality and ShadowTLS borrow the TLS 1.3 handshake of the same vetted sites.
+# Without --sni the target is picked at create time (handshake_target_ready).
 handshake_target_prompt() {
-    if [[ -n ${opt_sni:-} ]]; then
-        reality_target_allowed "$opt_sni" || return 1
-        sni=$opt_sni
-    elif [[ ${assume_yes:-0} == 1 ]]; then sni=${REALITY_TARGETS%% *}
-    else reality_target_select || return 1; sni=$REPLY; fi
+    sni=''
+    [[ -n ${opt_sni:-} ]] || return 0
+    reality_target_allowed "$opt_sni" || return 1
+    sni=$opt_sni
+}
+# At create, with dependencies installed: checks the chosen target, or takes the
+# first built-in one that passes the check, so users never have to find one.
+handshake_target_ready() {
+    local target
+    if [[ -n $sni ]]; then reality_target_check "$sni"; return; fi
+    for target in $REALITY_TARGETS; do
+        if reality_target_check "$target" 2>/dev/null; then sni=$target; return 0; fi
+    done
+    err '内置的握手目标都没有通过检查，请检查本机 DNS / 网络 / 系统时间后重试。'; return 1
 }
 handshake_retarget() {
     local node=$1 target=$2
@@ -483,38 +545,34 @@ reality_target_check() {
 # A protocol whose clients can pin a certificate passes "selfsigned": it then also
 # offers a self-signed certificate, the default when the server has no domain.
 SELF_SIGNED_SNI=www.bing.com
+# No questions: node_add has asked for the domain already. The method comes from
+# --cert, else a self-signed certificate when allowed and there is no domain, else
+# Let's Encrypt with automatic validation (node_add offers the other methods in
+# the menu when 80 and 443 are both taken).
 tls_prompt() {
-    local allow=${1:-} default=1 domain=''
+    local allow=${1:-} default=auto domain=''
     # valid_domain also accepts dotted IPv4 addresses, which cannot get a certificate.
     if [[ ! $host =~ ^[0-9.]+$ ]] && valid_domain "$host"; then domain=$host; fi
-    # Without any domain (no domain host, no --sni) the self-signed certificate is the default.
-    [[ $allow != selfsigned || -n $domain || -n ${opt_sni:-} ]] || default=4
-    if [[ -z ${opt_cert:-} && ${assume_yes:-0} != 1 ]]; then
-        msg 'Lets Encrypt 免费证书：1.自动验证（使用空闲 80 或 443） 2.现有网站目录验证（网站保持运行） 3.导入已有证书'
-        [[ $allow != selfsigned ]] || msg '不用域名：4.自签证书（客户端按证书指纹校验）'
-    fi
-    ask_opt "${opt_cert:-}" '证书方式' "$default" || return 1
-    case $REPLY in
-      1|auto) mode=auto;;
-      2|webroot) mode=webroot;;
-      3|import) mode=import;;
-      4|selfsigned)
+    [[ $allow != selfsigned || -n $domain || -n ${opt_sni:-} ]] || default=selfsigned
+    case ${opt_cert:-$default} in
+      auto) mode=auto;;
+      webroot) mode=webroot;;
+      import) mode=import;;
+      selfsigned)
         [[ $allow == selfsigned ]] || { err '此协议需要域名证书，不支持自签证书。'; return 1; }
         mode=selfsigned; sni=${opt_sni:-$SELF_SIGNED_SNI}; return 0;;
-      *) err '证书方式无效。'; return 1;;
+      *) err '证书方式只能是 auto、webroot、import 或 selfsigned。'; return 1;;
     esac
-    ask_opt "${opt_sni:-}" '证书域名（需解析到本机）' "$domain" || return 1; sni=$REPLY
+    sni=${opt_sni:-$domain}
+    [[ -n $sni ]] || { err '非交互模式缺少参数：证书域名（--domain）'; return 1; }
     case $mode in
       webroot) ask_opt "${opt_webroot:-}" '现有网站根目录绝对路径' || return 1; webroot=$REPLY;;
       import)
         ask_opt "${opt_cert_file:-}" '完整证书链绝对路径' || return 1; cert=$REPLY
         ask_opt "${opt_key_file:-}" '私钥绝对路径' || return 1; key=$REPLY;;
     esac
-    if [[ $mode != import ]]; then
-        ask_opt "${opt_email:-}" '证书联系邮箱（可留空）' '' 1 || return 1; email=$REPLY
-        [[ -z $email || $email == *@*.* ]] || { err '邮箱格式不正确。'; return 1; }
-        msg '自动申请使用 Lets Encrypt；继续表示同意该机构的服务条款。'
-    fi
+    email=${opt_email:-}
+    [[ -z $email || $email == *@*.* ]] || { err '邮箱格式不正确。'; return 1; }
 }
 # REPLY = certificate fields of the node: cert_dir, plus the pins of a self-signed one.
 tls_create() {
@@ -566,6 +624,9 @@ UUID_VALID='(.uuid|test("^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-
 # --- AnyTLS ------------------------------------------------------------------
 proto_anytls_label() { printf 'AnyTLS'; }
 proto_anytls_transport() { printf 'tcp'; }
+proto_anytls_domain() { printf 'required'; }
+proto_anytls_link_clients() { printf 'Shadowrocket v2rayN'; }
+proto_anytls_hint() { printf '需要域名'; }
 proto_anytls_validate() { printf '%s and (.password|text)' "$(tls_validate)"; }
 proto_anytls_render_inbound() {
     printf '%s' '[base_inbound + {type:"anytls",users:[{name:.id,password:.password}],tls:({enabled:true,server_name:.sni} + tls_files)}]'
@@ -582,6 +643,9 @@ proto_anytls_rotate() { REPLY=''; with_password; }
 # --- Hysteria2 ---------------------------------------------------------------
 proto_hysteria2_label() { printf 'Hysteria2'; }
 proto_hysteria2_transport() { printf 'udp'; }
+proto_hysteria2_domain() { printf 'optional'; }
+proto_hysteria2_link_clients() { printf 'Shadowrocket v2rayN'; }
+proto_hysteria2_hint() { printf '弱网/丢包环境 · 不需要域名'; }
 proto_hysteria2_validate() { proto_anytls_validate; }
 proto_hysteria2_render_inbound() {
     printf '%s' '[base_inbound + {type:"hysteria2",users:[{name:.id,password:.password}],tls:({enabled:true,server_name:.sni,alpn:["h3"]} + tls_files)}]'
@@ -696,6 +760,10 @@ UNIT
 }
 proto_snell_label() { printf 'Snell + ShadowTLS（Surge）'; }
 proto_snell_transport() { printf 'tcp'; }
+proto_snell_domain() { printf 'none'; }
+# Shadowrocket and v2rayN cannot import the Surge line.
+proto_snell_link_clients() { :; }
+proto_snell_hint() { printf 'Surge 用户 · 不需要域名'; }
 proto_snell_validate() {
     printf '%s' '(.sni|text) and (.psk|test("^[a-f0-9]{32}$")) and (.shadowtls_password|test("^[a-f0-9]{32}$")) and
       (.local_port|type == "number" and floor == . and . >= 1 and . <= 65535) and
@@ -740,24 +808,30 @@ proto_snell_note() {
 proto_snell_secrets() { printf '%s' '.psk,.shadowtls_password'; }
 # Sets proto_version and proto_mode (locals of node_add) and the handshake target.
 proto_snell_prompt() {
-    [[ -n ${opt_proto_version:-} || ${assume_yes:-0} == 1 ]] ||
-        msg 'Snell 版本：1.v6（推荐；Surge iOS 5.20 / Mac 6.7 起支持） 2.v5（客户端还不支持 v6 时选；Clash Meta 只能用 v5）'
-    ask_opt "${opt_proto_version:-}" 'Snell 版本' 1 || return 1
-    # Menu numbers count only in the menu; the command line takes 6 or 5.
-    case ${opt_proto_version:+cli}$REPLY in 1|6|v6|cli6) proto_version=6;; 2|5|v5|cli5) proto_version=5;; *) err 'Snell 版本只能是 6 或 5。'; return 1;; esac
+    case ${opt_proto_version:-6} in 6|v6) proto_version=6;; 5|v5) proto_version=5;; *) err 'Snell 版本只能是 6 或 5。'; return 1;; esac
     proto_mode=''
     if [[ $proto_version == 6 ]]; then
-        [[ -n ${opt_proto_mode:-} || ${assume_yes:-0} == 1 ]] ||
-            msg 'Snell v6 模式（客户端要选同一个）：1.default（流量整形 + 加密，推荐） 2.unshaped（只加密，吞吐约高 10%）'
-        ask_opt "${opt_proto_mode:-}" 'Snell 模式' 1 || return 1
-        case ${opt_proto_mode:+cli}$REPLY in 1|default|clidefault) proto_mode=default;; 2|unshaped|cliunshaped) proto_mode=unshaped;; *) err 'Snell 模式只能是 default 或 unshaped。'; return 1;; esac
+        case ${opt_proto_mode:-default} in default|unshaped) proto_mode=${opt_proto_mode:-default};; *) err 'Snell 模式只能是 default 或 unshaped。'; return 1;; esac
     elif [[ -n ${opt_proto_mode:-} ]]; then err '--proto-mode 只适用于 Snell v6。'; return 1; fi
-    msg 'ShadowTLS 借用下面网站的 TLS 1.3 握手：'
     handshake_target_prompt
+}
+# The one menu question: version and v6 mode together.
+proto_snell_variant() {
+    msg $'Snell 版本（客户端要选同一个）：\n  1. v6 · default 模式（推荐；Surge iOS 5.20 / Mac 6.7 起支持）\n  2. v6 · unshaped 模式（只加密，吞吐约高 10%）\n  3. v5（客户端还不支持 v6 时选；Clash Meta 只能用 v5）'
+    while :; do
+        ask 'Snell 版本' 1 || return 1
+        case $REPLY in
+          1) opt_proto_version=6; opt_proto_mode=default;;
+          2) opt_proto_version=6; opt_proto_mode=unshaped;;
+          3) opt_proto_version=5; opt_proto_mode='';;
+          *) err '请选择 1–3。'; continue;;
+        esac
+        return 0
+    done
 }
 proto_snell_create() {
     local psk password local_port
-    reality_target_check "$sni" && snell_install "$proto_version" || return 1
+    handshake_target_ready && snell_install "$proto_version" || return 1
     psk=$(random_hex 16) && password=$(random_hex 16) || return 1
     # snell-server listens on its own loopback port, never the node port ($port of node_add),
     # and below Linux's default ephemeral range (32768–60999): a source port of a live
@@ -818,6 +892,8 @@ proto_snell_sidecar_render() {
 SS_METHOD=2022-blake3-aes-128-gcm
 proto_shadowsocks_label() { printf 'Shadowsocks 2022'; }
 proto_shadowsocks_transport() { printf 'tcp udp'; }
+proto_shadowsocks_domain() { printf 'none'; }
+proto_shadowsocks_link_clients() { printf 'Shadowrocket v2rayN'; }
 proto_shadowsocks_validate() {
     printf '%s' '.sni == null and .method == "'"$SS_METHOD"'" and (.password|test("^[A-Za-z0-9+/]{22}==$"))'
 }
@@ -841,6 +917,8 @@ proto_shadowsocks_rotate() {
 # --- TUIC v5 -----------------------------------------------------------------
 proto_tuic_label() { printf 'TUIC v5'; }
 proto_tuic_transport() { printf 'udp'; }
+proto_tuic_domain() { printf 'optional'; }
+proto_tuic_link_clients() { printf 'Shadowrocket v2rayN'; }
 proto_tuic_validate() { printf '%s and %s and (.password|text)' "$(tls_validate)" "$UUID_VALID"; }
 proto_tuic_render_inbound() {
     printf '%s' '[base_inbound + {type:"tuic",users:[{name:.id,uuid:.uuid,password:.password}],congestion_control:"bbr",tls:({enabled:true,server_name:.sni,alpn:["h3"]} + tls_files)}]'
@@ -866,6 +944,8 @@ proto_tuic_rotate() { REPLY=''; with_uuid && with_password; }
 # path, grpc a random service name. ws and httpupgrade can sit behind a CDN.
 proto_vlesstls_label() { printf 'VLESS TLS'; }
 proto_vlesstls_transport() { printf 'tcp'; }
+proto_vlesstls_domain() { printf 'required'; }
+proto_vlesstls_link_clients() { printf 'Shadowrocket v2rayN'; }
 proto_vlesstls_validate() {
     printf '%s and %s and %s' "$(tls_validate)" "$UUID_VALID" '(
       (.transport == "tcp") or
@@ -903,16 +983,24 @@ proto_vlesstls_clash() {
     printf '%s' 'clash_base + {type:"vless",uuid:.uuid,tls:true,servername:.sni,"client-fingerprint":"chrome",udp:true} + stream_clash'
 }
 proto_vlesstls_secrets() { printf '%s' '.uuid'; }
-# Sets stream (a local of node_add) from --transport or the menu.
+# Sets stream (a local of node_add) from --transport; tcp by default.
 proto_vlesstls_prompt() {
     tls_prompt || return 1
-    [[ -n ${opt_transport:-} || ${assume_yes:-0} == 1 ]] ||
-        msg '传输方式：1.tcp（Vision，直连最快） 2.ws（可套 CDN） 3.grpc 4.httpupgrade（可套 CDN）'
-    ask_opt "${opt_transport:-}" '传输方式' 1 || return 1
-    case $REPLY in
-      1|tcp) stream=tcp;; 2|ws) stream=ws;; 3|grpc) stream=grpc;; 4|httpupgrade) stream=httpupgrade;;
+    case ${opt_transport:-tcp} in
+      tcp|ws|grpc|httpupgrade) stream=${opt_transport:-tcp};;
       *) err '传输方式只能是 tcp、ws、grpc 或 httpupgrade。'; return 1;;
     esac
+}
+proto_vlesstls_variant() {
+    msg $'传输方式：\n  1. tcp（Vision，直连最快）\n  2. ws（可套 CDN）\n  3. grpc\n  4. httpupgrade（可套 CDN）'
+    while :; do
+        ask '传输方式' 1 || return 1
+        case $REPLY in
+          1) opt_transport=tcp;; 2) opt_transport=ws;; 3) opt_transport=grpc;; 4) opt_transport=httpupgrade;;
+          *) err '请选择 1–4。'; continue;;
+        esac
+        return 0
+    done
 }
 proto_vlesstls_create() {
     local route
@@ -925,6 +1013,8 @@ proto_vlesstls_rotate() { REPLY=''; with_uuid; }
 # --- Trojan ------------------------------------------------------------------
 proto_trojan_label() { printf 'Trojan'; }
 proto_trojan_transport() { printf 'tcp'; }
+proto_trojan_domain() { printf 'required'; }
+proto_trojan_link_clients() { printf 'Shadowrocket v2rayN'; }
 proto_trojan_validate() { proto_anytls_validate; }
 proto_trojan_render_inbound() {
     printf '%s' '[base_inbound + {type:"trojan",users:[{name:.id,password:.password}],tls:({enabled:true,server_name:.sni} + tls_files)}]'
@@ -942,6 +1032,8 @@ proto_trojan_rotate() { REPLY=''; with_password; }
 # alterId 0: VMess AEAD only. Kept for older clients.
 proto_vmess_label() { printf 'VMess TLS+ws'; }
 proto_vmess_transport() { printf 'tcp'; }
+proto_vmess_domain() { printf 'required'; }
+proto_vmess_link_clients() { printf 'Shadowrocket v2rayN'; }
 proto_vmess_validate() { printf '%s and %s and %s' "$(tls_validate)" "$UUID_VALID" '(.path|test("^/[A-Za-z0-9_-]+$"))'; }
 proto_vmess_render_inbound() {
     printf '%s' '[base_inbound + {type:"vmess",users:[{name:.id,uuid:.uuid,alterId:0}],
@@ -976,6 +1068,8 @@ proto_vmess_rotate() { REPLY=''; with_uuid; }
 # so the link uses sni as its host. Clash Meta and Surge have no naive client.
 proto_naive_label() { printf 'Naive'; }
 proto_naive_transport() { printf 'tcp'; }
+proto_naive_domain() { printf 'required'; }
+proto_naive_link_clients() { printf 'v2rayN'; }
 proto_naive_validate() { printf '%s and (.username|test("^[a-f0-9]{12}$")) and (.password|text)' "$(tls_validate)"; }
 proto_naive_render_inbound() {
     printf '%s' '[base_inbound + {type:"naive",network:"tcp",users:[{username:.username,password:.password}],tls:({enabled:true,server_name:.sni} + tls_files)}]'
@@ -996,6 +1090,9 @@ proto_naive_rotate() { REPLY=''; with_password; }
 # 100 Mbps down, which users can raise in their client.
 proto_hysteria_label() { printf 'Hysteria v1（兼容老客户端）'; }
 proto_hysteria_transport() { printf 'udp'; }
+proto_hysteria_domain() { printf 'optional'; }
+proto_hysteria_link_clients() { printf 'Shadowrocket'; }
+proto_hysteria_hint() { printf '兼容老客户端 · 不需要域名'; }
 proto_hysteria_validate() { proto_anytls_validate; }
 proto_hysteria_render_inbound() {
     printf '%s' '[base_inbound + {type:"hysteria",up_mbps:1000,down_mbps:1000,users:[{name:.id,auth_str:.password}],
@@ -1513,6 +1610,10 @@ ensure_acme() {
     rm -rf "$tmp"
     return "$rc"
 }
+# A valid certificate for DOMAIN that deploying reuses instead of requesting one.
+cert_reusable() {
+    [[ -f $DATA/certs/$1/active/fullchain.pem ]] && cert_valid "$DATA/certs/$1/active/fullchain.pem" "$DATA/certs/$1/active/key.pem" "$1"
+}
 cert_valid() {
     local cert=$1 key=$2 domain=$3 a b
     openssl x509 -in "$cert" -noout -checkend 86400 >/dev/null 2>&1 &&
@@ -1560,11 +1661,9 @@ copy_acme_cert() {
 issue_certificate() (
     local domain=$1 mode=$2 email=${3:-} webroot=${4:-} rc=0 probe
     valid_domain "$domain" || exit 1
-    if [[ -f $DATA/certs/$domain/active/fullchain.pem ]] && cert_valid "$DATA/certs/$domain/active/fullchain.pem" "$DATA/certs/$domain/active/key.pem" "$domain"; then
-        msg '复用有效证书。'; exit 0
-    fi
+    if cert_reusable "$domain"; then msg '复用有效证书。'; exit 0; fi
     if [[ $mode == auto ]]; then
-        mode=$(cert_auto_mode) || { err '80 和 443 已被占用（或留给正在部署的节点），请选择现有网站目录验证。'; exit 1; }
+        mode=$(cert_auto_mode) || { err '80 和 443 已被占用（或留给正在部署的节点），请改用现有网站目录验证（--cert webroot）或导入证书（--cert import）。'; exit 1; }
         msg "自动选择证书验证方式：$mode"
     fi
     local challenge_port=80
@@ -1922,21 +2021,41 @@ routing_change() {
     return "$rc"
 }
 # All mutation menu paths execute under with_lock.
-# node_add SELF [TYPE] [--name N] [--host H] [--port P|random] [--sni D] [--cert auto|webroot|import|selfsigned]
-#          [--webroot DIR] [--cert-file F] [--key-file F] [--email E] [--transport tcp|ws|grpc|httpupgrade]
-#          [--proto-version V] [--proto-mode M] [--bbr enable|keep] [--yes]
+# node_add SELF [TYPE] [--name N] [--host H] [--port P|random] [--domain D] [--sni D]
+#          [--cert auto|webroot|import|selfsigned] [--webroot DIR] [--cert-file F] [--key-file F]
+#          [--email E] [--transport tcp|ws|grpc|httpupgrade] [--proto-version V] [--proto-mode M]
+#          [--bbr enable|keep] [--yes] [--json]
+# Interactive (the menu, `srm add` without --yes): without TYPE the quick-deploy list
+# opens. Only the domain is typed (protocols that need a certificate); besides it at
+# most two questions with defaults: the protocol's own one, port, name. The server
+# address, handshake target and certificate method are chosen automatically.
+# --json prints one JSON object on stdout and everything else on stderr. Outside the
+# menu, leaving without a new node is a failure (exit code non-zero, no JSON).
 node_add() {
-    local self=$1 type='' name host port sni='' bbr=keep candidate node id tmp transport var assume_yes=0 cert_avoid_port=''
-    local opt_name='' opt_host='' opt_port='' opt_sni='' opt_cert='' opt_webroot='' opt_cert_file='' opt_key_file='' opt_email='' opt_bbr='' opt_transport=''
+    local self=$1 arg json=0 rc=0
+    shift
+    for arg in "$@"; do [[ $arg != --json ]] || json=1; done
+    DEPLOYED_NODE=''
+    if [[ $json == 0 ]]; then node_add_main "$self" "$@" || rc=$?
+    else node_add_main "$self" "$@" >&2 || rc=$?; fi
+    [[ $rc == 0 ]] || return "$rc"
+    if [[ -z $DEPLOYED_NODE ]]; then
+        [[ -n ${IN_MENU:-} ]] || { err '没有部署节点。'; return 1; }
+        return 0
+    fi
+    [[ $json == 0 ]] || deploy_json <<< "$DEPLOYED_NODE"
+}
+node_add_main() {
+    local self=$1 type='' var assume_yes=0 rc
+    local opt_name='' opt_host='' opt_port='' opt_domain='' opt_sni='' opt_cert='' opt_webroot='' opt_cert_file='' opt_key_file='' opt_email='' opt_bbr='' opt_transport=''
     local opt_proto_version='' opt_proto_mode=''
-    # Protocol prompt hooks fill these.
-    local mode=none email='' webroot='' cert='' key='' stream='' proto_version='' proto_mode=''
     shift
     if [[ -n ${1:-} && $1 != -* ]]; then type=$1; shift; fi
     while (( $# )); do
         case $1 in
           -y|--yes) assume_yes=1; shift; continue;;
-          --name|--host|--port|--sni|--cert|--webroot|--cert-file|--key-file|--email|--transport|--proto-version|--proto-mode|--bbr) ;;
+          --json) shift; continue;;
+          --name|--host|--port|--domain|--sni|--cert|--webroot|--cert-file|--key-file|--email|--transport|--proto-version|--proto-mode|--bbr) ;;
           *) err "未知参数：$1（可用参数见 srm --help）"; return 1;;
         esac
         [[ $# -ge 2 && -n $2 ]] || { err "$1 需要一个值。"; return 1; }
@@ -1944,35 +2063,205 @@ node_add() {
         printf -v "$var" '%s' "$2"
         shift 2
     done
-    if [[ -z $type ]]; then
-        if [[ $assume_yes == 1 ]]; then err "非交互模式需要指定协议：$PROTOCOLS"; return 1; fi
-        local t i=0
-        msg '部署节点（任一步输入 0 返回；同一协议可以部署多个节点，端口和凭据各自独立）'
-        for t in $PROTOCOLS; do i=$((i+1)); printf '%s. %s\n' "$i" "$(proto_call "$t" label)"; done
-        ask '协议' 1 || return 1
-        type=$(proto_by_index "$REPLY") || { err "请选择 1–$i。"; return 1; }
+    if [[ -n $type ]]; then
+        proto_known "$type" || { err "不支持的协议：$type（可选：$PROTOCOLS）"; return 1; }
+    elif [[ $assume_yes == 1 ]]; then err "非交互模式需要指定协议：$PROTOCOLS"; return 1; fi
+    # 3 from node_deploy: the user went back or has no domain; the list comes (back).
+    while :; do
+        if [[ -z $type ]]; then quick_pick || return 0; type=$REPLY; fi
+        rc=0; node_deploy "$type" || rc=$?
+        [[ $rc == 3 ]] || return "$rc"
+        # Options that belonged to the previous protocol do not follow to the next one.
+        type='' opt_domain='' opt_sni='' opt_cert='' opt_webroot='' opt_cert_file='' opt_key_file=''
+        opt_transport='' opt_proto_version='' opt_proto_mode=''
+    done
+}
+# The quick-deploy list; REPLY = protocol type, failure = back.
+quick_pick() {
+    local type i more label
+    while :; do
+        msg $'\n快速部署（任一步输入 0 返回；同一协议可以部署多个节点）'
+        i=0
+        for type in $QUICK_PROTOCOLS; do
+            i=$((i+1)); label=$(proto_call "$type" label)
+            printf '  %s. %-18s %s\n' "$i" "${label%%（*}" "$(proto_quick_hint "$type")"
+        done
+        more=''
+        for type in $(quick_more); do label=$(proto_call "$type" label); more+="${more:+、}${label%%（*}"; done
+        printf '  %s. 更多协议…          %s\n' "$((i+1))" "$more"
+        ask '请选择' 1 || return 1
+        # shellcheck disable=SC2086 # one type per word
+        if type=$(nth_word "$REPLY" $QUICK_PROTOCOLS); then REPLY=$type; return 0; fi
+        if [[ $REPLY != "$((i+1))" ]]; then err "请选择 1–$((i+1))。"; continue; fi
+        quick_pick_more && return 0
+    done
+}
+nth_word() {
+    local n=$1
+    shift
+    [[ $n =~ ^[1-9][0-9]*$ ]] && (( n <= $# )) || return 1
+    printf '%s\n' "${!n}"
+}
+# Protocols outside the first page, those without a domain first.
+quick_more() {
+    local need type
+    for need in none optional required; do
+        for type in $PROTOCOLS; do
+            [[ " $QUICK_PROTOCOLS " != *" $type "* && $(proto_call "$type" domain) == "$need" ]] && printf '%s\n' "$type"
+        done
+    done
+    return 0
+}
+proto_quick_hint() {
+    if proto_has "$1" hint; then proto_call "$1" hint
+    elif [[ $(proto_call "$1" domain) == required ]]; then printf '需要域名'
+    else printf '不需要域名'; fi
+}
+quick_pick_more() {
+    local types type i=0 label
+    types=$(quick_more)
+    msg $'\n更多协议：'
+    for type in $types; do
+        i=$((i+1)); label=$(proto_call "$type" label)
+        printf '  %s. %-18s %s\n' "$i" "${label%%（*}" "$(proto_quick_hint "$type")"
+    done
+    while :; do
+        ask '请选择' 1 || return 1
+        # shellcheck disable=SC2086 # one type per word
+        if type=$(nth_word "$REPLY" $types); then REPLY=$type; return 0; fi
+        err "请选择 1–$i。"
+    done
+}
+# Interactive: the certificate domain, asked (ASK=1) and checked until it resolves to
+# this server. Returns 3 for "no domain, pick another protocol" or back, 0 when the
+# domain is set in opt_sni (also when the user goes on despite a CDN in front).
+cert_domain_confirm() {
+    local ask_first=$1
+    while :; do
+        if [[ $ask_first == 1 ]]; then
+            msg "$(proto_call "$type" label) 需要一个已经解析到本机（$host）的域名，用来申请免费证书。"
+            ask '域名（没有域名直接回车，换一个协议）' || return 3
+            [[ -n $REPLY ]] || return 3
+            REPLY=$(tr '[:upper:]' '[:lower:]' <<< "$REPLY")
+            if [[ $REPLY =~ ^[0-9.]+$ ]] || ! valid_domain "$REPLY"; then err '域名格式不对，例如 vpn.example.com（中文域名请用 Punycode）。'; continue; fi
+            opt_sni=$REPLY
+        fi
+        # Imported certificates and website-directory validation do not need it.
+        [[ -z $opt_cert || $opt_cert == auto ]] || return 0
+        cert_reusable "$opt_sni" && return 0
+        domain_resolves_here "$opt_sni" "$host" && return 0
+        msg $'  1. 重新检查（刚改好解析的话，等一两分钟再选）\n  2. 换一个域名\n  3. 没有域名，换一个协议\n  4. 仍然申请证书（域名开了 CDN 代理时选）\n  0. 返回'
+        while :; do
+            ask '请选择' 1 || return 3
+            case $REPLY in 1) ask_first=0;; 2) ask_first=1;; 3) return 3;; 4) return 0;; *) err '请选择 0–4。'; continue;; esac
+            break
+        done
+    done
+}
+# One deployment of TYPE with node_add_main's options. Returns 3 to go back to the
+# protocol list.
+node_deploy() {
+    local type=$1 name host port sni='' bbr=keep candidate node id tmp transport cert_avoid_port='' need questions=0 checked='' saved
+    # Protocol prompt hooks fill these.
+    local mode=none email='' webroot='' cert='' key='' stream='' proto_version='' proto_mode=''
+    # Answers given in this round only; going back to the list forgets them.
+    local opt_sni=$opt_sni opt_cert=$opt_cert opt_webroot=$opt_webroot opt_cert_file=$opt_cert_file opt_key_file=$opt_key_file
+    local opt_transport=$opt_transport opt_proto_version=$opt_proto_version opt_proto_mode=$opt_proto_mode
+    need=$(proto_call "$type" domain) || return 1
+    if [[ -n $opt_domain ]]; then
+        [[ $need != none ]] || { err "$(proto_call "$type" label) 不需要域名，请去掉 --domain。"; return 1; }
+        [[ -z $opt_sni || $opt_sni == "$opt_domain" ]] || { err '--domain 和 --sni 不一致。'; return 1; }
+        opt_sni=$opt_domain
     fi
-    proto_known "$type" || { err "不支持的协议：$type（可选：$PROTOCOLS）"; return 1; }
-    ask_opt "$opt_name" '节点名称' "$(default_node_name "$type")" || return 1; name=$REPLY
-    ask_opt "$opt_host" '客户端连接的服务器 IP 或域名（域名需 DNS only 灰云）' || return 1; host=$REPLY
+    if [[ -n $opt_host ]]; then host=$opt_host
+    else
+        msg '检测本机公网 IP…'
+        if detect_public_ip; then host=$PUBLIC_IP; msg "本机公网 IP：$host"
+        elif [[ $assume_yes == 1 ]]; then err '没有检测到本机公网 IP，非交互模式缺少参数：--host'; return 1
+        else
+            while :; do
+                ask '没有检测到本机公网 IP，请填写客户端连接用的 IP 或域名' || return 3
+                host=$REPLY
+                valid_host "$host" && break
+                err '地址不合法，例如 203.0.113.5 或 vpn.example.com。'
+            done
+        fi
+    fi
     valid_host "$host" || { err '地址不合法。'; return 1; }
-    ask_opt "$opt_port" '端口：1–65535，回车随机（10000–50000 里的空闲端口）' random || return 1; port=$REPLY
+    # The domain comes first: without one the user picks another protocol right away.
+    # Optional-domain protocols need one only when a domain certificate was asked for.
+    if [[ $need == required || ( $need == optional && -n $opt_cert && $opt_cert != selfsigned ) ]] &&
+       [[ -z $opt_sni ]] && ! { [[ ! $host =~ ^[0-9.]+$ ]] && valid_domain "$host"; }; then
+        [[ $assume_yes != 1 ]] || { err '非交互模式缺少参数：证书域名（--domain）'; return 1; }
+        cert_domain_confirm 1 || return 3
+        checked=$opt_sni
+    fi
+    if [[ $assume_yes != 1 ]] && proto_has "$type" variant && [[ -z $opt_transport$opt_proto_version$opt_proto_mode ]]; then
+        proto_call "$type" variant || return 3
+        questions=$((questions+1))
+    fi
+    port=${opt_port:-random}
+    if [[ -z $opt_port && $assume_yes != 1 ]]; then
+        while :; do
+            ask '端口（1–65535，回车随机选一个空闲端口）' 随机 || return 3
+            if [[ $REPLY == 随机 ]]; then port=random; break; fi
+            if valid_port "$REPLY" && port_free "$REPLY"; then port=$REPLY; break; fi
+            err '端口要在 1–65535 之间，并且没有被占用。'
+        done
+        questions=$((questions+1))
+    fi
     if [[ $port != random ]]; then valid_port "$port" || { err '端口必须在 1–65535。'; return 1; }; fi
-    proto_call "$type" prompt || return 1
+    name=$(default_node_name "$type${PUBLIC_LOC:+-$PUBLIC_LOC}")
+    if [[ -n $opt_name ]]; then name=$opt_name
+    elif [[ $assume_yes != 1 ]] && (( questions < 2 )); then ask '节点名称' "$name" || return 3; name=$REPLY; fi
+    # Paths that only the command line chose a method for (--cert webroot / import).
+    if [[ $assume_yes != 1 ]]; then
+        case $opt_cert in
+          webroot) [[ -n $opt_webroot ]] || { ask '现有网站根目录绝对路径' || return 3; opt_webroot=$REPLY; };;
+          import)
+            [[ -n $opt_cert_file ]] || { ask '完整证书链绝对路径' || return 3; opt_cert_file=$REPLY; }
+            [[ -n $opt_key_file ]] || { ask '私钥绝对路径' || return 3; opt_key_file=$REPLY; };;
+        esac
+    fi
+    # The questions are over; protocol options take their defaults without asking.
+    saved=$assume_yes; assume_yes=1
+    proto_call "$type" prompt || { assume_yes=$saved; return 1; }
+    assume_yes=$saved
     [[ -z $sni ]] || valid_domain "$sni" || { err '域名不合法，请使用 ASCII/Punycode 域名。'; return 1; }
     [[ -z $opt_transport || -n $stream ]] || { err "--transport 不适用于 $(proto_call "$type" label)。"; return 1; }
     [[ -z $opt_proto_version$opt_proto_mode || -n $proto_version ]] || { err "--proto-version、--proto-mode 不适用于 $(proto_call "$type" label)。"; return 1; }
-    if [[ ! -f $STATE ]]; then
-        [[ -n $opt_bbr || $assume_yes == 1 ]] || msg 'BBR：1.内核支持时自动启用（主机级 TCP 设置） 2.保持现状（与现有程序共存时选择）'
-        ask_opt "$opt_bbr" 'BBR 设置' 2 || return 1
-        case $REPLY in 1|enable) bbr=enable;; 2|keep) bbr=keep;; *) err '无效选项。'; return 1;; esac
-    fi
-    msg "部署：$name / $(proto_call "$type" label) / $host:$port${sni:+ / $sni}"
-    if [[ $assume_yes != 1 ]]; then yesno '开始安装缺失依赖、申请证书并部署' || return 0; fi
+    case ${opt_bbr:-keep} in 1|enable) bbr=enable;; 2|keep) bbr=keep;; *) err '--bbr 只能是 enable 或 keep。'; return 1;; esac
+    # A domain from the command line is checked here, still before any certificate request.
+    while [[ $mode == auto && -n $sni && $sni != "$checked" ]] && ! cert_reusable "$sni"; do
+        if [[ $assume_yes == 1 ]]; then
+            domain_resolves_here "$sni" "$host" || { err '没有申请证书。域名开了 CDN 代理时，改用 --cert webroot 或 --cert import。'; return 1; }
+            break
+        fi
+        opt_sni=$sni
+        cert_domain_confirm 0 || return 3
+        checked=$opt_sni
+        # Another domain was typed: the protocol options follow it.
+        saved=$assume_yes; assume_yes=1
+        proto_call "$type" prompt || { assume_yes=$saved; return 1; }
+        assume_yes=$saved
+    done
+    msg "部署：$name / $(proto_call "$type" label) / $host:${port/#random/随机端口}${sni:+ / $sni}"
     [[ -f $SRM_ROOT/.srm-owned ]] || setup "$self" || return 1
     ensure_dependencies || return 1
-    if [[ $port == random ]]; then port=$(choose_port) || return 1; else port_free "$port" || { err '端口被占用，原服务未改动。'; return 1; }; fi
     transport=$(proto_call "$type" transport) || return 1
+    [[ " $transport " != *" tcp "* || $port == random ]] || cert_avoid_port=$port
+    # Both 80 and 443 taken: the menu offers the other ways to get the certificate.
+    if [[ $mode == auto && $assume_yes != 1 ]] && ! cert_reusable "$sni" && ! cert_auto_mode >/dev/null; then
+        msg $'80 和 443 端口都有程序在用，Let\'s Encrypt 没法自动验证域名：\n  1. 用现有网站目录验证（网站保持运行）\n  2. 导入已有证书\n  0. 返回'
+        ask '请选择' 1 || return 3
+        case $REPLY in
+          1) mode=webroot; ask '现有网站根目录绝对路径' || return 3; webroot=$REPLY;;
+          2) mode=import; ask '完整证书链绝对路径' || return 3; cert=$REPLY; ask '私钥绝对路径' || return 3; key=$REPLY;;
+          *) err '无效选项。'; return 3;;
+        esac
+    fi
+    [[ $mode != auto && $mode != webroot ]] || msg "证书由 Let's Encrypt 免费签发；继续表示同意该机构的服务条款。"
+    if [[ $port == random ]]; then port=$(choose_port) || return 1; else port_free "$port" || { err '端口被占用，原服务未改动。'; return 1; }; fi
     cert_port_ok "$port" "$transport" || return 1
     [[ " $transport " != *" tcp "* ]] || cert_avoid_port=$port
     id=$(random_hex 8) || return 1
@@ -1989,22 +2278,100 @@ node_add() {
     candidate=$(new_candidate) || return 1
     tmp=$(mktemp) || return 1
     jq --argjson n "$node" '.nodes += [$n]' "$candidate" > "$tmp" && mv "$tmp" "$candidate" || return 1
+    if [[ -f $STATE ]] && jq -e 'any(.nodes[]; .enabled)' "$STATE" >/dev/null 2>&1; then
+        msg '应用新配置会重启服务，已有节点的连接会断开几秒。'
+    fi
     if apply_state "$candidate"; then
         rm -f "$candidate"
         if [[ $bbr == enable ]]; then
             if [[ $(sysctl -n net.ipv4.tcp_congestion_control) == bbr ]]; then msg 'BBR 已开启。'; else bbr_enable || msg '节点已部署；BBR 未启用，原因见上方。'; fi
         fi
-        transport=$(printf '%s' "$transport" | tr '[:lower:] ' '[:upper:]+')
-        msg "节点 ID：$id"
-        msg "节点端口：${port}/${transport}；如仍无法连接，请在服务商控制台的云安全组允许 ${transport} ${port}。"
-        printf '%s' "$node" | share_uri
-        printf '%s' "$node" | client_note
-        msg '二维码、详情和客户端配置：在菜单里选「2. 节点管理」。'
+        DEPLOYED_NODE=$node
+        printf '%s' "$node" | deploy_summary
+        if [[ $assume_yes != 1 ]]; then printf '按回车继续' >&2; IFS= read -r _ || true; fi
         return 0
     fi
     # A self-signed certificate made for this node is unused once the deploy fails.
     rm -rf "$DATA/selfsigned/$id"
     rm -f "$candidate"; return 1
+}
+# One screen after deploying: address, cloud firewall, link and QR code, and the
+# snippet of every client that supports the protocol (node JSON on stdin).
+deploy_summary() {
+    local node transport port
+    node=$(cat)
+    port=$(jq -r .port <<< "$node")
+    transport=$(proto_call "$(jq -r .type <<< "$node")" transport | tr '[:lower:] ' '[:upper:]+')
+    msg ''
+    msg "━━━━━━━━ 部署完成：$(jq -r .name <<< "$node")（$(proto_call "$(jq -r .type <<< "$node")" label)）━━━━━━━━"
+    msg "服务器：$(jq -r .host <<< "$node")    端口：$port/$transport    节点 ID：$(jq -r .id <<< "$node")"
+    msg "云服务器安全组：连不上时，到服务商控制台的安全组（云防火墙）放行入站 $transport $port；本机的 UFW / firewalld 已自动放行。"
+    client_snippets qr <<< "$node"
+    msg '以后在菜单里选「2. 节点管理」可以再次查看链接、二维码和这些配置。'
+}
+# Client configurations of the node on stdin, one section per supported client;
+# with "qr" the share link is also drawn as a QR code (locally, no network).
+client_snippets() {
+    local node type clients link out client
+    node=$(cat)
+    type=$(jq -r .type <<< "$node")
+    clients=$(proto_call "$type" link_clients) || return 1
+    if [[ -n $clients ]]; then
+        link=$(share_uri <<< "$node") || return 1
+        msg $'\n── 分享链接 ──'
+        msg "$link"
+        if [[ ${1:-} == qr ]]; then
+            if command -v qrencode >/dev/null; then
+                if use_color; then qrencode -t ANSIUTF8 <<< "$link"; else qrencode -t UTF8 <<< "$link"; fi
+            else msg '（未安装 qrencode，没有二维码。）'; fi
+        fi
+    fi
+    out=$(surge_proxy <<< "$node") || return 1
+    [[ -z $out ]] || { msg $'\n── Surge：放进配置的 [Proxy] 段 ──'; msg "$out"; }
+    out=$(clash_proxy <<< "$node") || return 1
+    [[ -z $out ]] || { msg $'\n── Clash Meta (mihomo)：放进 proxies: 列表 ──'; msg "$out"; }
+    msg $'\n── sing-box：放进 outbounds 列表 ──'
+    client_outbound <<< "$node" || return 1
+    for client in $clients; do
+        msg ''
+        client_import_hint "$client"
+    done
+    out=$(jq -r '.cert_sha256 // empty' <<< "$node")
+    [[ -z $out ]] || msg $'\n'"自签证书：以上 Surge、Clash Meta、sing-box 配置已带证书指纹；只导入链接的客户端会跳过证书校验，客户端能填证书 SHA-256 指纹时填：$out"
+    out=$(client_note <<< "$node") || return 1
+    [[ -z $out ]] || msg $'\n'"说明：$out"
+}
+client_import_hint() {
+    case $1 in
+      Shadowrocket) msg '── Shadowrocket：扫上面的二维码，或复制分享链接后打开 Shadowrocket，会提示从剪贴板添加 ──';;
+      v2rayN) msg '── v2rayN：复制分享链接，在 v2rayN 主界面按 Ctrl+V（从剪贴板导入分享链接）──';;
+    esac
+}
+# `srm add --json`: the deploy summary as one object; clients the protocol does not
+# support are absent.
+deploy_json() {
+    local node type link='' clients surge clash outbound
+    node=$(cat)
+    type=$(jq -r .type <<< "$node")
+    clients=$(proto_call "$type" link_clients) || return 1
+    [[ -z $clients ]] || link=$(share_uri <<< "$node") || return 1
+    surge=$(surge_proxy <<< "$node") && outbound=$(client_outbound <<< "$node") || return 1
+    clash=$(jq -c "$PROTO_JQ_DEFS $(proto_jq clash empty)" <<< "$node") || return 1
+    jq -n --argjson node "$node" --arg label "$(proto_call "$type" label)" --arg transport "$(proto_call "$type" transport)" \
+      --arg link "$link" --arg clients "$clients" --arg surge "$surge" --arg clash "${clash:-null}" --argjson outbound "$outbound" \
+      --arg note "$(client_note <<< "$node")" '
+      ($clients|split(" ")|map(select(. != ""))) as $apps |
+      {id:$node.id,name:$node.name,type:$node.type,protocol:$label,host:$node.host,port:$node.port,
+       firewall:[$transport|split(" ")[]|{port:$node.port,protocol:.}],
+       share_link:(if $link == "" then null else $link end),
+       clients:({}
+         + (if $surge == "" then {} else {surge:$surge} end)
+         + (($clash|fromjson) as $c|if $c == null then {} else {clash_meta:$c} end)
+         + {sing_box:$outbound}
+         + (if any($apps[]; . == "Shadowrocket") then {shadowrocket:$link} else {} end)
+         + (if any($apps[]; . == "v2rayN") then {v2rayn:$link} else {} end))}
+      + (if $node.cert_sha256 then {cert_sha256:$node.cert_sha256} else {} end)
+      + (if $note == "" then {} else {note:$note} end)'
 }
 # Another node of the same protocol gets a numbered default name: <type>, <type>-2, …
 default_node_name() {
@@ -2030,20 +2397,7 @@ export_node() {
       outbound) printf '%s' "$node" | client_outbound;;
       clash) printf '%s' "$node" | clash_proxy;;
       surge) printf '%s' "$node" | surge_proxy;;
-      clients)
-        msg '── sing-box 客户端出站 ──'
-        printf '%s' "$node" | client_outbound || return 1
-        msg '── Clash Meta (mihomo)：放进 proxies: 列表 ──'
-        link=$(printf '%s' "$node" | clash_proxy) || return 1
-        msg "${link:-Clash Meta 不支持此协议。}"
-        msg '── Surge：放进 [Proxy] 段 ──'
-        link=$(printf '%s' "$node" | surge_proxy) || return 1
-        msg "${link:-Surge 不支持此协议。}"
-        msg '── Shadowrocket、v2rayN 等：导入原始分享链接或扫二维码 ──'
-        link=$(printf '%s' "$node" | jq -r '.cert_sha256 // empty')
-        [[ -z $link ]] || msg "自签证书：以上配置已带证书指纹；只导入链接的客户端会跳过证书校验，客户端能填证书 SHA-256 指纹时填：$link"
-        link=$(printf '%s' "$node" | client_note) || return 1
-        [[ -z $link ]] || msg "说明：$link";;
+      clients) printf '%s' "$node" | client_snippets;;
       details)
         printf '%s' "$node" | jq "del($(proto_call "$type" secrets))" || return 1
         if [[ $(printf '%s' "$node" | jq -r '.cert_dir // empty') ]]; then
@@ -2120,7 +2474,7 @@ node_menu() {
         id=$(jq -r --argjson i "$((REPLY-1))" '.nodes[$i].id' "$STATE") || return 1
     fi
     type=$(node_json "$STATE" "$id" | jq -r .type) || { err '节点不存在。'; return 1; }
-    msg $'1.详情 2.原始分享链接 3.二维码 4.客户端配置（sing-box / Clash Meta / Surge）\n5.启用/停用 6.修改端口 7.重置凭据 8.修改名称 9.删除'
+    msg $'1.详情 2.原始分享链接 3.二维码 4.客户端配置（Surge / Clash Meta / sing-box / Shadowrocket / v2rayN）\n5.启用/停用 6.修改端口 7.重置凭据 8.修改名称 9.删除'
     ! proto_has "$type" retarget_select || msg "10.$(proto_call "$type" retarget_label)"
     ask '操作' 1 || return 0
     case $REPLY in
@@ -2432,9 +2786,16 @@ menu_header() {
 }
 main_menu() {
     require_linux || return 1
+    # Leaving quick deploy without a node is fine here; `srm add` treats it as a failure.
+    local IN_MENU=1
+    # No node yet: straight into quick deploy; 0 there shows the menu.
+    if [[ ! -f $STATE ]] || ! jq -e '.nodes|length > 0' "$STATE" >/dev/null 2>&1; then
+        menu_header
+        with_lock node_add "$SRM_SELF"
+    fi
     while :; do
         menu_header
-        msg $'  1. 部署节点\n  2. 节点管理 · 原始链接 / 二维码\n  3. 流媒体分流 · 解锁 DNS / 代理出口\n  4. 运行状态 · 日志 / 重启 / 防火墙\n  5. 更新 · 新版本检查 / 回滚\n  6. BBR 与系统检测\n  7. 卸载\n  8. 证书管理 · 到期时间 / 自动续期\n\n  0. 退出\n'
+        msg $'  1. 添加节点 · 快速部署\n  2. 节点管理 · 原始链接 / 二维码\n  3. 流媒体分流 · 解锁 DNS / 代理出口\n  4. 运行状态 · 日志 / 重启 / 防火墙\n  5. 更新 · 新版本检查 / 回滚\n  6. BBR 与系统检测\n  7. 卸载\n  8. 证书管理 · 到期时间 / 自动续期\n\n  0. 退出\n'
         ask '请选择' || return 0
         case $REPLY in
           1) with_lock node_add "$SRM_SELF";;
@@ -2477,13 +2838,16 @@ srm $SRM_VERSION：sing-box 节点管理（$(proto_labels)）
   srm                     打开管理菜单（常驻，做完回到菜单，输入 0 返回或退出）
   srm menu                同上
   srm install             只安装运行环境（核心、服务、srm / vasma 命令）
-  srm add [协议] [选项]   部署节点，协议：$PROTOCOLS
-                            --name 名称  --host 地址  --port 端口|random  --sni 域名
+  srm add [协议] [选项]   部署节点，协议：$PROTOCOLS；不写协议时打开快速部署列表
+                            --port 端口|random  --domain 证书域名（需要证书的协议；先检查解析到本机）
+                            --name 名称  --host 客户端连接的地址（默认自动检测本机公网 IP）
+                            --yes（不提问，未给的选项用默认值）  --json（结果输出为 JSON，其余信息写到 stderr）
+                            进阶：--sni 域名（Reality / ShadowTLS 的握手目标，或证书域名）
                             --cert auto|webroot|import|selfsigned（自签只用于客户端能校验证书指纹的协议）
                             --webroot 目录  --cert-file 文件  --key-file 文件  --email 邮箱
                             --transport tcp|ws|grpc|httpupgrade（只用于能选传输方式的协议）
                             --proto-version 6|5  --proto-mode default|unshaped（只用于 Snell：版本和 v6 模式）
-                            --bbr enable|keep  --yes（不提问，未给的选项用默认值）
+                            --bbr enable|keep
   srm list                列出节点：ID、名称、协议、端口、状态
   srm nodes               节点管理菜单：原始链接、二维码、启停、改端口、重置凭据
   srm node ID 操作 [值]   toggle | delete | rotate | port 端口 | name 名称 | retarget 目标域名
@@ -2530,7 +2894,8 @@ main() {
     done
     case ${1:-menu} in
       menu) main_menu;;
-      install) with_lock setup "$SRM_SELF";;
+      # Installed from a terminal: the menu opens right away (quick deploy without nodes).
+      install) with_lock setup "$SRM_SELF" || return 1; if [[ -t 0 && -t 1 ]]; then main_menu; fi;;
       add) shift; with_lock node_add "$SRM_SELF" "$@";;
       list) require_root && list_nodes;;
       nodes) require_linux && node_menu;;
