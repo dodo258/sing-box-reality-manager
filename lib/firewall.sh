@@ -152,6 +152,7 @@ firewall_clear() {
         [[ -f $file ]] || continue
         firewall_remove "$file" || failures=1
     done
+    hop_sync || failures=1
     firewall_ipt_save
     return "$failures"
 }
@@ -209,6 +210,7 @@ firewall_sync() {
             key=${file##*/}
             grep -Fxq "$key" "$desired" || firewall_remove "$file" || failures=1
         done
+        hop_sync "$state" || failures=1
     fi
     firewall_ipt_save
     if [[ -s $ports ]]; then
@@ -228,3 +230,140 @@ firewall_renew() (
     firewall_sync "$STATE" "$port" || exit 1
     acme_call "$domain" --renew -d "$domain" --ecc
 )
+# Port hopping (protocols with the port_hopping hook, node field hop {start, end}):
+# clients rotate among the ports start–end, and UDP sent to them is redirected to the
+# node port before the firewall filters it, so only the node port needs an allow rule.
+# Only packets addressed to this server are redirected (never traffic it forwards,
+# e.g. for containers). Rules carry the comment srm-hop: iptables / ip6tables nat
+# PREROUTING when iptables exists (the same backend as the rest of the system),
+# otherwise one nftables table inet srm_hop replaced atomically. Neither survives a
+# reboot by itself: srm.service runs `srm hop-sync` before every start
+# (the Port Hopping page of the official documentation, linked in lib/protocols.sh).
+HOP_COMMENT=srm-hop
+HOP_TABLE=srm_hop
+hop_valid_range() {
+    [[ $1 =~ ^[1-9][0-9]{3,4}$ && $2 =~ ^[1-9][0-9]{3,4}$ ]] && (( $1 >= 1024 && $1 < $2 && $2 <= 65535 ))
+}
+# "START-END" (also "START:END") → "START END"; fails for anything else.
+hop_parse() {
+    local range=${1//:/-} start end
+    [[ $range =~ ^([0-9]+)-([0-9]+)$ ]] || return 1
+    start=${BASH_REMATCH[1]} end=${BASH_REMATCH[2]}
+    hop_valid_range "$start" "$end" || return 1
+    printf '%s %s\n' "$start" "$end"
+}
+# The range START–END can be redirected for node EXCLUDE (its own range does not
+# count) whose port is PORT: no node port, helper port or other range of STATE in
+# it, not PORT, and no program listening on UDP in it. Prints the reason when not.
+hop_range_free() {
+    local start=$1 end=$2 exclude=${3:-} port=${4:-} output
+    if [[ $port =~ ^[0-9]+$ ]] && (( start <= port && port <= end )); then
+        printf '节点端口 %s 在这段范围里\n' "$port"; return 1
+    fi
+    if [[ -f $STATE ]]; then
+        output=$(jq -r --arg id "$exclude" --argjson s "$start" --argjson e "$end" '
+          [.nodes[]|select(.id != $id)|(.port, (.local_port // empty))|select($s <= . and . <= $e)] as $ports |
+          [.nodes[]|select(.id != $id and .hop != null)|select(.hop.start <= $e and $s <= .hop.end)|.name] as $hops |
+          if ($ports|length) > 0 then "已有节点使用端口 \($ports[0])"
+          elif ($hops|length) > 0 then "和节点「\($hops[0])」的端口跳跃范围重叠" else empty end' "$STATE") || return 1
+        [[ -z $output ]] || { printf '%s\n' "$output"; return 1; }
+    fi
+    output=$(ss -H -lun "sport >= :$start and sport <= :$end" 2>/dev/null) || output=''
+    [[ -z $output ]] || { printf '有程序在这段范围里监听 UDP（%s）\n' "$(awk '{print $4}' <<< "$output" | head -n 1)"; return 1; }
+}
+# The default range: the first free block of 1000 ports from 20000 (below Linux's
+# ephemeral ports 32768–60999); prints "START END".
+hop_default() {
+    local start
+    for ((start=20000; start<=31000; start+=1000)); do
+        hop_range_free "$start" "$((start + 999))" "${1:-}" "${2:-}" >/dev/null && { printf '%s %s\n' "$start" "$((start + 999))"; return 0; }
+    done
+    err '20000–31999 里没有空闲的 1000 个连续端口，请自己填端口范围。'; return 1
+}
+# Installs nftables when the system has neither iptables nor nft.
+hop_tools_ready() {
+    [[ -z $(hop_backend) ]] || return 0
+    msg '端口跳跃需要 nftables，正在安装…'
+    apt-get update && DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l apt-get install -y --no-install-recommends nftables || return 1
+    command -v nft >/dev/null
+}
+hop_ipt_spec() { printf '%s\n' -p udp -m addrtype --dst-type LOCAL -m udp --dport "$1:$2" -m comment --comment "$HOP_COMMENT" -j REDIRECT --to-ports "$3"; }
+# Brings CMD's srm-hop rules to the "START END PORT" lines of DESIRED; nothing changes
+# when they already match.
+hop_ipt_apply() {
+    local cmd=$1 desired=$2 current line start end port spec=() word
+    current=$(LC_ALL=C "$cmd" -w 5 -t nat -S PREROUTING) || return 1
+    current=$(grep -F -- "--comment $HOP_COMMENT " <<< "$current" || true)
+    [[ $(sed -nE 's/.*--dport ([0-9]+):([0-9]+) .*--to-ports ([0-9]+).*/\1 \2 \3/p' <<< "$current" | sort) != "$(sort <<< "$desired")" ]] || return 0
+    while IFS= read -r line; do
+        [[ $line == '-A PREROUTING '* ]] || continue
+        # The comment has no spaces, so the listed rule splits into its arguments.
+        read -ra spec <<< "${line#-A PREROUTING }"
+        "$cmd" -w 5 -t nat -D PREROUTING "${spec[@]}" || return 1
+    done <<< "$current"
+    while read -r start end port; do
+        [[ -n $start ]] || continue
+        spec=()
+        while IFS= read -r word; do spec+=("$word"); done < <(hop_ipt_spec "$start" "$end" "$port")
+        "$cmd" -w 5 -t nat -A PREROUTING "${spec[@]}" || return 1
+    done <<< "$desired"
+    # Saved with the other iptables rules only where they are saved anyway; the
+    # service start restores them otherwise.
+    if command -v netfilter-persistent >/dev/null; then FIREWALL_IPT_CHANGED=1; fi
+}
+hop_nft_apply() {
+    local desired=$1 start end port rules=''
+    if [[ -z $desired ]]; then
+        nft list table inet "$HOP_TABLE" >/dev/null 2>&1 || return 0
+        nft delete table inet "$HOP_TABLE"; return
+    fi
+    while read -r start end port; do
+        rules+="    fib daddr type local udp dport $start-$end counter redirect to :$port comment \"$HOP_COMMENT\""$'\n'
+    done <<< "$desired"
+    # Created, deleted and created again in one transaction: old rules never mix in.
+    nft -f - <<NFT
+add table inet $HOP_TABLE
+delete table inet $HOP_TABLE
+table inet $HOP_TABLE {
+  chain prerouting {
+    type nat hook prerouting priority -100; policy accept;
+$rules  }
+}
+NFT
+}
+hop_backend() {
+    if command -v iptables >/dev/null; then printf 'iptables\n'
+    elif command -v nft >/dev/null; then printf 'nft\n'; fi
+}
+# Redirect rules for STATE's enabled nodes; without STATE every srm-hop rule goes.
+# Systems that never had port hopping are not touched (no record). IPv6 is best
+# effort: a failure there is reported and does not fail the sync.
+hop_sync() {
+    local state=${1:-} desired='' backend='' previous=''
+    if [[ -n $state && -f $state ]]; then
+        desired=$(jq -r '.nodes[]|select(.enabled and .hop != null)|"\(.hop.start) \(.hop.end) \(.port)"' "$state") || return 1
+    fi
+    [[ -n $desired || -f $DATA/port-hopping ]] || return 0
+    backend=$(hop_backend)
+    [[ -n $backend || -z $desired ]] || { err '端口跳跃需要 iptables 或 nftables，系统里都没有。'; return 1; }
+    [[ ! -f $DATA/port-hopping ]] || previous=$(head -n 1 "$DATA/port-hopping")
+    # Rules left by the other backend (iptables installed or removed since) go first.
+    if [[ -n $previous && $previous != "$backend" ]]; then
+        case $previous in
+          iptables)
+            hop_ipt_apply iptables '' || return 1
+            if command -v ip6tables >/dev/null; then hop_ipt_apply ip6tables '' 2>/dev/null || true; fi;;
+          nft) hop_nft_apply '' || return 1;;
+        esac
+    fi
+    case $backend in
+      iptables)
+        hop_ipt_apply iptables "$desired" || { err '端口跳跃的 iptables 转发规则没有改成功。'; return 1; }
+        if command -v ip6tables >/dev/null && ! hop_ipt_apply ip6tables "$desired" 2>/dev/null && [[ -n $desired ]]; then
+            msg '提示：IPv6 的端口跳跃转发没有加上（系统可能不支持 ip6tables nat），IPv4 不受影响。'
+        fi;;
+      nft) hop_nft_apply "$desired" || { err '端口跳跃的 nftables 转发规则没有改成功。'; return 1; };;
+    esac
+    if [[ -n $desired ]]; then printf '%s\n%s\n' "$backend" "$desired" > "$DATA/port-hopping" || return 1
+    else rm -f "$DATA/port-hopping"; fi
+}

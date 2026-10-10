@@ -2,7 +2,7 @@
 # node_add SELF [TYPE] [--name N] [--host H] [--port P|random] [--domain D] [--sni D]
 #          [--cert auto|webroot|import|selfsigned] [--webroot DIR] [--cert-file F] [--key-file F]
 #          [--email E] [--transport tcp|ws|grpc|httpupgrade] [--proto-version V] [--proto-mode M]
-#          [--bbr enable|keep] [--yes] [--json]
+#          [--hop off|auto|START-END] [--bbr enable|keep] [--yes] [--json]
 # Interactive (the menu, `srm add` without --yes): without TYPE the quick-deploy list
 # opens. Only the domain is typed (protocols that need a certificate); besides it at
 # most two questions with defaults: the protocol's own one, port, name. The server
@@ -26,14 +26,14 @@ node_add() {
 node_add_main() {
     local self=$1 type='' var assume_yes=0 rc
     local opt_name='' opt_host='' opt_port='' opt_domain='' opt_sni='' opt_cert='' opt_webroot='' opt_cert_file='' opt_key_file='' opt_email='' opt_bbr='' opt_transport=''
-    local opt_proto_version='' opt_proto_mode=''
+    local opt_proto_version='' opt_proto_mode='' opt_hop=''
     shift
     if [[ -n ${1:-} && $1 != -* ]]; then type=$1; shift; fi
     while (( $# )); do
         case $1 in
           -y|--yes) assume_yes=1; shift; continue;;
           --json) shift; continue;;
-          --name|--host|--port|--domain|--sni|--cert|--webroot|--cert-file|--key-file|--email|--transport|--proto-version|--proto-mode|--bbr) ;;
+          --name|--host|--port|--domain|--sni|--cert|--webroot|--cert-file|--key-file|--email|--transport|--proto-version|--proto-mode|--hop|--bbr) ;;
           *) err "未知参数：$1（可用参数见 srm --help）"; return 1;;
         esac
         [[ $# -ge 2 && -n $2 ]] || { err "$1 需要一个值。"; return 1; }
@@ -51,7 +51,7 @@ node_add_main() {
         [[ $rc == 3 ]] || return "$rc"
         # Options that belonged to the previous protocol do not follow to the next one.
         type='' opt_domain='' opt_sni='' opt_cert='' opt_webroot='' opt_cert_file='' opt_key_file=''
-        opt_transport='' opt_proto_version='' opt_proto_mode=''
+        opt_transport='' opt_proto_version='' opt_proto_mode='' opt_hop=''
     done
 }
 # The quick-deploy list; REPLY = protocol type, failure = back.
@@ -141,11 +141,12 @@ cert_domain_confirm() {
 node_deploy() {
     local type=$1 name host port sni='' bbr=keep candidate node id tmp transport cert_avoid_port='' need questions=0 checked='' saved
     # Protocol prompt hooks fill these.
-    local mode=none email='' webroot='' cert='' key='' stream='' proto_version='' proto_mode=''
+    local mode=none email='' webroot='' cert='' key='' stream='' proto_version='' proto_mode='' hop_range=''
     # Answers given in this round only; going back to the list forgets them.
     local opt_sni=$opt_sni opt_cert=$opt_cert opt_webroot=$opt_webroot opt_cert_file=$opt_cert_file opt_key_file=$opt_key_file
-    local opt_transport=$opt_transport opt_proto_version=$opt_proto_version opt_proto_mode=$opt_proto_mode
+    local opt_transport=$opt_transport opt_proto_version=$opt_proto_version opt_proto_mode=$opt_proto_mode opt_hop=$opt_hop
     need=$(proto_call "$type" domain) || return 1
+    [[ -z $opt_hop || $opt_hop == off ]] || proto_has "$type" port_hopping || { err "--hop 不适用于 $(proto_call "$type" label)。"; return 1; }
     if [[ -n $opt_domain ]]; then
         [[ $need != none ]] || { err "$(proto_call "$type" label) 不需要域名，请去掉 --domain。"; return 1; }
         [[ -z $opt_sni || $opt_sni == "$opt_domain" ]] || { err '--domain 和 --sni 不一致。'; return 1; }
@@ -174,7 +175,7 @@ node_deploy() {
         cert_domain_confirm 1 || return 3
         checked=$opt_sni
     fi
-    if [[ $assume_yes != 1 ]] && proto_has "$type" variant && [[ -z $opt_transport$opt_proto_version$opt_proto_mode ]]; then
+    if [[ $assume_yes != 1 ]] && proto_has "$type" variant && [[ -z $opt_transport$opt_proto_version$opt_proto_mode$opt_hop ]]; then
         proto_call "$type" variant || return 3
         questions=$((questions+1))
     fi
@@ -223,7 +224,7 @@ node_deploy() {
         proto_call "$type" prompt || { assume_yes=$saved; return 1; }
         assume_yes=$saved
     done
-    msg "部署：$name / $(proto_call "$type" label) / $host:${port/#random/随机端口}${sni:+ / $sni}"
+    msg "部署：$name / $(proto_call "$type" label) / $host:${port/#random/随机端口}${sni:+ / $sni}${hop_range:+ / 端口跳跃 ${hop_range/ /–}}"
     [[ -f $SRM_ROOT/.srm-owned ]] || setup "$self" || return 1
     ensure_dependencies || return 1
     transport=$(proto_call "$type" transport) || return 1
@@ -273,17 +274,87 @@ node_deploy() {
     rm -rf "$DATA/selfsigned/$id"
     rm -f "$candidate"; return 1
 }
+# Port hopping of a protocol with the port_hopping hook. From --hop: off (the default),
+# auto (the first free block of 1000 ports from 20000) or START-END; sets hop_range
+# (a local of node_deploy) to "START END" or empty.
+hop_prompt() {
+    local range reason
+    hop_range=''
+    case ${opt_hop:-off} in
+      off) return 0;;
+      auto) hop_range=$(hop_default '' "$port") || return 1;;
+      *)
+        range=$(hop_parse "$opt_hop") || { err '端口跳跃范围要写成 起-止，在 1024–65535 之间，例如 20000-20999。'; return 1; }
+        reason=$(hop_range_free ${range} '' "$port") || { err "端口跳跃范围 ${range/ /-} 不能用：$reason。"; return 1; }
+        hop_range=$range;;
+    esac
+}
+# The protocol's one menu question: off (Enter), the default range or one typed in.
+hop_variant() {
+    local range reason
+    range=$(hop_default '' "$opt_port" 2>/dev/null) || range=''
+    msg '端口跳跃（运营商限制 UDP、单个端口被限速时用；不确定就不开）：'
+    msg '  1. 不开启'
+    [[ -z $range ]] || msg "  2. 开启：客户端在 ${range/ /–} 之间换端口，服务器转到节点端口"
+    msg '  3. 开启，自己填端口范围'
+    while :; do
+        ask '端口跳跃' 1 || return 1
+        case $REPLY in
+          1) opt_hop=off;;
+          2) [[ -n $range ]] || { err '没有找到空闲的默认范围，请选 3 自己填。'; continue; }; opt_hop=${range/ /-};;
+          3)
+            while :; do
+                ask '端口范围（1024–65535，例如 40000-40999）' || return 1
+                range=$(hop_parse "$REPLY") || { err '要写成 起-止，例如 40000-40999。'; continue; }
+                reason=$(hop_range_free ${range} '' "$opt_port") || { err "这段端口不能用：$reason。"; continue; }
+                break
+            done
+            opt_hop=${range/ /-};;
+          *) err '请选择 1–3。'; continue;;
+        esac
+        return 0
+    done
+}
+# Node management: turn port hopping off, on with the default range, or change the range.
+hop_menu() {
+    local id=$1 node port current range
+    node=$(node_json "$STATE" "$id") || return 1
+    port=$(jq -r .port <<< "$node")
+    current=$(jq -r 'if .hop then "\(.hop.start)–\(.hop.end)" else "" end' <<< "$node")
+    range=$(hop_default "$id" "$port" 2>/dev/null) || range=''
+    if [[ -n $current ]]; then msg "端口跳跃：已开启，UDP $current 转到节点端口 $port。"
+    else msg '端口跳跃：未开启（运营商限制 UDP、单个端口被限速时开启）。'; fi
+    msg '  1. 关闭端口跳跃'
+    [[ -z $range ]] || msg "  2. 开启，范围 ${range/ /–}"
+    msg $'  3. 开启，自己填端口范围
+  0. 返回'
+    ask '请选择' || return 0
+    case $REPLY in
+      1) [[ -n $current ]] || { msg '端口跳跃本来就没有开启。'; return 0; }; range=off;;
+      2) [[ -n $range ]] || { err '没有找到空闲的默认范围，请选 3 自己填。'; return 1; }; range=${range/ /-};;
+      3) ask '端口范围（1024–65535，例如 40000-40999）' || return 0; range=$REPLY;;
+      *) err '无效选项。'; return 1;;
+    esac
+    with_lock node_change "$id" hop "$range" || return 1
+    node=$(node_json "$STATE" "$id") || return 1
+    if [[ $range == off ]]; then msg '端口跳跃已关闭，客户端要重新导入（或删掉端口范围），只连节点端口。'
+    else
+        msg "$(jq -r '"端口跳跃已开启：UDP \(.hop.start)–\(.hop.end) 转到节点端口 \(.port)。云服务器安全组也要放行入站 UDP \(.hop.start)-\(.hop.end)。客户端要重新导入："' <<< "$node")"
+    fi
+    client_snippets qr <<< "$node"
+}
 # One screen after deploying: address, cloud firewall, link and QR code, and the
 # snippet of every client that supports the protocol (node JSON on stdin).
 deploy_summary() {
-    local node transport port
+    local node transport port hop
     node=$(cat)
     port=$(jq -r .port <<< "$node")
     transport=$(proto_call "$(jq -r .type <<< "$node")" transport | tr '[:lower:] ' '[:upper:]+')
     msg ''
     msg "━━━━━━━━ 部署完成：$(jq -r .name <<< "$node")（$(proto_call "$(jq -r .type <<< "$node")" label)）━━━━━━━━"
     msg "服务器：$(jq -r .host <<< "$node")    端口：$port/$transport    节点 ID：$(jq -r .id <<< "$node")"
-    msg "云服务器安全组：连不上时，到服务商控制台的安全组（云防火墙）放行入站 $transport $port；本机的 UFW / firewalld / iptables 已自动放行。"
+    hop=$(jq -r 'if .hop then "，以及端口跳跃的 UDP \(.hop.start)-\(.hop.end)" else "" end' <<< "$node")
+    msg "云服务器安全组：连不上时，到服务商控制台的安全组（云防火墙）放行入站 $transport $port$hop；本机的 UFW / firewalld / iptables 已自动放行。"
     client_snippets qr <<< "$node"
     msg '以后在菜单里选「2. 节点管理」可以再次查看链接、二维码和这些配置，也能用「临时导入链接」把整份配置一键导入 Clash Verge、sing-box App 或 Surge。'
 }
@@ -349,7 +420,8 @@ deploy_json() {
       ($clients|split(" ")|map(select(. != ""))) as $apps |
       {id:$node.id,name:$node.name,type:$node.type,protocol:$label,host:$node.host,port:$node.port,
        firewall:[$transport|split(" ")[]|{port:$node.port,protocol:.}],
-       share_link:(if $link == "" then null else $link end),
+       share_link:(if $link == "" then null else $link end)}
+      + (if $node.hop then {port_hopping:$node.hop} else {} end) + {
        clients:({}
          + (if $surge == "" then {} else {surge:$surge} end)
          + (($clash|fromjson) as $c|if $c == null then {} else {clash_meta:$c} end)
@@ -431,10 +503,25 @@ node_change() {
         proto_call "$type" retarget "$node" "$value" || { rm -f "$tmp" "$candidate"; return 1; }
         [[ -n $REPLY ]] || { rm -f "$tmp" "$candidate"; return 0; }
         jq --arg id "$id" --argjson f "$REPLY" '(.nodes[]|select(.id==$id)) += $f' "$candidate" > "$tmp";;
+      hop)
+        proto_has "$type" port_hopping || { rm -f "$tmp" "$candidate"; err '此协议的节点不支持端口跳跃。'; return 1; }
+        if [[ $value == off ]]; then
+            jq --arg id "$id" '(.nodes[]|select(.id==$id)) |= del(.hop)' "$candidate" > "$tmp"
+        else
+            local range reason port
+            port=$(printf '%s' "$node" | jq -r .port)
+            if [[ $value == auto ]]; then range=$(hop_default "$id" "$port") || { rm -f "$tmp" "$candidate"; return 1; }
+            else
+                range=$(hop_parse "$value") || { rm -f "$tmp" "$candidate"; err '端口跳跃范围要写成 起-止，在 1024–65535 之间，例如 20000-20999。'; return 1; }
+                reason=$(hop_range_free ${range} "$id" "$port") || { rm -f "$tmp" "$candidate"; err "端口跳跃范围 ${range/ /-} 不能用：$reason。"; return 1; }
+            fi
+            hop_tools_ready || { rm -f "$tmp" "$candidate"; return 1; }
+            jq --arg id "$id" --argjson s "${range% *}" --argjson e "${range#* }" '(.nodes[]|select(.id==$id).hop)={start:$s,end:$e}' "$candidate" > "$tmp"
+        fi;;
       rotate)
         proto_call "$type" rotate || { rm -f "$tmp" "$candidate"; return 1; }
         jq --arg id "$id" --argjson f "$REPLY" '(.nodes[]|select(.id==$id)) += $f' "$candidate" > "$tmp";;
-      *) rm -f "$tmp" "$candidate"; err '操作只能是 toggle、port、name、rotate、retarget 或 delete。'; return 1;;
+      *) rm -f "$tmp" "$candidate"; err '操作只能是 toggle、port、name、rotate、retarget、hop 或 delete。'; return 1;;
     esac
     local rc=1
     if mv "$tmp" "$candidate" && apply_state "$candidate"; then
@@ -446,14 +533,14 @@ node_change() {
 }
 node_menu() {
     [[ -f $STATE ]] || { msg '尚无节点。'; return 0; }
-    local count index=0 id name type port status current
+    local count index=0 id name type port status current extra='' action i
     count=$(jq '.nodes|length' "$STATE") || return 1
     (( count > 0 )) || { msg '尚无节点，请先部署。'; return 0; }
     msg $'\n已部署节点：'
     while IFS=$'\t' read -r name type port status; do
         index=$((index+1))
         printf '  %s. %s | %s | 端口 %s | %s\n' "$index" "$name" "$type" "$port" "$status"
-    done < <(jq -r '.nodes[]|[.name,.type,(.port|tostring),(if .enabled then "启用" else "停用" end)]|@tsv' "$STATE")
+    done < <(jq -r '.nodes[]|[.name,.type,"\(.port)\(if .hop then "（跳跃 \(.hop.start)–\(.hop.end)）" else "" end)",(if .enabled then "启用" else "停用" end)]|@tsv' "$STATE")
     msg "  $((count+1)). 导出完整配置 · 可直接导入 Clash Verge / sing-box App / Surge"
     msg "  $((count+2)). 临时导入链接 · 扫码一键导入，用完自动关闭"
     ask '请选择（序号，也可输入节点完整 ID；0 返回）' || return 0
@@ -467,8 +554,23 @@ node_menu() {
     fi
     type=$(node_json "$STATE" "$id" | jq -r .type) || { err '节点不存在。'; return 1; }
     msg $'1.详情 2.原始分享链接 3.二维码 4.客户端配置（Surge / Clash Meta / sing-box / Shadowrocket / v2rayN）\n5.启用/停用 6.修改端口 7.重置凭据 8.修改名称 9.删除'
-    ! proto_has "$type" retarget_select || msg "10.$(proto_call "$type" retarget_label)"
+    # Optional actions of the protocol, numbered from 10 in this order.
+    ! proto_has "$type" retarget_select || extra+=' retarget'
+    ! proto_has "$type" port_hopping || extra+=' hop'
+    i=10
+    for action in $extra; do
+        case $action in
+          retarget) msg "$i.$(proto_call "$type" retarget_label)";;
+          hop) msg "$i.端口跳跃（运营商限制 UDP 时用）";;
+        esac
+        i=$((i+1))
+    done
     ask '操作' 1 || return 0
+    if [[ $REPLY =~ ^1[0-9]$ ]]; then
+        # shellcheck disable=SC2086 # one action per word
+        action=$(nth_word "$((REPLY-9))" $extra) || { err '无效选项。'; return 1; }
+        [[ $action != hop ]] || { hop_menu "$id"; return; }
+    fi
     case $REPLY in
       1) export_node "$id" details;; 2) export_node "$id" uri;; 3) export_node "$id" qr;; 4) export_node "$id" clients;;
       5) with_lock node_change "$id" toggle;;
@@ -476,8 +578,7 @@ node_menu() {
       7) yesno '旧凭据会失效，确认重置' && with_lock node_change "$id" rotate;;
       8) ask '新名称' || return 0; with_lock node_change "$id" name "$REPLY";;
       9) yesno '确认删除此节点' && with_lock node_change "$id" delete;;
-      10)
-        proto_has "$type" retarget_select || { err '此协议的节点不支持切换握手目标。'; return 1; }
+      1[0-9])
         current=$(node_json "$STATE" "$id" | jq -r '.sni // empty')
         proto_call "$type" retarget_select "$current" || return 0
         [[ $REPLY != "$current" ]] || { msg '当前已经使用此目标，无需修改。'; return 0; }

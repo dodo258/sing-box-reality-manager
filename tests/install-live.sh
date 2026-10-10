@@ -250,6 +250,40 @@ echo 'PASS no automatic update job is installed'
     crontab -r; rm -rf /etc/systemd/system/dodo258-sing-box.service /etc/systemd/system/dodo258-sing-box.service.d "$v3.out"; systemctl daemon-reload
     echo 'PASS with real systemd the taken-over v3 unit cannot be started again (v3 renewal restarting it fails, srm keeps the port) until srm'"'"'s record is gone'
 )
+# Port hopping through the real transaction and systemd. A unit from before port
+# hopping (no hop-sync line) is rewritten when a node turns it on; the redirect rule
+# comes back when the service starts again (as after a reboot) and goes with the node.
+(
+    source ./srm.sh
+    hop_rule() { iptables -t nat -S PREROUTING | grep -F -- "--dport $1 -m comment --comment srm-hop -j REDIRECT --to-ports $2"; }
+    sed -i '/hop-sync/d' "/etc/systemd/system/$SERVICE"; systemctl daemon-reload
+    node_add "$PWD/dist/srm" hysteria2 --name hy2-hop --host 127.0.0.1 --hop 20000-20999 --yes
+    n=$(jq -c '.nodes[]|select(.name=="hy2-hop")' "$STATE"); id=$(jq -r .id <<< "$n"); port=$(jq -r .port <<< "$n")
+    jq -e '.hop == {start:20000,end:20999}' <<< "$n" >/dev/null || exit 1
+    [[ $(systemctl show -p ExecStartPre --value "$SERVICE") == *'argv[]=/opt/srm/manager.sh hop-sync'*'ignore_errors=yes'* ]] || { systemctl show -p ExecStartPre "$SERVICE"; exit 1; }
+    systemd-analyze verify "/etc/systemd/system/$SERVICE"
+    systemctl is-active --quiet "$SERVICE" && [[ -n $(ss -H -lun "sport = :$port") ]] || exit 1
+    hop_rule 20000:20999 "$port" || exit 1
+    # As after a reboot: the runtime rule is gone until the service starts.
+    read -ra spec <<< "$(hop_rule 20000:20999 "$port" | sed 's/^-A PREROUTING //')"
+    iptables -t nat -D PREROUTING "${spec[@]}"
+    ! hop_rule 20000:20999 "$port" >/dev/null || exit 1
+    systemctl restart "$SERVICE"
+    hop_rule 20000:20999 "$port" || exit 1
+    node_change "$id" hop off
+    ! iptables -t nat -S PREROUTING | grep -q srm-hop && [[ ! -e $DATA/port-hopping ]] || exit 1
+    node_change "$id" hop auto
+    hop_rule 20000:20999 "$port" || exit 1
+    node_change "$id" toggle
+    ! iptables -t nat -S PREROUTING | grep -q srm-hop || exit 1
+    node_change "$id" toggle
+    hop_rule 20000:20999 "$port" || exit 1
+    node_change "$id" delete
+    ! iptables -t nat -S PREROUTING | grep -q srm-hop && [[ ! -e $DATA/port-hopping ]] || exit 1
+    node_add "$PWD/dist/srm" hysteria2 --name hy2-hop --host 127.0.0.1 --hop auto --yes
+    hop_rule 20000:20999 "$(jq -r '.nodes[]|select(.name=="hy2-hop")|.port' "$STATE")" || exit 1
+)
+echo 'PASS port hopping with real systemd: an old unit gets the hop-sync line, the redirect comes back when the service starts, and goes when hopping is off, the node stops or is deleted'
 # Uninstall with sing-box and a snell-server still running stops and removes both.
 systemctl is-active --quiet srm.service || exit 1
 cleanup
@@ -261,4 +295,5 @@ trap - EXIT
 if systemctl list-units --all --plain --no-legend 'srm-snell@*' | grep -qw active; then echo 'FAIL snell-server still running'; exit 1; fi
 if compgen -G '/etc/systemd/system/multi-user.target.wants/srm*' > /dev/null; then echo 'FAIL unit still enabled'; exit 1; fi
 [[ ! -e /usr/local/sbin/srm && ! -L /usr/local/sbin/vasma ]] || exit 1
-echo 'PASS uninstall stops sing-box and snell-server and removes manager, units (also the version check) and both commands'
+if iptables-save -t nat | grep -q srm-hop; then echo 'FAIL port hopping rule left after uninstall'; exit 1; fi
+echo 'PASS uninstall stops sing-box and snell-server and removes manager, units (also the version check), both commands and the port hopping redirect'

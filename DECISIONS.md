@@ -254,3 +254,19 @@
 - 备选/被否决的方案：用 `dns.strategy` 全局设置（会影响解锁 DNS 等已有的 resolve 规则，且待办点名 default_domain_resolver）；按「有没有全局 IPv6 地址」判断（有地址没路由时照样 unreachable）。
 - 没验证：Shadowrocket 里看到这句提示的实际效果；提示里推荐的 AnyTLS 的 UDP 是 UDP over TCP，Shadowrocket 里实际能否用没测；没有 IPv6 的真机上 network unreachable 是否减少（只验证了生成的配置和 `sing-box check`）。
 - 拍板人：Claude
+
+## 2026-10-11 Hysteria2 端口跳跃
+- 决定：
+  - **部署**：Hysteria2 的「协议自己的那一个问题」是端口跳跃（回车 / 1 = 不开，2 = 开启并用默认范围，3 = 自己填），问完再问端口，节点名用默认值。默认范围是 20000 起第一段空闲的 1000 个端口（避开所有节点端口、Snell 本机端口、别的跳跃范围和本机正在监听的 UDP 端口，并留在 Linux 临时端口 32768 以下）；自己填的范围要在 1024–65535、起 < 止，同样检查。命令行 `srm add hysteria2 --hop off|auto|起-止`。节点数据新增可选字段 `hop {start,end}`，只有带 `port_hopping` 钩子的协议（现在只有 Hysteria2）能有；state 校验保证任何节点端口都不在跳跃范围里、范围之间不重叠。没升 schema（新字段可选，旧数据不变）。
+  - **服务器转发**：范围内发给本机的 UDP 在 nat PREROUTING 里 REDIRECT 到节点端口，所以防火墙只放行节点端口（UFW / firewalld / iptables 过滤时看到的已是节点端口）。只转发目的地址是本机的包（iptables `-m addrtype --dst-type LOCAL`、nftables `fib daddr type local`），不劫持经本机转发的流量（如 Docker 容器访问外网的这段端口）。有 iptables 就用 iptables / ip6tables（规则注释 `srm-hop`，和系统其余规则同一后端，不在 iptables-legacy 机器上混用 nftables nat）；没有 iptables 时用 nftables 自己的表 `inet srm_hop`（一次事务整表替换，规则注释 `srm-hop`）；两样都没有时部署 / 开启前自动装 nftables。IPv6 失败只提示，不让整个操作失败。规则跟着 `firewall_sync` 走：停用节点、关闭跳跃、删节点、卸载都撤掉；从没用过端口跳跃的机器不碰 nat 表（以 `/var/lib/srm/port-hopping` 记录为准）。
+  - **重启后补回**：这些都是运行时规则。srm.service 加 `ExecStartPre=-+/opt/srm/manager.sh hop-sync`（root 运行、失败也不挡服务启动、不加锁，只读当前那一代的节点数据），每次启动（含开机）先补回。旧版装好的服务器单元里没有这行：有节点开启端口跳跃时，应用配置会重写单元并 daemon-reload。有 netfilter-persistent 的机器也顺带保存一份。
+  - **客户端**：分享链接保留数字端口、用 `mport=起-止` 带范围（`hysteria2://…@host:端口/?sni=…&mport=20000-20999#名称`）。Surge `port-hopping=端口;起-止`（manual.nssurge.com/policies/hysteria2.html）、Clash Meta `ports: "端口,起-止"`（mihomo 文档，本机 mihomo -t 通过）、sing-box `server_ports: ["端口:端口","起:止"]`（1.11 起；单写 "443" 会报 bad port range，本机 sing-box 1.14.1 check 通过），完整配置导出同样带上。「说明：」里写明范围、默认 30 秒换端口、不认 mport 的客户端只连节点端口，并给出 Hysteria2 官方多端口写法的链接 `…@host:端口,起-止/?…`。部署完成页的安全组提示加「以及端口跳跃的 UDP 起-止」。
+  - **节点管理**：Hysteria2 节点多一项「10.端口跳跃（运营商限制 UDP 时用）」：关闭 / 开启默认范围 / 自己填，改完显示新的客户端配置；节点列表里写「端口 N（跳跃 起–止）」。命令行 `srm node ID hop off|auto|起-止`，`srm hop-sync` 供服务启动用。
+- 和待办原文不同：待办写「分享链接按官方 `端口,起-止` 写法」。没照做，因为 v2rayN 用 .NET `System.Uri` 解析链接，端口不是数字就整条导入失败（v2rayN `ServiceLib/Handler/Fmt/Hysteria2Fmt.cs`：`Utils.TryUri` 失败返回 null，范围从 `mport` 读）；Shadowrocket 对官方写法没有文档，而主流面板 Xboard 给 Shadowrocket 的订阅（`app/Protocols/Shadowrocket.php`）和 mack-a（install.sh 5266 行）都用 `mport`。用 `mport` 时不认它的客户端仍能连节点端口，用官方写法则 v2rayN 直接导入失败。官方写法放在「说明：」里给按官方规范的客户端用。
+- 备选/被否决的方案：
+  - mack-a 的做法：只用 iptables DNAT、不限目的地址、范围限 30000–40000、firewalld 机器逐个端口加 forward-port（1000 个端口就是 1000 条）、靠 netfilter-persistent 保存——没装它的机器重启就失效。
+  - 全部用 nftables：Ubuntu 20.04 这类 iptables-legacy 机器上和 legacy nat 混用；没装 nft 的机器（Ubuntu 默认装 iptables）还要多装包。
+  - 客户端只跳范围、不含节点端口：和官方写法 `端口,起-止` 不一致；节点端口本身一直可连，混进去没有坏处。
+  - TUIC 也加：待办只要 Hysteria2；注册表钩子已经通用，以后要加只需在 TUIC 块里加 `port_hopping` 和客户端字段。
+- 没验证：真机上运营商限速时跳跃的效果；Shadowrocket 读 `mport` 只有 Xboard / mack-a 的做法作依据，没在 iPhone 上导入过；Surge 的 `port-hopping` 只做了格式断言（没有 Linux 版 Surge）。CI 在网络命名空间里用 veth + 真实 iptables / nftables 发 UDP 包，验证范围内端口转到节点端口、回包来自所问的端口、IPv4 和 IPv6 都通、关闭 / 停用 / 卸载后不再转发；install-live 用真实 systemd 验证旧单元被补上 hop-sync、删掉规则后重启服务能补回。
+- 拍板人：Claude

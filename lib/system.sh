@@ -27,7 +27,15 @@ setup() {
     fi
     ln -sfn "$SRM_ROOT/manager.sh" /usr/local/sbin/srm || return 1
     link_vasma
-    cat > "/etc/systemd/system/$SERVICE" <<UNIT
+    service_unit_write || return 1
+    update_check_setup || { err '每日版本检查定时任务注册失败。'; return 1; }
+    msg '运行环境就绪。'
+}
+# The sing-box unit; rewritten (and systemd reloaded) only when it differs, so
+# servers installed by an older version get new lines when they need them.
+service_unit_write() {
+    local unit
+    unit=$(cat <<UNIT
 [Unit]
 Description=srm sing-box nodes
 After=network-online.target
@@ -35,6 +43,9 @@ Wants=network-online.target
 [Service]
 User=srm
 Group=srm
+# Port hopping redirects are runtime rules: put back before every start (also at
+# boot); "+" runs it as root, "-" never lets it block the service.
+ExecStartPre=-+$SRM_ROOT/manager.sh hop-sync
 ExecStart=$CORE run -c $DATA/current/config.json
 Restart=on-failure
 RestartSec=3
@@ -51,9 +62,9 @@ LimitNOFILE=65536
 [Install]
 WantedBy=multi-user.target
 UNIT
-    systemctl daemon-reload || return 1
-    update_check_setup || { err '每日版本检查定时任务注册失败。'; return 1; }
-    msg '运行环境就绪。'
+)
+    [[ $(cat "/etc/systemd/system/$SERVICE" 2>/dev/null) != "$unit" ]] || return 0
+    printf '%s\n' "$unit" > "/etc/systemd/system/$SERVICE" && systemctl daemon-reload
 }
 # `vasma` is the v3 command name. Never shadow a v3 installation that still owns it.
 link_vasma() {
@@ -175,6 +186,8 @@ apply_state() (
         rm -rf "$gen"; err '核心校验失败，原节点未改动。'; exit 1
     fi
     install -m 600 "$candidate" "$gen/state.json" || exit 1
+    # Port hopping needs the unit's hop-sync line, missing on older installations.
+    if jq -e 'any(.nodes[]; .hop != null)' "$candidate" >/dev/null; then service_unit_write || exit 1; fi
     chmod 640 "$gen/config.json" && chgrp srm "$gen/config.json" || exit 1
     [[ ! -L $DATA/current ]] || old=$(readlink "$DATA/current")
     systemctl is-active --quiet "$SERVICE" && active=1

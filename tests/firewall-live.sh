@@ -17,6 +17,7 @@ mount --bind "$work/ufw-default" /etc/default/ufw
 server=''
 cleanup() {
     [[ -z $server ]] || kill "$server" 2>/dev/null || true
+    ip netns del srm-hop-client 2>/dev/null || true
     ufw --force disable >/dev/null || true
     umount /etc/ufw
     umount /etc/default/ufw
@@ -143,3 +144,76 @@ iptables -S | cmp - "$work/ipt-original.v4"
 ip6tables -S | cmp - "$work/ipt-original.v6"
 ! grep -q -- '--comment srm' "$work/saved.v4" "$work/saved.v6" || exit 1
 echo 'PASS real iptables: uninstall restores the original rules exactly'
+# Port hopping with real packets: a client in another network namespace sends UDP to
+# ports of the hop range and gets the answer of the node port (through the REJECT above,
+# which only the node port passes), first with iptables, then with nftables.
+ip netns add srm-hop-client
+ip link add srm-hop0 type veth peer name srm-hop1 netns srm-hop-client
+ip addr add 10.77.0.1/24 dev srm-hop0
+ip addr add fd77::1/64 dev srm-hop0 nodad
+ip link set srm-hop0 up
+ip netns exec srm-hop-client ip addr add 10.77.0.2/24 dev srm-hop1
+ip netns exec srm-hop-client ip addr add fd77::2/64 dev srm-hop1 nodad
+ip netns exec srm-hop-client ip link set srm-hop1 up
+ip netns exec srm-hop-client ip link set lo up
+cat > "$work/udp.py" <<'PY'
+import socket, sys
+if sys.argv[1] == "serve":
+    s = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
+    s.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+    s.bind(("::", int(sys.argv[2])))
+    while True:
+        data, peer = s.recvfrom(100)
+        s.sendto(b"node:" + data, peer)
+host, port = sys.argv[2], int(sys.argv[3])
+s = socket.socket(socket.AF_INET6 if ":" in host else socket.AF_INET, socket.SOCK_DGRAM)
+s.settimeout(2)
+# Connected: an answer from any other address or port than the one asked is dropped.
+s.connect((host, port))
+s.send(b"hop")
+try:
+    sys.exit(0 if s.recv(100) == b"node:hop" else 1)
+except OSError:
+    sys.exit(1)
+PY
+kill "$server"; wait "$server" 2>/dev/null || true
+python3 "$work/udp.py" serve 24020 >/dev/null 2>&1 &
+server=$!
+for _ in $(seq 50); do [[ -z $(ss -Hlun 'sport = :24020') ]] || break; sleep 0.1; done
+answers() { ip netns exec srm-hop-client python3 "$work/udp.py" ask "$1" "$2"; }
+jq -n '{schema:2,policies:[],unlock_dns:null,egress:null,nodes:[{id:"1000000000000001",name:"hy2",type:"hysteria2",enabled:true,
+  host:"10.77.0.1",port:24020,sni:"hy.example.com",cert_dir:"/certs",password:"pw",hop:{start:20000,end:20999}}]}' > "$STATE"
+if answers 10.77.0.1 20500; then echo 'FAIL a hop port answered before any rule'; exit 1; fi
+firewall_sync "$STATE"
+iptables -t nat -S PREROUTING | grep -Fq -- '-p udp -m addrtype --dst-type LOCAL -m udp --dport 20000:20999 -m comment --comment srm-hop -j REDIRECT --to-ports 24020'
+for port in 20000 20500 20999 24020; do answers 10.77.0.1 "$port" || { echo "FAIL IPv4 port $port"; exit 1; }; done
+answers fd77::1 20777 || { echo 'FAIL IPv6 hop port'; exit 1; }
+if answers 10.77.0.1 21000; then echo 'FAIL a port outside the range answered'; exit 1; fi
+iptables -S INPUT | grep -q -- '--dport 24020 -m comment --comment srm -j ACCEPT'
+! iptables -S INPUT | grep -q -- '--dport 20000' || exit 1
+grep -q -- '--comment srm-hop' "$work/saved.v4" || exit 1
+echo 'PASS real iptables: UDP to the hop range (IPv4 and IPv6) reaches the node port and answers from the port asked; only the node port is allowed in INPUT'
+jq '.nodes[0].enabled=false' "$STATE" > "$work/new-state"
+firewall_sync "$work/new-state"
+! iptables -t nat -S PREROUTING | grep -q srm-hop && ! ip6tables -t nat -S PREROUTING | grep -q srm-hop || exit 1
+if answers 10.77.0.1 20500; then echo 'FAIL hop port answers after the node was disabled'; exit 1; fi
+firewall_sync "$STATE"
+answers 10.77.0.1 20500
+jq 'del(.nodes[0].hop)' "$STATE" > "$work/new-state"
+firewall_sync "$work/new-state"
+! iptables -t nat -S PREROUTING | grep -q srm-hop || exit 1
+if answers 10.77.0.1 20500; then echo 'FAIL hop port answers after hopping was turned off'; exit 1; fi
+answers 10.77.0.1 24020
+echo 'PASS real iptables: disabling the node or turning hopping off removes the redirect; the node port keeps working'
+hop_backend() { printf 'nft\n'; }
+firewall_sync "$STATE"
+nft list table inet srm_hop | grep -Eq 'fib daddr type local udp dport 20000-20999 .*redirect to :24020 comment "srm-hop"'
+! iptables -t nat -S PREROUTING | grep -q srm-hop || exit 1
+for port in 20000 20999; do answers 10.77.0.1 "$port" || { echo "FAIL nft IPv4 port $port"; exit 1; }; done
+answers fd77::1 20321 || { echo 'FAIL nft IPv6 hop port'; exit 1; }
+firewall_clear
+if nft list table inet srm_hop >/dev/null 2>&1; then echo 'FAIL nft table left after uninstall'; exit 1; fi
+if answers 10.77.0.1 20500; then echo 'FAIL hop port answers after uninstall'; exit 1; fi
+iptables -S | cmp - "$work/ipt-original.v4"
+[[ ! -e $DATA/port-hopping ]] || exit 1
+echo 'PASS real nftables: the table inet srm_hop redirects the range (IPv4 and IPv6); uninstall deletes it and the original rules are back'

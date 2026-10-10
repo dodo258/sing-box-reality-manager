@@ -89,10 +89,13 @@ srm $SRM_VERSION：sing-box 节点管理（$(proto_labels)）
                             --webroot 目录  --cert-file 文件  --key-file 文件  --email 邮箱
                             --transport tcp|ws|grpc|httpupgrade（只用于能选传输方式的协议）
                             --proto-version 6|5  --proto-mode default|unshaped（只用于 Snell：版本和 v6 模式）
+                            --hop off|auto|起-止（只用于 Hysteria2：端口跳跃，默认 off；auto = 20000 起第一段
+                            空闲的 1000 个端口；开启后范围内的 UDP 转到节点端口）
                             --bbr enable|keep
   srm list                列出节点：ID、名称、协议、端口、状态
   srm nodes               节点管理菜单：原始链接、二维码、启停、改端口、重置凭据
   srm node ID 操作 [值]   toggle | delete | rotate | port 端口 | name 名称 | retarget 伪装目标域名
+                          | hop off|auto|起-止（端口跳跃）
   srm export ID [格式]    uri（默认）| qr | outbound（sing-box）| clash | surge | clients（全部客户端）| details
                           只在本机生成，不联网
   srm profile 客户端 [ID]  完整客户端配置（含节点、国内直连的基本分流和 DNS），客户端：$PROFILE_CLIENTS
@@ -110,7 +113,8 @@ srm $SRM_VERSION：sing-box 节点管理（$(proto_labels)）
   srm routing del 名称    删除平台规则
   srm certs [status]      证书管理；status 只查看
   srm renew               检查证书续期
-  srm firewall            同步本脚本的 UFW / firewalld / iptables 端口规则
+  srm firewall            同步本脚本的 UFW / firewalld / iptables 端口规则和端口跳跃转发
+  srm hop-sync            只按当前节点补上端口跳跃转发规则（服务每次启动前自动运行，不加锁）
   srm status              运行状态
   srm logs                最近 50 行日志
   srm restart             重启本脚本节点
@@ -150,7 +154,7 @@ main() {
       list) require_root && list_nodes;;
       nodes) require_linux && node_menu;;
       node)
-        [[ -n ${2:-} && -n ${3:-} ]] || { err '用法：srm node ID toggle|delete|rotate|port 端口|name 名称|retarget 目标域名'; return 1; }
+        [[ -n ${2:-} && -n ${3:-} ]] || { err '用法：srm node ID toggle|delete|rotate|port 端口|name 名称|retarget 目标域名|hop off|auto|起-止'; return 1; }
         with_lock node_change "$2" "$3" "${4:-}";;
       export) require_root && export_node "${2:-}" "${3:-uri}";;
       profile) require_root && profile_render "${2:-}" "$STATE" "${3:-}";;
@@ -185,6 +189,9 @@ main() {
         esac;;
       renew) with_lock renew_certificates;;
       firewall) with_lock firewall_sync "$STATE";;
+      # Run by srm.service before every start (also at boot), possibly while a locked
+      # transaction restarts the service; it only reads the current generation.
+      hop-sync) require_root && hop_sync "$STATE";;
       status) require_linux && show_status;;
       logs) require_linux && show_logs;;
       restart) with_lock restart_nodes;;

@@ -51,7 +51,7 @@ valid_host() {
     if [[ $1 =~ ^[0-9.]+$ || $1 == *:* ]]; then valid_ip "$1"; else valid_domain "$1"; fi
 }
 validate_state() {
-    jq -e "$PROTO_JQ_DEFS"'
+    jq -e --argjson hoppers "$(proto_types_with port_hopping | jq -R . | jq -sc .)" "$PROTO_JQ_DEFS"'
       def text: type == "string" and length > 0 and (test("[\\x00-\\x1f\\x7f]")|not);
       [.nodes[]?.id] as $ids |
       .schema == 2 and (.nodes|type == "array") and (.policies|type == "array") and
@@ -63,7 +63,14 @@ validate_state() {
         (.id|test("^[a-f0-9]{16}$")) and (.name|text) and
         (.host|text) and (.sni == null or (.sni|text)) and ((.listen // "::") == "::" or .listen == "0.0.0.0") and (.enabled|type == "boolean") and
         (.port|type == "number" and floor == . and . >= 1 and . <= 65535) and
+        # Port hopping: UDP to hop.start–hop.end is redirected to the node port.
+        (.hop == null or (.type as $t|any($hoppers[]; . == $t)) and (.hop|type == "object" and (keys == ["end","start"]) and
+          all(.[]; type == "number" and floor == .) and .start >= 1024 and .start < .end and .end <= 65535)) and
         ('"$(proto_jq validate false)"')) and
+      # No node or helper port inside a hop range, and hop ranges never overlap.
+      ([.nodes[]|.hop // empty] as $hops |
+        all(.nodes[]|.port, (.local_port // empty); . as $p|all($hops[]; $p < .start or $p > .end)) and
+        ($hops|sort_by(.start) as $h|all(range(1; $h|length); $h[. - 1].end < $h[.].start))) and
       all(.policies[];
         (.name|text) and (.mode == "dns" or .mode == "proxy") and
         (.domains|type == "array" and length > 0) and
