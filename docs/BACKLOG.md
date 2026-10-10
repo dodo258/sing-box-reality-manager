@@ -6,7 +6,7 @@
 
 从上往下做。正在做的条目后面标「（进行中：分支名 时间）」。
 
-- [ ] UFW / firewalld 临时停用时不清掉 srm 的规则记录 —— 来源：2026-10-11 PR #17 审查。`firewall_sync` 检测到没有活动防火墙（backend none）时，会把别的后端的记录和规则当作多余删掉；用户临时 `ufw disable` 后再开启，节点就被挡。以前只在改节点时发生，现在 srm.service 每次启动（含崩溃自动重启）都同步，更容易碰到。要做：backend 为 none 时保留 ufw / firewalld 的记录（只清 iptables 这类运行时规则的失效记录），重新启用后下一次同步照常。验收：测试覆盖 ufw 停用 → 同步 → 启用后规则仍在；CI 全绿。（进行中：agent/1011-fw-keep-disabled 2026-10-11 02:50）
+- [ ] firewalld 停着时卸载 srm 会失败，报错没说要先启动 firewalld —— 来源：2026-10-11 PR #19 审查（原有问题）。`firewall_clear` 对 firewalld 记录调 `firewall-cmd`，firewalld 没运行时返回 252，卸载停在「端口规则清理失败，保留数据以便重试卸载」。要做：firewalld 没运行时提示「先 `systemctl start firewalld` 再卸载」，或用 `firewall-offline-cmd` 清永久规则、丢掉运行时记录。验收：测试覆盖 firewalld 停着时卸载的提示或清理结果；CI 全绿。
 
 ## 等主人拍板
 
@@ -26,6 +26,10 @@
 
 ## 已完成
 
+- [x] UFW / firewalld 临时停用时保留 srm 的放行规则 —— 2026-10-11 合并，提交 a169bd5（PR #19）。同步时 UFW / firewalld 只要不是当前活动的防火墙（`ufw disable`、开机时还没起来、检测选了 iptables 或 none），它的记录就不当作多余删：UFW 停用时还能改规则文件，只删已经不用的端口（停用期间删掉的节点）；firewalld 停着时什么都改不了，记录全保留，等它运行后的第一次同步再清。iptables 记录照旧。同步结果提示「UFW 当前没有运行，还在用的节点的放行规则保留着…启用后在菜单「4. 运行状态」里选「重新同步防火墙端口规则」」。以前 firewalld 停着时每次同步都失败、改节点被回滚，现在也好了。
+  - 替主人定了：不只 backend none，UFW 停用后检测选 iptables（Oracle 这类镜像）时也保留；停用期间新加的节点不往停用的 UFW 里加规则（Ubuntu 默认装了 UFW 但不启用）。理由见 DECISIONS.md「2026-10-11 UFW / firewalld 停用期间保留 srm 的放行规则」。
+  - 验收：在 GitHub 打开 PR #19，CI「verify」全绿，日志里有 firewall-live 的「PASS real UFW disabled, synced, enabled again: the srm rules are still there and let the nodes through」「PASS real UFW: a node deleted while UFW is disabled loses its rule, the others keep theirs …」和 tests/firewall.sh 的「PASS firewalld stopped, synced (also deleting a node), started again …」。服务器上试：在开着 UFW 的机器上 `ufw disable`，菜单「4. 运行状态 → 3」同步一次（应提示 UFW 当前没有运行、规则保留着），`ufw enable` 后 `ufw status` 里仍有 `srm-<端口>-<协议>`，节点能连。
+  - 没验证：真机；「没有 ufw 命令时记录全保留」这一支没有单独测试。永久换防火墙或卸掉 ufw 后旧记录一直留着，卸载 srm 时才清。
 - [x] tests/traffic.sh 的 mihomo 流量测试偶发失败 —— 2026-10-11 合并，提交 a1321a9（PR #18）。原因：mihomo 先开监听端口、后把隧道切到 Running，中间进来的连接被静默关闭（源码 hub/executor ApplyConfig、tunnel handleTCPConn 的 isHandle），wait_port 只等端口，CI 稍慢时 curl 落进窗口拿到 Empty reply。改法：mihomo 配置多一个直连入站（traffic.sh 18296、snell-traffic.sh 18396，proxy: DIRECT），直连取到测试页才经节点取一次，断言不变；snell-traffic.sh 的 mihomo 段同样有这个竞态，一并修了。验收：在 GitHub 打开 PR #18，CI「verify」两次全绿，日志里 13 条「PASS mihomo (Clash Meta snippet) …」和「PASS mihomo (Clash Meta snippet: snell v5 + shadow-tls v3) …」；本机给 cache.db 加锁放大窗口时，旧代码「FAIL mihomo through ss 测试」、新代码全过；正常速度连跑 20 次全过。没做：没在 Linux 上复现原失败（靠源码和放大窗口实验定位）。
 - [x] v4 iptables 规则开机自动补回 —— 2026-10-11 合并，提交 ec56f37（PR #17）。
   - srm.service 每次启动前（含开机）运行 `firewall-restore`：主锁空闲时按当前节点完整同步防火墙端口规则和端口跳跃转发；正在应用配置等操作持锁时只补转发，端口规则由那个操作同步；失败不挡服务启动。`hop-sync` 留作旧名；已装好的服务器下次改节点时自动更新单元。
