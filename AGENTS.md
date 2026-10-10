@@ -13,8 +13,8 @@
 ## 常用命令
 - 语法检查：`bash -n lib/*.sh build.sh srm.sh install.sh`
 - 构建：`./build.sh`，构建后 `git diff --exit-code dist/` 必须无差异（dist 要提交）。
-- 测试：`for t in tests/*.sh; do bash "$t" || exit 1; done`。需要 root、联网或 systemd 的测试只在 CI（GitHub Actions，ubuntu-latest）跑。
-- shellcheck：`shellcheck -S warning lib/*.sh build.sh srm.sh`，本机没装就以 CI 为准。
+- 测试：`for t in tests/*.sh; do bash "$t" || exit 1; done`。需要 root、联网或 systemd 的测试只在 CI（GitHub Actions，ubuntu-latest）跑，本机会打印 SKIP 并退出 0；设置 `TEST_CORE=<sing-box 1.14.1 路径>`（和 macOS 上的 `TEST_OPENSSL=<openssl 3 路径>`）可在本机跑真实核心测试。
+- shellcheck：`shellcheck -S warning -s bash dist/srm build.sh srm.sh`（模块之间共用变量，按打包后的整体检查），本机没装就以 CI 为准。
 
 ## 约定
 - 公开仓库：不提交任何真实服务器 IP、UUID、密钥、域名，测试样本一律脱敏。
@@ -23,6 +23,8 @@
 - 改配置一律走「state → 生成配置 → `sing-box check` → 原子切换 → 健康检查 → 失败回滚」，不能直接改线上配置。
 - 每个功能都要有非交互子命令；失败时退出码非 0；输出不是终端或设置了 `NO_COLOR` 时不带颜色。
 - 发正式 release、打 tag、改根目录 `install.sh` 的行为都要等主人确认。
+- 协议相关的逻辑只写在 `lib/protocols.sh` 的注册表里，其他模块通过 `proto_call`、`proto_jq` 分派；`tests/protocols.sh` 会检查别处不出现协议类型名。
+- 测试断言写成 `cmd || fail`、`if cmd; then fail; fi` 或 `[[ … ]] || exit 1`：`! cmd` 失败时不会触发 `set -e`，macOS 自带的 bash 3.2 里失败的 `[[ ]]` 也不会。
 
 ## 进度与决定
 - 当前进度见 PROGRESS.md，历史决定见 DECISIONS.md。
