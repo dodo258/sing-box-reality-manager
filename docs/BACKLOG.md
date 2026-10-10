@@ -10,7 +10,7 @@
   1. Hysteria2 分享链接 `hysteria2://密码@IP:端口?sni=…&alpn=h3&insecure=1&pinSHA256=…` 用复制链接的方式导入 Shadowrocket，既不报错也没加上；改成官方规范（https://v2.hysteria.network/docs/developers/URI-Scheme/）的 `端口/?…`、去掉 `alpn` 后，用二维码导入成功（带 pinSHA256 和不带的两个版本都能加进去）。所有协议的分享链接都要对照各自的官方或事实标准规范逐一核对（Hysteria2 / TUIC / VLESS / Trojan / VMess / SS2022 / Hysteria v1），规范里没有的参数不加，在代码注释里写明依据的规范链接。
   2. 手机版 Surge 不能直接粘贴整行配置，主人只能逐项手填 Snell 的 9 个字段。要查清 Surge 官方支持的导入方式（URL scheme、扫码、托管配置等，只用官方文档里写明的），给出新手能一步完成的办法；确实没有就把 Surge 的输出改成逐项列表，字段名和 Surge 新建代理界面的叫法一致，并保留整行写法给 Mac 版和文本编辑用户。
   3. Hysteria2、TUIC 这类只走 UDP 的节点，部署完的提示里加一句：Shadowrocket 等客户端的 TCP 延迟测试对它们显示不出延迟，属于正常；连不上多半是本地网络限制了 UDP，可以换 TCP 类协议（Reality、AnyTLS）。
-  验收：每种协议的分享链接都有单元测试，断言与规范格式一致；Hysteria2 链接含 `/?` 且不含 `alpn`；Surge 输出的方案在 DECISIONS 写明依据（官方文档链接）；CI 全绿。
+  验收：每种协议的分享链接都有单元测试，断言与规范格式一致；Hysteria2 链接含 `/?` 且不含 `alpn`；Surge 输出的方案在 DECISIONS 写明依据（官方文档链接）；CI 全绿。（进行中：agent/1010-client-import 2026-10-10 22:37）
 
 ## 等主人拍板
 
