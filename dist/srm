@@ -1,0 +1,1503 @@
+#!/usr/bin/env bash
+# SRM_BUNDLE
+set -o pipefail
+SRM_SELF=$(readlink -f -- "${BASH_SOURCE[0]}")
+SRM_VERSION=4.0.0-dev
+CORE_VERSION=1.14.1
+SRM_REPO=dodo258/sing-box-reality-manager
+SRM_ROOT=/opt/srm
+DATA=/var/lib/srm
+SERVICE=srm.service
+STATE=$DATA/current/state.json
+CORE=$SRM_ROOT/core/sing-box
+ACME=$SRM_ROOT/acme/acme.sh
+# Color only for an interactive terminal; NO_COLOR or redirected output disables it.
+use_color() { [[ -t 1 && -z ${NO_COLOR:-} && ${TERM:-dumb} != dumb ]]; }
+err() { printf '错误：%s\n' "$*" >&2; }
+msg() { printf '%s\n' "$*"; }
+ask() {
+    local prompt=$1 default=${2:-} answer
+    printf '%s%s：' "$prompt" "${default:+ [$default]}" >&2
+    IFS= read -r answer || return 1
+    [[ $answer != 0 ]] || return 1
+    REPLY=${answer:-$default}
+}
+# Non-interactive values come from command-line options; --yes accepts defaults.
+# Callers set assume_yes; optional=1 allows an empty default without asking.
+ask_opt() {
+    local value=$1 prompt=$2 default=${3:-} optional=${4:-0}
+    if [[ -n $value ]]; then REPLY=$value; return 0; fi
+    if [[ ${assume_yes:-0} == 1 ]]; then
+        [[ -n $default || $optional == 1 ]] || { err "非交互模式缺少参数：$prompt"; return 1; }
+        REPLY=$default; return 0
+    fi
+    ask "$prompt" "$default"
+}
+# Reads one hidden line into REPLY; a last line without newline still counts.
+read_secret() {
+    local rc=0
+    printf '%s：' "$1" >&2
+    IFS= read -rs REPLY || [[ -n $REPLY ]] || rc=1
+    printf '\n' >&2
+    return "$rc"
+}
+yesno() { local answer; printf '%s [y/N]：' "$1" >&2; IFS= read -r answer && [[ $answer == y || $answer == Y ]]; }
+random_hex() { openssl rand -hex "$1"; }
+fetch() { curl --proto '=https' --tlsv1.2 --fail --location --silent --show-error --retry 2 --connect-timeout 15 --max-time 180 "$1" -o "$2"; }
+sha256() { if command -v sha256sum >/dev/null; then sha256sum "$1" | awk '{print $1}'; else shasum -a 256 "$1" | awk '{print $1}'; fi; }
+require_root() { [[ $EUID == 0 ]] || { err '请以 root 运行。'; return 1; }; }
+require_linux() {
+    [[ $(uname -s) == Linux && $EUID == 0 ]] || { err '安装和管理需在 Linux 上以 root 运行。'; return 1; }
+    [[ -d /run/systemd/system ]] || { err '需要 systemd。'; return 1; }
+    [[ -r /etc/os-release ]] || return 1
+    local ID
+    . /etc/os-release
+    case $ID in debian|ubuntu) ;; *) err '只支持 Debian/Ubuntu。'; return 1;; esac
+}
+with_lock() (
+    require_linux || exit 1
+    command -v flock >/dev/null || { err '缺少 flock（util-linux）。'; exit 1; }
+    exec 9>/run/lock/srm.lock
+    flock -n 9 || { err '另一项操作尚未结束，请稍后重试。'; exit 1; }
+    recover_pending || exit 1
+    "$@"
+)
+ensure_dependencies() {
+    local pkg missing=()
+    for pkg in ca-certificates curl jq openssl qrencode iproute2 util-linux tar; do
+        dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null | grep -q '^install ok installed$' || missing+=("$pkg")
+    done
+    if (( ${#missing[@]} )); then
+        msg "安装缺失依赖：${missing[*]}"
+        apt-get update && DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l apt-get install -y --no-install-recommends "${missing[@]}" || return 1
+    fi
+    for pkg in curl jq openssl qrencode ss flock tar; do command -v "$pkg" >/dev/null || return 1; done
+}
+core_download() {
+    local target=$1 platform=${2:-linux} arch hash asset tmp
+    case $(uname -m) in x86_64) arch=amd64;; aarch64|arm64) arch=arm64;; *) err '只支持 amd64/arm64。'; return 1;; esac
+    case $platform-$arch in
+      linux-amd64) hash=12cb2816b52febb356f6a885b740cc8758c3f30b8ae0ca8edba80f0d2d35343f;;
+      linux-arm64) hash=6060b42fa84c5dcaeae1799af7f61b0f1ae4855d9d5ddc9e02baba17154b3ae2;;
+      darwin-arm64) hash=b9024642ef7b4848252df5469b7f60ef3c18bb5e217a16a0934f0174f8ad11b4;;
+      *) return 1;;
+    esac
+    asset=sing-box-$CORE_VERSION-$platform-$arch
+    tmp=$(mktemp -d) || return 1
+    if fetch "https://github.com/SagerNet/sing-box/releases/download/v$CORE_VERSION/$asset.tar.gz" "$tmp/core.tar.gz" &&
+       [[ $(sha256 "$tmp/core.tar.gz") == "$hash" ]] &&
+       tar -xzf "$tmp/core.tar.gz" -C "$tmp" "$asset/sing-box" &&
+       install -m 755 "$tmp/$asset/sing-box" "$target"; then
+        rm -rf "$tmp"; return 0
+    fi
+    rm -rf "$tmp"; err '核心下载或 SHA256 校验失败。'; return 1
+}
+port_free() {
+    local port=$1 exclude=${2:-} output
+    valid_port "$port" || return 1
+    if [[ -f $STATE ]]; then
+        jq -e --arg id "$exclude" --argjson port "$port" 'any(.nodes[]; .id!=$id and .port==$port)' "$STATE" >/dev/null && return 1
+    fi
+    output=$(ss -H -lntu "sport = :$port") || return 1
+    [[ -z $output ]]
+}
+choose_port() {
+    local candidate i
+    for ((i=0; i<100; i++)); do
+        candidate=$(od -An -N4 -tu4 /dev/urandom | tr -d ' ')
+        candidate=$((candidate % 40001 + 10000))
+        if port_free "$candidate"; then printf '%s\n' "$candidate"; return 0; fi
+    done
+    err '未找到空闲端口。'; return 1
+}
+# Configuration is generated from one root-owned state file, never edited in-place.
+# Protocol-specific fields are validated and rendered through lib/protocols.sh.
+empty_state() { printf '%s\n' '{"schema":1,"nodes":[],"policies":[],"unlock_dns":null,"egress":null}'; }
+valid_port() { [[ $1 =~ ^[1-9][0-9]{4}$ ]] && (( $1 >= 10000 && $1 <= 50000 )); }
+valid_domain() {
+    [[ ${#1} -le 253 && $1 == *.* && $1 != *..* && $1 =~ ^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?$ ]] || return 1
+    local label
+    local IFS=.
+    for label in $1; do
+        [[ ${#label} -le 63 && $label != -* && $label != *- ]] || return 1
+    done
+}
+valid_ip() {
+    local address=$1 part compressed=0 count=0 rest
+    if [[ $address =~ ^[0-9.]+$ ]]; then
+        [[ $address != .* && $address != *. && $address != *..* ]] || return 1
+        local IFS=.
+        for part in $address; do
+            [[ $part =~ ^[0-9]{1,3}$ ]] && ((10#$part <= 255)) || return 1
+            count=$((count+1))
+        done
+        [[ $count == 4 ]]; return
+    fi
+    [[ $address == *:* && $address =~ ^[0-9a-fA-F:]+$ && $address != *:::* ]] || return 1
+    if [[ $address == *::* ]]; then compressed=1; rest=${address#*::}; [[ $rest != *::* ]] || return 1
+    else [[ $address != :* && $address != *: ]] || return 1; fi
+    local IFS=:
+    for part in $address; do
+        [[ -n $part ]] || continue
+        [[ ${#part} -le 4 ]] || return 1
+        count=$((count+1))
+    done
+    if [[ $compressed == 1 ]]; then ((count<8)); else ((count==8)); fi
+}
+valid_host() {
+    if [[ $1 =~ ^[0-9.]+$ || $1 == *:* ]]; then valid_ip "$1"; else valid_domain "$1"; fi
+}
+validate_state() {
+    jq -e "$PROTO_JQ_DEFS"'
+      def text: type == "string" and length > 0 and (test("[\\x00-\\x1f\\x7f]")|not);
+      .schema == 1 and (.nodes|type == "array") and (.policies|type == "array") and
+      ([.policies[].name]|length == (unique|length)) and
+      ([.nodes[].id]|length == (unique|length)) and
+      ([.nodes[].port]|length == (unique|length)) and
+      all(.nodes[];
+        (.id|test("^[a-f0-9]{16}$")) and (.name|text) and
+        (.host|text) and (.sni|text) and ((.listen // "::") == "::" or .listen == "0.0.0.0") and (.enabled|type == "boolean") and
+        (.port|type == "number" and floor == . and . >= 10000 and . <= 50000) and
+        ('"$(proto_jq validate false)"')) and
+      all(.policies[];
+        (.name|text) and (.mode == "dns" or .mode == "proxy") and
+        (.domains|type == "array" and length > 0) and
+        all(.domains[]; text and test("^[a-z0-9][a-z0-9.-]*[a-z0-9]$"))) and
+      ((any(.policies[]; .mode == "dns")|not) or (.unlock_dns|type == "string" and length > 0)) and
+      ((any(.policies[]; .mode == "proxy")|not) or (.egress|type == "object")) and
+      (.egress == null or (.egress.type == "socks" and .egress.version == "5" and
+        (.egress.server|text) and (.egress.server_port|type == "number" and floor == . and . > 0 and . <= 65535)))
+    ' "$1" >/dev/null || { err '节点数据格式不合法，未应用。'; return 1; }
+    local h
+    h=$(jq -r '.unlock_dns // empty' "$1")
+    [[ -z $h ]] || valid_ip "$h" || { err '解锁 DNS IP 无效。'; return 1; }
+    while IFS= read -r h; do valid_host "$h" || { err "地址不合法：$h"; return 1; }; done < <(jq -r '.nodes[].host, (.egress.server // empty)' "$1")
+    while IFS= read -r h; do valid_domain "$h" || { err "域名不合法：$h"; return 1; }; done < <(jq -r '.nodes[].sni, .policies[].domains[]' "$1")
+}
+render_config() {
+    validate_state "$1" || return 1
+    jq "$PROTO_JQ_DEFS"'
+      . as $s |
+      [.policies[]|select(.mode=="dns")|.domains[]]|unique as $dns_domains |
+      [$s.policies[]|select(.mode=="proxy")|.domains[]]|unique as $proxy_domains |
+      {
+        log: {level:"warn",timestamp:true},
+        dns: {
+          servers: ([{type:"local",tag:"local"}]
+            + (if ($dns_domains|length)>0 then [{type:"udp",tag:"unlock",server:$s.unlock_dns,server_port:53}] else [] end)
+            + (if ($proxy_domains|length)>0 then [{type:"https",tag:"remote-dns",server:"1.1.1.1",detour:"media-proxy"}] else [] end)),
+          rules: ((if ($proxy_domains|length)>0 then [{domain_suffix:$proxy_domains,action:"route",server:"remote-dns"}] else [] end)
+            + (if ($dns_domains|length)>0 then [{domain_suffix:$dns_domains,action:"route",server:"unlock"}] else [] end)),
+          final:"local"
+        },
+        inbounds: [$s.nodes[]|select(.enabled)|('"$(proto_jq render_inbound '[]')"')[]],
+        outbounds: ([{type:"direct",tag:"direct"}]
+          + (if ($proxy_domains|length)>0 then [$s.egress + {tag:"media-proxy",domain_resolver:"local"}] else [] end)),
+        route: {default_domain_resolver:"local",final:"direct",rules: (
+          [{action:"sniff",timeout:"300ms"},{protocol:"dns",action:"hijack-dns"}]
+          + (if ($proxy_domains|length)>0 then [{domain_suffix:$proxy_domains,action:"route",outbound:"media-proxy"}] else [] end)
+          + (if ($dns_domains|length)>0 then
+              [{domain_suffix:$dns_domains,action:"resolve",server:"unlock",strategy:"ipv4_only"},
+               {domain_suffix:$dns_domains,action:"route",outbound:"direct"}]
+             else [] end))
+        }
+      }
+    ' "$1"
+}
+node_json() { jq -e --arg id "$2" '.nodes[]|select(.id==$id)' "$1"; }
+client_outbound() { jq "$PROTO_JQ_DEFS $(proto_jq client_outbound 'error("不支持的协议：\(.type)")')"; }
+share_uri() { jq -r "$PROTO_JQ_DEFS $(proto_jq share_uri 'error("不支持的协议：\(.type)")')"; }
+# Protocol registry. Each protocol is one block of proto_<type>_<hook> functions;
+# other modules dispatch through proto_call / proto_jq and never match on types.
+#   label            display name
+#   transport        tcp or udp, used by firewall rules and health checks
+#   validate         jq boolean for the protocol's own node fields (def text available)
+#   render_inbound   jq array of sing-box server inbounds for one node
+#   share_uri        jq string: raw share link
+#   client_outbound  jq object: sing-box client outbound
+#   secrets          jq paths hidden from node details
+#   prompt           ask protocol options; sets sni plus its own option variables
+#   create           generate credentials after confirmation; REPLY = JSON fields
+#   rotate           new credentials; REPLY = JSON fields to merge into the node
+# Optional: retarget_label / retarget_select / retarget (change a Reality handshake target).
+PROTO_HOOKS='label transport validate render_inbound share_uri client_outbound secrets prompt create rotate'
+PROTOCOLS=''
+PROTO_JQ_DEFS='
+  def base_inbound: {tag:.id,listen:(.listen // "::"),listen_port:.port};
+  def base_outbound: {tag:.name,server:.host,server_port:.port};
+  def uri_host: if (.host|contains(":")) then "["+.host+"]" else .host end;
+  def tls_files: {certificate_path:(.cert_dir+"/fullchain.pem"),key_path:(.cert_dir+"/key.pem")};
+'
+proto_register() {
+    local type=$1 hook
+    [[ $type =~ ^[a-z][a-z0-9]*$ ]] || { err "协议名不合法：$type"; return 1; }
+    for hook in $PROTO_HOOKS; do
+        declare -F "proto_${type}_$hook" >/dev/null || { err "协议 $type 缺少 proto_${type}_$hook，未注册。"; return 1; }
+    done
+    # Optional hooks come as a complete group or not at all.
+    local optional=0
+    for hook in retarget retarget_select retarget_label; do declare -F "proto_${type}_$hook" >/dev/null && optional=$((optional+1)); done
+    (( optional == 0 || optional == 3 )) || { err "协议 $type 的 retarget 钩子不完整，未注册。"; return 1; }
+    proto_known "$type" || PROTOCOLS="${PROTOCOLS:+$PROTOCOLS }$type"
+}
+proto_known() { [[ $1 =~ ^[a-z][a-z0-9]*$ && " $PROTOCOLS " == *" $1 "* ]]; }
+proto_call() {
+    local type=$1 hook=$2
+    shift 2
+    proto_known "$type" || { err "不支持的协议：${type:-空}（可选：$PROTOCOLS）"; return 1; }
+    declare -F "proto_${type}_$hook" >/dev/null || { err "协议 $type 不支持此操作。"; return 1; }
+    "proto_${type}_$hook" "$@"
+}
+proto_has() { proto_known "$1" && declare -F "proto_$1_$2" >/dev/null; }
+# Builds `if .type=="a" then (<a hook>) elif … else <fallback> end` for jq.
+proto_jq() {
+    local hook=$1 fallback=$2 type out='' keyword=if
+    for type in $PROTOCOLS; do
+        out+="$keyword .type==\"$type\" then ($("proto_${type}_$hook")) "
+        keyword=elif
+    done
+    printf '%s else %s end' "$out" "$fallback"
+}
+# Transport as a jq string expression, e.g. for firewall and listener checks.
+proto_jq_transport() {
+    local type out='' keyword=if
+    for type in $PROTOCOLS; do
+        out+="$keyword .type==\"$type\" then \"$("proto_${type}_transport")\" "
+        keyword=elif
+    done
+    printf '%s else "tcp" end' "$out"
+}
+proto_by_index() {
+    local type i=0
+    for type in $PROTOCOLS; do
+        i=$((i+1))
+        [[ $1 != "$i" ]] || { printf '%s\n' "$type"; return 0; }
+    done
+    return 1
+}
+proto_labels() {
+    local type out=''
+    for type in $PROTOCOLS; do out+="${out:+ · }$("proto_${type}_label")"; done
+    printf '%s\n' "$out"
+}
+
+# --- VLESS Reality -----------------------------------------------------------
+REALITY_TARGETS='www.ctrip.com www.ixigua.com'
+proto_vless_label() { printf 'VLESS Reality'; }
+proto_vless_transport() { printf 'tcp'; }
+proto_vless_validate() {
+    printf '%s' '(.uuid|test("^[a-f0-9-]{36}$")) and (.private_key|text) and (.public_key|text) and (.short_id|test("^[a-f0-9]{16}$"))'
+}
+proto_vless_render_inbound() {
+    printf '%s' '[base_inbound + {type:"vless",users:[{uuid:.uuid,flow:"xtls-rprx-vision"}],tls:{enabled:true,server_name:.sni,reality:{enabled:true,handshake:{server:.sni,server_port:443},private_key:.private_key,short_id:[.short_id]}}}]'
+}
+proto_vless_share_uri() {
+    printf '%s' '"vless://\(.uuid)@\(uri_host):\(.port)?encryption=none&security=reality&type=tcp&flow=xtls-rprx-vision&fp=chrome&sni=\(.sni|@uri)&pbk=\(.public_key|@uri)&sid=\(.short_id)#\(.name|@uri)"'
+}
+proto_vless_client_outbound() {
+    printf '%s' 'base_outbound + {type:"vless",uuid:.uuid,flow:"xtls-rprx-vision",tls:{enabled:true,server_name:.sni,utls:{enabled:true,fingerprint:"chrome"},reality:{enabled:true,public_key:.public_key,short_id:.short_id}}}'
+}
+proto_vless_secrets() { printf '%s' '.uuid,.private_key,.public_key,.short_id'; }
+proto_vless_prompt() {
+    if [[ -n ${opt_sni:-} ]]; then
+        reality_target_allowed "$opt_sni" || return 1
+        sni=$opt_sni
+    elif [[ ${assume_yes:-0} == 1 ]]; then sni=${REALITY_TARGETS%% *}
+    else reality_target_select || return 1; sni=$REPLY; fi
+}
+proto_vless_create() {
+    local pair private public uuid short
+    reality_target_check "$sni" || return 1
+    pair=$("$CORE" generate reality-keypair) || return 1
+    private=$(printf '%s\n' "$pair" | awk '/PrivateKey:/{print $2}')
+    public=$(printf '%s\n' "$pair" | awk '/PublicKey:/{print $2}')
+    # Every node gets its own shortId; nothing is shared between deployments.
+    uuid=$("$CORE" generate uuid) && short=$(random_hex 8) || return 1
+    REPLY=$(jq -nc --arg uuid "$uuid" --arg private "$private" --arg public "$public" --arg short "$short" \
+        '{uuid:$uuid,private_key:$private,public_key:$public,short_id:$short}')
+}
+proto_vless_rotate() {
+    local uuid
+    uuid=$("$CORE" generate uuid) || return 1
+    REPLY=$(jq -nc --arg v "$uuid" '{uuid:$v}')
+}
+proto_vless_retarget_label() { printf '切换 Reality 目标（携程 / 西瓜视频）'; }
+proto_vless_retarget_select() { reality_target_select; }
+# REPLY = JSON fields to merge, or empty when the node already uses the target.
+proto_vless_retarget() {
+    local node=$1 target=$2
+    reality_target_allowed "$target" || return 1
+    if [[ $(printf '%s' "$node" | jq -r .sni) == "$target" ]]; then
+        msg '当前已经使用此目标，无需修改。'; REPLY=''; return 0
+    fi
+    reality_target_check "$target" || return 1
+    REPLY=$(jq -nc --arg sni "$target" '{sni:$sni}')
+}
+reality_target_allowed() {
+    [[ " $REALITY_TARGETS " == *" $1 "* ]] || { err "Reality 目标只能选择：$REALITY_TARGETS"; return 1; }
+}
+reality_target_select() {
+    msg $'Reality 握手目标（无需拥有该域名或申请证书）：\n1. 携程：www.ctrip.com\n2. 西瓜视频：www.ixigua.com'
+    ask '选择目标（0 返回）' 1 || return 1
+    case $REPLY in
+      1) REPLY=www.ctrip.com;;
+      2) REPLY=www.ixigua.com;;
+      *) err '请选择 1 或 2。'; return 1;;
+    esac
+}
+reality_target_check() {
+    local domain=$1 output rc=0
+    valid_domain "$domain" || return 1
+    output=$(mktemp) || return 1
+    msg "检查 Reality 目标 ${domain} 的 TLS 1.3、证书和 HTTP/2…"
+    timeout 15 openssl s_client -connect "$domain:443" -servername "$domain" \
+        -tls1_3 -alpn h2 -verify_hostname "$domain" -verify_return_error \
+        </dev/null > "$output" 2>&1 || rc=$?
+    if [[ $rc != 0 ]] || ! grep -q 'TLSv1.3' "$output" ||
+       ! grep -q 'ALPN protocol: h2$' "$output" || ! grep -q 'Verify return code: 0 (ok)' "$output"; then
+        rm -f "$output"
+        err '目标检测失败，请重新部署并选择另一个目标，或检查本机 DNS / 网络 / 系统时间。'
+        return 1
+    fi
+    rm -f "$output"
+}
+
+# --- Shared TLS certificate handling (AnyTLS, Hysteria2) ---------------------
+# Option variables (mode email webroot cert key) are locals of node_add.
+tls_prompt() {
+    ask_opt "${opt_sni:-}" '证书域名' "$host" || return 1; sni=$REPLY
+    if [[ -z ${opt_cert:-} && ${assume_yes:-0} != 1 ]]; then
+        msg 'Lets Encrypt 免费证书：1.自动验证（使用空闲 80 或 443） 2.现有网站目录验证（网站保持运行） 3.导入已有证书'
+    fi
+    ask_opt "${opt_cert:-}" '证书方式' 1 || return 1
+    case $REPLY in
+      1|auto) mode=auto;;
+      2|webroot) mode=webroot; ask_opt "${opt_webroot:-}" '现有网站根目录绝对路径' || return 1; webroot=$REPLY;;
+      3|import)
+        mode=import
+        ask_opt "${opt_cert_file:-}" '完整证书链绝对路径' || return 1; cert=$REPLY
+        ask_opt "${opt_key_file:-}" '私钥绝对路径' || return 1; key=$REPLY;;
+      *) err '证书方式无效。'; return 1;;
+    esac
+    if [[ $mode != import ]]; then
+        ask_opt "${opt_email:-}" '证书联系邮箱（可留空）' '' 1 || return 1; email=$REPLY
+        [[ -z $email || $email == *@*.* ]] || { err '邮箱格式不正确。'; return 1; }
+        msg '自动申请使用 Lets Encrypt；继续表示同意该机构的服务条款。'
+    fi
+}
+tls_create() {
+    local tmp password cert_rc
+    if [[ $mode == import ]]; then
+        cert_valid "$cert" "$key" "$sni" || { err '证书与域名/私钥不匹配，或一天内到期。'; return 1; }
+        tmp=$(mktemp -d) || return 1
+        cp "$cert" "$tmp/fullchain.pem" && cp "$key" "$tmp/key.pem" && activate_cert "$sni" "$tmp"
+        cert_rc=$?; rm -rf "$tmp"; [[ $cert_rc == 0 ]] || return 1
+        msg '导入的外部证书需由原签发工具续期，再导入新证书。'
+    else issue_certificate "$sni" "$mode" "$email" "$webroot" || return 1; fi
+    password=$(random_hex 24) || return 1
+    REPLY=$(jq -nc --arg password "$password" --arg cert "$DATA/certs/$sni/active" '{password:$password,cert_dir:$cert}')
+}
+tls_validate() { printf '%s' '(.password|text) and (.cert_dir|text and startswith("/"))'; }
+tls_rotate() {
+    local value
+    value=$(random_hex 24) || return 1
+    REPLY=$(jq -nc --arg v "$value" '{password:$v}')
+}
+
+# --- AnyTLS ------------------------------------------------------------------
+proto_anytls_label() { printf 'AnyTLS'; }
+proto_anytls_transport() { printf 'tcp'; }
+proto_anytls_validate() { tls_validate; }
+proto_anytls_render_inbound() {
+    printf '%s' '[base_inbound + {type:"anytls",users:[{name:.id,password:.password}],tls:({enabled:true,server_name:.sni} + tls_files)}]'
+}
+proto_anytls_share_uri() { printf '%s' '"anytls://\(.password|@uri)@\(uri_host):\(.port)?sni=\(.sni|@uri)#\(.name|@uri)"'; }
+proto_anytls_client_outbound() { printf '%s' 'base_outbound + {type:"anytls",password:.password,tls:{enabled:true,server_name:.sni}}'; }
+proto_anytls_secrets() { printf '%s' '.password'; }
+proto_anytls_prompt() { tls_prompt; }
+proto_anytls_create() { tls_create; }
+proto_anytls_rotate() { tls_rotate; }
+
+# --- Hysteria2 ---------------------------------------------------------------
+proto_hysteria2_label() { printf 'Hysteria2'; }
+proto_hysteria2_transport() { printf 'udp'; }
+proto_hysteria2_validate() { tls_validate; }
+proto_hysteria2_render_inbound() {
+    printf '%s' '[base_inbound + {type:"hysteria2",users:[{name:.id,password:.password}],tls:({enabled:true,server_name:.sni,alpn:["h3"]} + tls_files)}]'
+}
+proto_hysteria2_share_uri() { printf '%s' '"hysteria2://\(.password|@uri)@\(uri_host):\(.port)?sni=\(.sni|@uri)&alpn=h3#\(.name|@uri)"'; }
+proto_hysteria2_client_outbound() { printf '%s' 'base_outbound + {type:"hysteria2",password:.password,tls:{enabled:true,server_name:.sni,alpn:["h3"]}}'; }
+proto_hysteria2_secrets() { printf '%s' '.password'; }
+proto_hysteria2_prompt() { tls_prompt; }
+proto_hysteria2_create() { tls_create; }
+proto_hysteria2_rotate() { tls_rotate; }
+
+proto_register vless
+proto_register anytls
+proto_register hysteria2
+owned_root() {
+    [[ -f $SRM_ROOT/.srm-owned && -f $DATA/.srm-owned ]] || { err '没有找到本脚本的安装标记。'; return 1; }
+}
+setup() {
+    require_linux || return 1
+    local path self=$1
+    for path in "$SRM_ROOT" "$DATA"; do
+        [[ ! -e $path || -f $path/.srm-owned ]] || { err "$path 已存在且不属于本脚本。"; return 1; }
+    done
+    if [[ -e /etc/systemd/system/$SERVICE && ! -f $SRM_ROOT/.srm-owned ]]; then err '服务名已被占用。'; return 1; fi
+    if [[ -e /usr/local/sbin/srm && ! -f $SRM_ROOT/.srm-owned ]]; then err '快捷命令已被占用。'; return 1; fi
+    ensure_dependencies || return 1
+    if ! id srm >/dev/null 2>&1; then
+        useradd --system --no-create-home --home-dir "$DATA" --shell /usr/sbin/nologin srm || return 1
+    elif [[ ! -f $SRM_ROOT/.srm-owned ]]; then err 'srm 系统用户已存在，请先排查。'; return 1; fi
+    install -d -m 755 "$SRM_ROOT" "$SRM_ROOT/core" || return 1
+    install -d -m 750 -o root -g srm "$DATA" "$DATA/generations" "$DATA/certs" || return 1
+    touch "$SRM_ROOT/.srm-owned" "$DATA/.srm-owned" || return 1
+    [[ -x $CORE ]] || core_download "$CORE" || return 1
+    # Must be a bundled distribution, not the development loader.
+    grep -q '^# SRM_BUNDLE$' "$self" || { err '请先运行 bash build.sh，再使用 dist/srm。'; return 1; }
+    if [[ $(readlink -f "$self") != "$SRM_ROOT/manager.sh" ]]; then install -m 755 "$self" "$SRM_ROOT/manager.sh" || return 1; fi
+    local existing
+    existing=$(command -v srm 2>/dev/null) || existing=''
+    if [[ -n $existing && $existing != /usr/local/sbin/srm ]]; then
+        msg "注意：系统已有 srm 命令（${existing}，可能是 secure-delete），本脚本的 srm 会优先；原命令请用完整路径。"
+    fi
+    ln -sfn "$SRM_ROOT/manager.sh" /usr/local/sbin/srm || return 1
+    link_vasma
+    cat > "/etc/systemd/system/$SERVICE" <<UNIT
+[Unit]
+Description=srm sing-box nodes
+After=network-online.target
+Wants=network-online.target
+[Service]
+User=srm
+Group=srm
+ExecStart=$CORE run -c $DATA/current/config.json
+Restart=on-failure
+RestartSec=3
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+RestrictSUIDSGID=true
+CapabilityBoundingSet=
+LimitNOFILE=65536
+[Install]
+WantedBy=multi-user.target
+UNIT
+    systemctl daemon-reload || return 1
+    msg '运行环境就绪。'
+}
+# `vasma` is the v3 command name. Never shadow a v3 installation that still owns it.
+link_vasma() {
+    local existing
+    existing=$(command -v vasma 2>/dev/null) || existing=''
+    if [[ -z $existing || $(readlink -f "$existing") == "$SRM_ROOT/manager.sh" ]]; then
+        ln -sfn "$SRM_ROOT/manager.sh" /usr/local/sbin/vasma
+    else msg "vasma 仍指向旧版脚本（$existing），保持不变；可使用 srm 命令。"; fi
+}
+new_candidate() {
+    local tmp
+    tmp=$(mktemp) || return 1
+    chmod 600 "$tmp"
+    if [[ -f $STATE ]]; then cat "$STATE" > "$tmp"; else empty_state > "$tmp"; fi
+    printf '%s\n' "$tmp"
+}
+service_healthy() {
+    local candidate=$1 tries port kind output
+    for ((tries=0; tries<15; tries++)); do
+        if systemctl is-active --quiet "$SERVICE"; then
+            local good=1
+            while IFS=$'\t' read -r port kind; do
+                [[ -n $port ]] || continue
+                if [[ $kind == udp ]]; then output=$(ss -H -lun "sport = :$port"); else output=$(ss -H -ltn "sport = :$port"); fi
+                [[ -n $output ]] || good=0
+            done < <(jq -r ".nodes[]|select(.enabled)|[.port,($(proto_jq_transport))]|@tsv" "$candidate")
+            [[ $good == 1 ]] && return 0
+        fi
+        sleep 1
+    done
+    return 1
+}
+switch_generation() {
+    local target=$1
+    rm -f "$DATA/.current-next" || return 1
+    ln -s "$target" "$DATA/.current-next" && mv -Tf "$DATA/.current-next" "$DATA/current"
+}
+recover_pending() {
+    [[ -f $DATA/pending.json ]] || return 0
+    local old active
+    old=$(jq -er '.old // ""' "$DATA/pending.json") || return 1
+    active=$(jq -r .active "$DATA/pending.json") || return 1
+    if [[ -n $old ]]; then
+        [[ $old == "$DATA/generations/"* && -f $old/state.json ]] || { err '回滚记录异常，需要人工检查。'; return 1; }
+        switch_generation "$old" || return 1
+        if [[ $active == 1 ]]; then systemctl restart "$SERVICE" && service_healthy "$STATE" || { err '恢复原配置后服务启动失败。'; return 1; }; else systemctl stop "$SERVICE" || return 1; fi
+    else
+        systemctl stop "$SERVICE" || return 1
+        rm -f "$DATA/current"
+    fi
+    firewall_sync "$STATE" || return 1
+    rm -f "$DATA/pending.json"
+    msg '已恢复中断操作之前的配置。'
+}
+apply_state() (
+    owned_root || exit 1
+    local candidate=$1 gen old='' active=0 count switched=0
+    validate_state "$candidate" || exit 1
+    gen=$(mktemp -d "$DATA/generations/g.XXXXXXXX") || exit 1
+    chmod 750 "$gen" && chgrp srm "$gen" || exit 1
+    if ! render_config "$candidate" > "$gen/config.json" || ! "$CORE" check -c "$gen/config.json"; then
+        rm -rf "$gen"; err '核心校验失败，原节点未改动。'; exit 1
+    fi
+    install -m 600 "$candidate" "$gen/state.json" || exit 1
+    chmod 640 "$gen/config.json" && chgrp srm "$gen/config.json" || exit 1
+    [[ ! -L $DATA/current ]] || old=$(readlink "$DATA/current")
+    systemctl is-active --quiet "$SERVICE" && active=1
+    jq -n --arg old "$old" --argjson active "$active" '{old:$old,active:$active}' > "$DATA/pending.json" || exit 1
+    trap '[[ $switched == 0 ]] || recover_pending' EXIT
+    trap 'exit 130' INT TERM HUP
+    switched=1
+    switch_generation "$gen" || exit 1
+    count=$(jq '[.nodes[]|select(.enabled)]|length' "$candidate")
+    if [[ $count == 0 ]]; then
+        systemctl stop "$SERVICE" || exit 1
+    else
+        if ! systemctl restart "$SERVICE" || ! service_healthy "$candidate"; then err '新配置启动失败，恢复上一份配置。'; exit 1; fi
+        systemctl enable "$SERVICE" >/dev/null || exit 1
+    fi
+    if ! firewall_sync "$candidate"; then err '端口规则应用失败，恢复上一份节点配置和端口规则。'; exit 1; fi
+    if [[ -n $old ]]; then ln -sfn "$old" "$DATA/previous" || exit 1; fi
+    rm -f "$DATA/pending.json" || exit 1
+    switched=0
+    if [[ $count == 0 ]]; then msg '所有节点已停用。'; else msg '配置已应用，服务和监听正常；外部客户端连通仍需验证。'; fi
+)
+rollback_config() {
+    owned_root || return 1
+    [[ -f $DATA/previous/state.json ]] || { err '没有可回滚的配置。'; return 1; }
+    apply_state "$DATA/previous/state.json"
+}
+update_core() {
+    owned_root || return 1
+    local tmp old_active=0
+    if [[ $("$CORE" version | head -n 1) == "sing-box version $CORE_VERSION" ]]; then msg "已是本脚本验证的核心版本 $CORE_VERSION。"; return 0; fi
+    tmp=$(mktemp "$SRM_ROOT/core/.candidate.XXXXXX") || return 1
+    if ! core_download "$tmp"; then rm -f "$tmp"; return 1; fi
+    if [[ -f $DATA/current/config.json ]] && ! "$tmp" check -c "$DATA/current/config.json"; then rm -f "$tmp"; return 1; fi
+    systemctl is-active --quiet "$SERVICE" && old_active=1
+    cp -p "$CORE" "$CORE.previous" && mv -f "$tmp" "$CORE" || return 1
+    if [[ $old_active == 0 ]]; then msg '核心已更新；服务保持停止状态。'; return 0; fi
+    if systemctl restart "$SERVICE" && service_healthy "$STATE"; then msg "核心已更新到 $CORE_VERSION。"; return 0; fi
+    mv -f "$CORE.previous" "$CORE"
+    systemctl restart "$SERVICE"
+    err '新核心启动失败，已恢复原核心。'; return 1
+}
+update_script() {
+    owned_root || return 1
+    local source=$1 expected=$2 tmp
+    [[ $expected =~ ^[a-f0-9]{64}$ ]] || { err '需要发布方提供的 SHA256。'; return 1; }
+    tmp=$(mktemp "$SRM_ROOT/.manager.XXXXXX") || return 1
+    case $source in https://*) fetch "$source" "$tmp" || { rm -f "$tmp"; return 1; };; /*) cp "$source" "$tmp" || return 1;; *) err '请输入 HTTPS 地址或本地绝对路径。'; rm -f "$tmp"; return 1;; esac
+    if [[ $(sha256 "$tmp") != "$expected" ]] || ! bash -n "$tmp" || ! grep -q '^# SRM_BUNDLE$' "$tmp"; then
+        err '脚本校验失败，原脚本未改动。'; rm -f "$tmp"; return 1
+    fi
+    cp -p "$SRM_ROOT/manager.sh" "$SRM_ROOT/manager.previous.sh" && chmod 755 "$tmp" && mv -f "$tmp" "$SRM_ROOT/manager.sh" || return 1
+    msg '脚本更新完成，请退出菜单后重新输入 srm 打开。核心和节点配置未自动升级。'
+}
+bbr_status() {
+    sysctl net.ipv4.tcp_congestion_control net.ipv4.tcp_available_congestion_control net.core.default_qdisc
+}
+bbr_enable() {
+    owned_root || return 1
+    local ctl=/etc/sysctl.d/90-srm-bbr.conf
+    [[ ! -e $ctl || -f $DATA/bbr-before.json ]] || { err "$ctl 已存在，不覆盖。"; return 1; }
+    modprobe tcp_bbr 2>/dev/null || true
+    sysctl -n net.ipv4.tcp_available_congestion_control | grep -qw bbr || { err '当前内核不支持 BBR，跳过；不会换内核或重启。'; return 1; }
+    if [[ ! -f $DATA/bbr-before.json ]]; then
+        jq -n --arg cc "$(sysctl -n net.ipv4.tcp_congestion_control)" --arg q "$(sysctl -n net.core.default_qdisc)" '{cc:$cc,qdisc:$q}' > "$DATA/bbr-before.json" || return 1
+    fi
+    printf 'net.core.default_qdisc = fq\nnet.ipv4.tcp_congestion_control = bbr\n' > "$ctl" || return 1
+    sysctl -p "$ctl" && bbr_status
+}
+bbr_restore() {
+    [[ -f $DATA/bbr-before.json ]] || return 0
+    if [[ $(sysctl -n net.ipv4.tcp_congestion_control) == bbr && $(sysctl -n net.core.default_qdisc) == fq ]]; then
+        sysctl -w "net.ipv4.tcp_congestion_control=$(jq -r .cc "$DATA/bbr-before.json")" "net.core.default_qdisc=$(jq -r .qdisc "$DATA/bbr-before.json")" || return 1
+    else msg 'BBR 当前值已被其他操作修改，保留当前值。'; fi
+    rm -f /etc/sysctl.d/90-srm-bbr.conf "$DATA/bbr-before.json"
+}
+show_status() {
+    if [[ -f $STATE ]]; then jq -r '.nodes[]|[.id,.name,.type,(.port|tostring),(if .enabled then "启用" else "停用" end)]|@tsv' "$STATE"; else msg '尚无节点。'; fi
+    systemctl --no-pager --full status "$SERVICE" || true
+    msg '节点变更时自动同步 UFW/firewalld 端口规则；云安全组需在服务商控制台放行对应端口。'
+}
+uninstall() {
+    owned_root || return 1
+    msg "删除本脚本服务、续期任务、$SRM_ROOT、$DATA 和快捷命令；节点凭据与本脚本证书会删除。系统依赖、其他服务和防火墙保留。"
+    [[ ${assume_yes:-0} == 1 ]] || yesno '已导出需要的节点资料，确认卸载' || return 0
+    systemctl disable --now "$SERVICE" srm-renew.timer 2>/dev/null || true
+    if systemctl is-active --quiet "$SERVICE" || systemctl is-active --quiet srm-renew.service; then err '服务仍在运行，停止卸载。'; return 1; fi
+    firewall_clear || { err '端口规则清理失败，保留数据以便重试卸载。'; return 1; }
+    bbr_restore || return 1
+    rm -f "/etc/systemd/system/$SERVICE" /etc/systemd/system/srm-renew.service /etc/systemd/system/srm-renew.timer
+    [[ $(readlink /usr/local/sbin/srm) != "$SRM_ROOT/manager.sh" ]] || rm -f /usr/local/sbin/srm
+    [[ $(readlink /usr/local/sbin/vasma) != "$SRM_ROOT/manager.sh" ]] || rm -f /usr/local/sbin/vasma
+    rm -rf "$SRM_ROOT" "$DATA"
+    userdel srm || true
+    systemctl daemon-reload
+    msg '卸载完成。'
+}
+update_latest() {
+    owned_root || return 1
+    local tmp url digest
+    tmp=$(mktemp) || return 1
+    if ! fetch "https://api.github.com/repos/$SRM_REPO/releases/latest" "$tmp"; then rm -f "$tmp"; return 1; fi
+    url=$(jq -r '.assets[]?|select(.name=="srm")|.browser_download_url' "$tmp")
+    digest=$(jq -r '.assets[]?|select(.name=="srm")|.digest // empty' "$tmp")
+    rm -f "$tmp"
+    if [[ -z $url ]]; then msg '发布仓库暂时没有独立脚本安装包，保留当前版本。'; return 0; fi
+    [[ $url == "https://github.com/$SRM_REPO/releases/download/"*/srm && $digest == sha256:* ]] || { err '发布信息不符合预期。'; return 1; }
+    if [[ $(sha256 "$SRM_ROOT/manager.sh") == "${digest#sha256:}" ]]; then msg '已是最新发布的脚本。'; return 0; fi
+    update_script "$url" "${digest#sha256:}"
+}
+# UFW application profiles distinguish our rules from existing port allows.
+# firewalld entries record only runtime/permanent ports that were absent before.
+firewall_detect() {
+    local ufw_active=0 firewalld_active=0 output
+    if command -v ufw >/dev/null; then
+        output=$(LC_ALL=C ufw status) || { err '无法读取 UFW 状态。'; return 1; }
+        [[ $output != 'Status: active'* ]] || ufw_active=1
+    fi
+    if command -v firewall-cmd >/dev/null && firewall-cmd --state >/dev/null 2>&1; then firewalld_active=1; fi
+    if (( ufw_active && firewalld_active )); then err 'UFW 与 firewalld 同时运行，请先确认防火墙管理方式。'; return 1; fi
+    if (( ufw_active )); then printf 'ufw\n'
+    elif (( firewalld_active )); then printf 'firewalld\n'
+    else printf 'none\n'; fi
+}
+firewall_profile() {
+    printf '[srm-%s-%s]\ntitle=srm managed port\ndescription=Managed by srm; do not edit\nports=%s/%s\n' "$1" "$2" "$1" "$2"
+}
+firewall_fields_valid() {
+    [[ $1 == ufw || $1 == firewalld ]] && [[ $2 =~ ^[a-zA-Z0-9_-]+$ ]] &&
+        [[ $3 == both || $3 == runtime || $3 == permanent ]] &&
+        { valid_port "$4" || [[ $4 == 80 || $4 == 443 ]]; } && [[ $5 == tcp || $5 == udp ]]
+}
+firewall_add() {
+    local backend=$1 zone=$2 scope=$3 port=$4 proto=$5 file app profile output rc
+    firewall_fields_valid "$@" || return 1
+    file=$DATA/firewall/$backend-$zone-$scope-$port-$proto
+    if [[ $backend == ufw ]]; then
+        app=srm-$port-$proto
+        profile=/etc/ufw/applications.d/$app
+        if [[ -e $profile || -L $profile ]]; then
+            [[ ! -L $profile ]] && firewall_profile "$port" "$proto" | cmp -s - "$profile" || { err "UFW 应用文件冲突：$profile"; return 1; }
+            [[ -f $file ]] || { err "UFW 应用名已存在：$app"; return 1; }
+        else
+            # Record intent first so interrupted profile creation can be cleaned.
+            printf '%s\t%s\t%s\t%s\t%s\n' "$@" > "$file" || return 1
+            firewall_profile "$port" "$proto" > "$profile" || return 1
+            chmod 644 "$profile" || return 1
+        fi
+        printf '%s\t%s\t%s\t%s\t%s\n' "$@" > "$file" || return 1
+        # Prepend only this node's exact application rule; never reset policy.
+        LC_ALL=C ufw prepend allow in "$app" comment 'srm managed' || return 1
+    else
+        local args=(--zone="$zone")
+        [[ $scope != permanent ]] || args+=(--permanent)
+        rc=0
+        output=$(firewall-cmd "${args[@]}" --query-port="$port/$proto" 2>&1) || rc=$?
+        if [[ $rc == 0 && $output == yes ]]; then return 0; fi
+        [[ $rc == 1 && $output == no ]] || { err "无法查询 firewalld $zone $port/${proto}：$output"; return 1; }
+        printf '%s\t%s\t%s\t%s\t%s\n' "$@" > "$file" || return 1
+        firewall-cmd "${args[@]}" --add-port="$port/$proto" || return 1
+    fi
+}
+firewall_remove() {
+    local file=$1 backend zone scope port proto app profile output rc
+    IFS=$'\t' read -r backend zone scope port proto < "$file" || return 1
+    firewall_fields_valid "$backend" "$zone" "$scope" "$port" "$proto" || { err '防火墙所有权记录异常。'; return 1; }
+    if [[ $backend == ufw ]]; then
+        app=srm-$port-$proto
+        profile=/etc/ufw/applications.d/$app
+        if [[ -e $profile || -L $profile ]]; then
+            [[ ! -L $profile ]] && firewall_profile "$port" "$proto" | cmp -s - "$profile" || { err "UFW 应用文件已被修改，保留：$profile"; return 1; }
+        else
+            # Reconstruct only a missing owned profile; never overwrite edits.
+            firewall_profile "$port" "$proto" > "$profile" && chmod 644 "$profile" || return 1
+        fi
+        output=$(LC_ALL=C ufw show added) || return 1
+        if printf '%s\n' "$output" | grep -Fq "$app"; then
+            LC_ALL=C ufw --force delete allow in "$app" || return 1
+        fi
+        output=$(LC_ALL=C ufw show added) || return 1
+        if printf '%s\n' "$output" | grep -Fq "$app"; then err "仍有规则引用 ${app}，保留应用文件。"; return 1; fi
+        rm -f "$profile" || return 1
+    else
+        local args=(--zone="$zone")
+        [[ $scope != permanent ]] || args+=(--permanent)
+        rc=0
+        output=$(firewall-cmd "${args[@]}" --query-port="$port/$proto" 2>&1) || rc=$?
+        if [[ $rc == 0 && $output == yes ]]; then
+            firewall-cmd "${args[@]}" --remove-port="$port/$proto" || return 1
+        elif [[ $rc != 1 || $output != no ]]; then err "无法清理 firewalld $zone $port/${proto}，保留记录。"; return 1; fi
+    fi
+    rm -f "$file"
+}
+firewall_clear() {
+    local file failures=0
+    for file in "$DATA"/firewall/*; do
+        [[ -f $file ]] || continue
+        firewall_remove "$file" || failures=1
+    done
+    return "$failures"
+}
+firewall_sync() {
+    local state=${1:-} backend ports zones='' port proto zone scope file key desired failures=0
+    owned_root || return 1
+    backend=$(firewall_detect) || return 1
+    install -d -m 700 "$DATA/firewall" || return 1
+    desired=$(mktemp) || return 1
+    ports=$(mktemp) || { rm -f "$desired"; return 1; }
+    if [[ -n $state && -f $state ]]; then
+        jq -r ".nodes[]|select(.enabled)|[.port,($(proto_jq_transport))]|@tsv" "$state" > "$ports" || { rm -f "$ports" "$desired"; return 1; }
+    fi
+    if [[ -n ${2:-} ]]; then
+        [[ $2 == 80 || $2 == 443 ]] || { rm -f "$ports" "$desired"; return 1; }
+        printf '%s\ttcp\n' "$2" >> "$ports"
+    fi
+    if [[ $backend == firewalld ]]; then
+        zones=$(firewall-cmd --get-active-zones) || { rm -f "$ports" "$desired"; return 1; }
+        zones=$(printf '%s\n' "$zones" | awk '/^[^[:space:]]/{print $1}')
+        [[ -n $zones ]] || zones=$(firewall-cmd --get-default-zone) || { rm -f "$ports" "$desired"; return 1; }
+    fi
+    while IFS=$'\t' read -r port proto; do
+        [[ -n $port ]] || continue
+        if [[ $backend == ufw ]]; then
+            printf 'ufw-global-both-%s-%s\n' "$port" "$proto" >> "$desired"
+            firewall_add ufw global both "$port" "$proto" || { failures=1; break; }
+        elif [[ $backend == firewalld ]]; then
+            while IFS= read -r zone; do
+                for scope in runtime permanent; do
+                    printf 'firewalld-%s-%s-%s-%s\n' "$zone" "$scope" "$port" "$proto" >> "$desired"
+                    firewall_add firewalld "$zone" "$scope" "$port" "$proto" || { failures=1; break 2; }
+                done
+            done <<< "$zones"
+            (( failures == 0 )) || break
+        fi
+    done < "$ports"
+    # Cleanup is deferred if additions fail, so existing nodes retain their rules.
+    if (( failures == 0 )); then
+        for file in "$DATA"/firewall/*; do
+            [[ -f $file ]] || continue
+            key=${file##*/}
+            grep -Fxq "$key" "$desired" || firewall_remove "$file" || failures=1
+        done
+    fi
+    if [[ -s $ports ]]; then
+        if [[ $backend == none ]]; then msg '未检测到活动的 UFW/firewalld，未更改防火墙。若使用自定义 nftables/iptables，仍需检查其规则。'
+        elif (( failures == 0 )); then msg "已自动配置 $backend 节点端口；云安全组和外部连通仍需检查。"; fi
+    fi
+    rm -f "$ports" "$desired"
+    return "$failures"
+}
+firewall_renew() (
+    local domain=$1 port=80 account=$SRM_ROOT/acme-accounts/$1
+    if [[ -f $account/challenge-port ]]; then
+        read -r port < "$account/challenge-port" || exit 1
+    elif grep -q "^Le_Webroot='alpn'" "$account/${domain}_ecc/$domain.conf" 2>/dev/null; then port=443; fi
+    [[ $port == 80 || $port == 443 ]] || { err '证书验证端口记录异常。'; exit 1; }
+    trap 'firewall_sync "$STATE" || err "证书临时端口清理失败，请在菜单「4. 运行状态」里选「重新同步防火墙端口规则」重试。"' EXIT
+    trap 'exit 130' INT TERM HUP
+    firewall_sync "$STATE" "$port" || exit 1
+    acme_call "$domain" --renew -d "$domain" --ecc
+)
+ensure_acme() {
+    [[ -x $ACME ]] && return 0
+    local tmp
+    tmp=$(mktemp -d) || return 1
+    if ! fetch https://codeload.github.com/acmesh-official/acme.sh/tar.gz/refs/tags/3.1.5 "$tmp/acme.tar.gz" ||
+       [[ $(sha256 "$tmp/acme.tar.gz") != a5e5b61bf98464fd7bf9925951b97e9ed8c127e041d3b8e9703d2360cd6e19b6 ]] ||
+       ! tar -xzf "$tmp/acme.tar.gz" -C "$tmp"; then rm -rf "$tmp"; err 'ACME 下载或校验失败。'; return 1; fi
+    install -d -m 700 "$SRM_ROOT/acme" "$SRM_ROOT/acme-accounts" || return 1
+    cp -R "$tmp/acme.sh-3.1.5/." "$SRM_ROOT/acme/" && chmod 700 "$ACME"
+    local rc=$?
+    rm -rf "$tmp"
+    return "$rc"
+}
+cert_valid() {
+    local cert=$1 key=$2 domain=$3 a b
+    openssl x509 -in "$cert" -noout -checkend 86400 >/dev/null 2>&1 &&
+        openssl verify -partial_chain -trusted "$cert" -verify_hostname "$domain" "$cert" >/dev/null 2>&1 || return 1
+    a=$(openssl x509 -in "$cert" -pubkey -noout 2>/dev/null) || return 1
+    b=$(openssl pkey -in "$key" -pubout 2>/dev/null) || return 1
+    [[ -n $a && $a == "$b" ]]
+}
+activate_cert() {
+    local domain=$1 source=$2 origin=${3:-import} dir gen old='' active=0
+    case $origin in acme|import) ;; *) return 1;; esac
+    valid_domain "$domain" && cert_valid "$source/fullchain.pem" "$source/key.pem" "$domain" || { err '证书校验失败。'; return 1; }
+    dir=$DATA/certs/$domain
+    install -d -m 750 -o root -g srm "$dir" || return 1
+    if [[ -f $dir/active/fullchain.pem && -f $dir/active/renewal-source ]] &&
+       [[ $(cat "$dir/active/renewal-source") == "$origin" ]] &&
+       cmp -s "$source/fullchain.pem" "$dir/active/fullchain.pem"; then return 0; fi
+    gen=$(mktemp -d "$dir/c.XXXXXXXX") || return 1
+    chmod 750 "$gen" && chgrp srm "$gen" &&
+        install -m 640 -g srm "$source/fullchain.pem" "$gen/fullchain.pem" &&
+        install -m 640 -g srm "$source/key.pem" "$gen/key.pem" &&
+        printf '%s\n' "$origin" > "$gen/renewal-source" && chmod 600 "$gen/renewal-source" || return 1
+    [[ ! -L $dir/active ]] || old=$(readlink "$dir/active")
+    ln -s "$gen" "$dir/.next" && mv -Tf "$dir/.next" "$dir/active" || return 1
+    systemctl is-active --quiet "$SERVICE" && active=1
+    if [[ ! -f $STATE ]] || { "$CORE" check -c "$DATA/current/config.json" && { [[ $active == 0 ]] || { systemctl restart "$SERVICE" && service_healthy "$STATE"; }; }; }; then return 0; fi
+    if [[ -n $old ]]; then
+        ln -s "$old" "$dir/.next" && mv -Tf "$dir/.next" "$dir/active"
+        [[ $active == 0 ]] || systemctl restart "$SERVICE"
+    else rm -f "$dir/active"; fi
+    err '证书应用失败，已恢复原证书。'; return 1
+}
+acme_call() {
+    local domain=$1; shift
+    "$ACME" --home "$SRM_ROOT/acme" --config-home "$SRM_ROOT/acme-accounts/$domain" "$@"
+}
+copy_acme_cert() {
+    local domain=$1 tmp rc=0
+    tmp=$SRM_ROOT/acme-accounts/$domain/export
+    install -d -m 700 "$tmp" || return 1
+    acme_call "$domain" --install-cert -d "$domain" --ecc --key-file "$tmp/key.pem" --fullchain-file "$tmp/fullchain.pem" > "$SRM_ROOT/acme-accounts/$domain/install.log" 2>&1 &&
+        activate_cert "$domain" "$tmp" acme || rc=1
+    return "$rc"
+}
+issue_certificate() (
+    local domain=$1 mode=$2 email=${3:-} webroot=${4:-} rc=0 probe
+    valid_domain "$domain" || exit 1
+    if [[ -f $DATA/certs/$domain/active/fullchain.pem ]] && cert_valid "$DATA/certs/$domain/active/fullchain.pem" "$DATA/certs/$domain/active/key.pem" "$domain"; then
+        msg '复用有效证书。'; exit 0
+    fi
+    if [[ $mode == auto ]]; then
+        if [[ -z $(ss -H -ltn 'sport = :80') ]]; then mode=http
+        elif [[ -z $(ss -H -ltn 'sport = :443') ]]; then mode=alpn
+        else err '80 和 443 已被占用，请选择现有网站目录验证。'; exit 1; fi
+        msg "自动选择证书验证方式：$mode"
+    fi
+    local challenge_port=80
+    case $mode in alpn) challenge_port=443;; http|webroot) ;; *) err '未知证书验证方式。'; exit 1;; esac
+    trap 'firewall_sync "$STATE" || err "证书临时端口清理失败，请在菜单「4. 运行状态」里选「重新同步防火墙端口规则」重试。"' EXIT
+    trap 'exit 130' INT TERM HUP
+    firewall_sync "$STATE" "$challenge_port" || exit 1
+    if [[ $mode == alpn ]]; then
+        [[ -z $(ss -H -ltn 'sport = :443') ]] || { err '443 端口被占用，原服务未改动。'; exit 1; }
+    elif [[ $mode == http ]]; then
+        [[ -z $(ss -H -ltn 'sport = :80') ]] || { err '80 端口已占用，请使用现有网站目录验证，不会停止已有服务。'; exit 1; }
+    elif [[ $mode == webroot ]]; then
+        [[ $webroot == /* && -d $webroot ]] || { err '网站目录必须是存在的绝对路径。'; exit 1; }
+        probe=$(random_hex 16) || exit 1
+        [[ -d $webroot/.well-known ]] || mkdir -m 755 "$webroot/.well-known" || exit 1
+        [[ -d $webroot/.well-known/acme-challenge ]] || mkdir -m 755 "$webroot/.well-known/acme-challenge" || exit 1
+        # Validation tokens are public; other web files are never changed.
+        # Existing directory permissions remain unchanged.
+        printf '%s' "$probe" > "$webroot/.well-known/acme-challenge/srm-$probe" || exit 1
+        chmod 644 "$webroot/.well-known/acme-challenge/srm-$probe"
+        local response
+        response=$(curl -fsSL --connect-timeout 10 --max-time 20 "http://$domain/.well-known/acme-challenge/srm-$probe") || rc=1
+        rm -f "$webroot/.well-known/acme-challenge/srm-$probe"
+        [[ $rc == 0 && $response == "$probe" ]] || { err '验证文件外网访问检查失败。没有修改网站配置，请检查域名解析/网站目录。'; exit 1; }
+    else err '未知证书验证方式。'; exit 1; fi
+    ensure_acme || exit 1
+    install -d -m 700 "$SRM_ROOT/acme-accounts/$domain" || exit 1
+    printf '%s\n' "$challenge_port" > "$SRM_ROOT/acme-accounts/$domain/challenge-port" || exit 1
+    if [[ $mode == http || $mode == alpn ]]; then
+        command -v socat >/dev/null || DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l apt-get install -y --no-install-recommends socat || exit 1
+        local challenge=--standalone
+        [[ $mode != alpn ]] || challenge=--alpn
+        acme_call "$domain" --issue "$challenge" -d "$domain" --keylength ec-256 --server letsencrypt --accountemail "$email" > "$SRM_ROOT/acme-accounts/$domain/issue.log" 2>&1 || rc=$?
+    else
+        acme_call "$domain" --issue --webroot "$webroot" -d "$domain" --keylength ec-256 --server letsencrypt --accountemail "$email" > "$SRM_ROOT/acme-accounts/$domain/issue.log" 2>&1 || rc=$?
+    fi
+    if [[ $rc != 0 && $rc != 2 ]]; then err "证书申请失败。日志：$SRM_ROOT/acme-accounts/$domain/issue.log（分享前请检查敏感信息）。"; exit 1; fi
+    copy_acme_cert "$domain" && install_renew_timer
+)
+install_renew_timer() {
+    cat > /etc/systemd/system/srm-renew.service <<UNIT
+[Unit]
+Description=srm certificate renewal
+[Service]
+Type=oneshot
+UMask=0077
+ExecStart=/usr/local/sbin/srm renew
+UNIT
+    cat > /etc/systemd/system/srm-renew.timer <<'UNIT'
+[Unit]
+Description=srm daily certificate check
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=3600
+Persistent=true
+[Install]
+WantedBy=timers.target
+UNIT
+    systemctl daemon-reload && systemctl enable --now srm-renew.timer
+}
+renew_certificates() {
+    owned_root || return 1
+    [[ -f $STATE ]] || return 0
+    local domain rc failures=0
+    while IFS= read -r domain; do
+        [[ $(certificate_source "$domain") == acme ]] || continue
+        # Record a verified legacy association before acme.sh replaces its export.
+        # Otherwise a failed activation makes the still-active old cert look imported.
+        if ! certificate_preserve_source "$domain"; then failures=$((failures+1)); continue; fi
+        rc=0
+        firewall_renew "$domain" > "$SRM_ROOT/acme-accounts/$domain/renew.log" 2>&1 || rc=$?
+        if [[ $rc == 0 || $rc == 2 ]]; then
+            if ! copy_acme_cert "$domain"; then
+                err "新证书未能应用：${domain}；保留当前证书，下次续期检查会重试应用。"
+                failures=$((failures+1))
+            fi
+        else err "证书续期失败：${domain}；保留原证书。日志：$SRM_ROOT/acme-accounts/$domain/renew.log"; failures=$((failures+1)); fi
+    done < <(jq -r '.nodes[]|select(.cert_dir != null)|.sni' "$STATE" | sort -u)
+    [[ $failures == 0 ]]
+}
+certificate_preserve_source() {
+    local domain=$1 active=$DATA/certs/$1/active tmp
+    [[ ! -f $active/renewal-source ]] || return 0
+    [[ $(certificate_source "$domain") == acme ]] || return 1
+    tmp=$(mktemp "$active/.renewal-source.XXXXXXXX") || return 1
+    if printf 'acme\n' > "$tmp" && chmod 600 "$tmp" && mv -f "$tmp" "$active/renewal-source"; then return 0; fi
+    rm -f "$tmp"; return 1
+}
+certificate_source() {
+    local domain=$1 active=$DATA/certs/$1/active account=$SRM_ROOT/acme-accounts/$1 value
+    if [[ -f $active/renewal-source ]]; then
+        value=$(cat "$active/renewal-source") || return 1
+        case $value in acme|import) printf '%s\n' "$value";; *) printf 'unknown\n';; esac
+    elif [[ -f $account/${domain}_ecc/$domain.conf && -f $account/export/fullchain.pem ]] &&
+         cmp -s "$account/export/fullchain.pem" "$active/fullchain.pem"; then
+        # Legacy releases had no origin marker. An account directory alone is not proof.
+        printf 'acme\n'
+    else printf 'import\n'; fi
+}
+certificate_status() {
+    local domain cert count source health expiry issuer enabled running
+    msg $'\n证书管理（只显示本脚本节点使用的证书）\nReality 无需自行申请证书；使用 TLS 证书的节点在这里查看到期时间和续期状态。'
+    if [[ ! -f $STATE ]] || ! jq -e 'any(.nodes[]; .cert_dir != null)' "$STATE" >/dev/null; then
+        msg '目前没有使用 TLS 证书的节点。'; return 0
+    fi
+    enabled=$(systemctl is-enabled srm-renew.timer 2>/dev/null) || enabled='未启用'
+    running=$(systemctl is-active srm-renew.timer 2>/dev/null) || running='未运行'
+    printf '自动续期定时任务：%s / %s（每日检查，仅管理本脚本签发的证书）\n' "$enabled" "$running"
+    systemctl list-timers --all srm-renew.timer --no-pager 2>/dev/null || true
+    while IFS= read -r domain; do
+        cert=$DATA/certs/$domain/active/fullchain.pem
+        count=$(jq --arg d "$domain" '[.nodes[]|select(.cert_dir != null and .sni==$d)]|length' "$STATE") || return 1
+        source=$(certificate_source "$domain") || return 1
+        case $source in
+          acme) source="Let's Encrypt 自动续期";;
+          import) source='外部导入：由原工具续期后重新导入';;
+          *) source='来源标记异常：暂不自动续期';;
+        esac
+        printf '\n域名：%s（%s 个节点共用）\n来源：%s\n' "$domain" "$count" "$source"
+        if ! expiry=$(openssl x509 -in "$cert" -noout -enddate 2>/dev/null); then
+            msg '状态：证书缺失或无法读取'; continue
+        fi
+        issuer=$(openssl x509 -in "$cert" -noout -issuer 2>/dev/null) || issuer='issuer=未知'
+        if ! openssl x509 -in "$cert" -noout -checkend 0 >/dev/null 2>&1; then health='已到期'
+        elif ! openssl x509 -in "$cert" -noout -checkend 2592000 >/dev/null 2>&1; then health='30 天内到期'
+        else health='有效'; fi
+        printf '到期时间：%s\n签发者：%s\n状态：%s\n' "${expiry#notAfter=}" "${issuer#issuer=}" "$health"
+    done < <(jq -r '.nodes[]|select(.cert_dir != null)|.sni' "$STATE" | sort -u)
+}
+certificate_renew_now() {
+    msg '检查本脚本签发的证书：达到续期条件时才申请，未到期不会强制重签。'
+    renew_certificates || return 1
+    msg '检查完成；外部导入证书不参与自动续期。'
+    certificate_status
+}
+certificate_menu() {
+    while :; do
+        certificate_status || return 1
+        [[ -f $STATE ]] || return 0
+        msg $'\n1. 刷新证书状态\n2. 立即检查续期（成功更换证书后可能短暂重启本脚本节点）\n0. 返回'
+        ask '操作' || return 0
+        case $REPLY in
+          1) ;;
+          2) with_lock certificate_renew_now || return 1;;
+          *) err '无效选项。';;
+        esac
+    done
+}
+# Conservative built-in domain groups; exact additions remain visible/editable.
+platform_domains() {
+    case $1 in
+      netflix) printf '%s\n' 'netflix.com nflxvideo.net nflximg.net nflximg.com nflxso.net nflxext.com';;
+      disney) printf '%s\n' 'disneyplus.com disney-plus.net dssott.com bamgrid.com';;
+      youtube) printf '%s\n' 'youtube.com youtubei.googleapis.com googlevideo.com ytimg.com youtu.be';;
+      *) return 1;;
+    esac
+}
+routing_conflicts() {
+    # Compare opposite modes only; same-mode rules share the same resolver/outbound.
+    # A suffix includes itself and its subdomains, but not lookalike hostnames.
+    jq -r --arg name "${2:-}" '
+      .policies as $p |
+      range(0; $p|length) as $i | range($i+1; $p|length) as $j |
+      $p[$i] as $a | $p[$j] as $b |
+      select($a.mode != $b.mode and ($name == "" or $a.name == $name or $b.name == $name)) |
+      $a.domains[] as $x | $b.domains[] as $y |
+      select($x == $y or ($x|endswith("."+$y)) or ($y|endswith("."+$x))) |
+      "\($a.name) [\($a.mode)] \($x) ↔ \($b.name) [\($b.mode)] \($y)"
+    ' "$1"
+}
+routing_check_conflicts() {
+    local conflicts
+    conflicts=$(routing_conflicts "$1" "${2:-}") || return 1
+    [[ -n $conflicts ]] || return 0
+    err 'DNS 解锁与代理出口的域名范围重叠，请先修改或删除冲突规则：'
+    printf '%s\n' "$conflicts" >&2
+    return 1
+}
+routing_show() {
+    [[ -f $STATE ]] || { err '请先部署节点。'; return 1; }
+    jq '{unlock_dns,egress:(if .egress then (.egress|del(.password)) else null end),policies}' "$STATE" || return 1
+    if ! routing_check_conflicts "$STATE"; then msg '已有规则保持原状，重叠部分按当前配置由代理规则优先处理。'; fi
+    return 0
+}
+routing_menu() {
+    [[ -f $STATE ]] || { err '请先部署节点。'; return 1; }
+    msg '解锁 DNS 需要客户端把域名或 DNS 查询交给本服务器；仅发送已解析 IP 时，SNI 嗅探不会自动重写该 IP。指定代理出口可按可识别的域名分流。'
+    msg '流媒体分流：1.查看 2.设置解锁 DNS 3.设置代理出口（SOCKS5） 4.添加/替换平台规则 5.删除平台规则'
+    ask '操作' 1 || return 0
+    local host port user name mode domains
+    case $REPLY in
+      1) routing_show;;
+      2) ask '解锁 DNS 的 IP 地址' || return 0; routing_change dns "$REPLY";;
+      3)
+        msg '只把命中平台的流量送到此 SOCKS5 出口。出口需支持 UDP 才能承载 QUIC；不会自动回落本机。'
+        ask '出口 IP/域名' || return 0; host=$REPLY
+        ask '出口端口' 1080 || return 0; port=$REPLY
+        ask '用户名（无认证则留空）' || return 0; user=$REPLY
+        routing_change egress "$host" "$port" "$user";;
+      4)
+        ask '平台：netflix / disney / youtube / 自定义名称' netflix || return 0; name=$REPLY
+        domains=$(platform_domains "$name") || domains=''
+        ask '匹配域名后缀，空格分隔（会显示完整范围）' "$domains" || return 0; domains=$REPLY
+        ask '方式：dns 或 proxy' dns || return 0; mode=$REPLY
+        routing_change add "$name" "$mode" "$domains";;
+      5) ask '要删除的规则名称' || return 0; routing_change del "$REPLY";;
+      *) err '无效选项。'; return 1;;
+    esac
+}
+# Non-interactive routing changes, shared with the menu:
+#   dns IP | egress HOST PORT [USER] (password read from stdin) | add NAME dns|proxy DOMAIN… | del NAME
+# Domain arguments may also hold several space-separated suffixes.
+routing_change() {
+    local op=${1:-} candidate tmp host port user pass='' name mode domains rc=1 max=0
+    [[ -f $STATE ]] || { err '请先部署节点。'; return 1; }
+    shift
+    case $op in dns|del) max=1;; egress) max=3;; esac
+    (( max == 0 || $# <= max )) || { err "多余的参数：${*:max+1}"; return 1; }
+    candidate=$(new_candidate) || return 1
+    tmp=$(mktemp) || { rm -f "$candidate"; return 1; }
+    case $op in
+      dns)
+        host=${1:-}
+        if [[ $host =~ ^[0-9.]+$ || $host =~ ^[0-9a-fA-F:]+$ ]] && valid_ip "$host"; then
+            jq --arg host "$host" '.unlock_dns=$host' "$candidate" > "$tmp" && rc=0
+        else err '解锁 DNS 请输入 IP。'; fi;;
+      egress)
+        host=${1:-} port=${2:-1080} user=${3:-}
+        if ! valid_host "$host"; then err '出口地址无效。'
+        elif ! [[ $port =~ ^[1-9][0-9]{0,4}$ ]] || ((port > 65535)); then err '出口端口无效。'
+        elif [[ -n $user ]] && ! read_secret '密码（不回显）'; then err '没有从标准输入读到密码，未修改。'
+        else
+            [[ -z $user ]] || pass=$REPLY
+            jq --arg host "$host" --argjson port "$port" --arg user "$user" --arg pass "$pass" '.egress={type:"socks",version:"5",server:$host,server_port:$port} + (if $user!="" then {username:$user,password:$pass} else {} end)' "$candidate" > "$tmp" && rc=0
+        fi;;
+      add)
+        name=${1:-} mode=${2:-}
+        shift 2 2>/dev/null || shift $#
+        if [[ -z $name ]] || (( $# == 0 )); then err '用法：srm routing add 名称 dns|proxy 域名后缀…'
+        elif [[ $mode != dns && $mode != proxy ]]; then err '方式只能是 dns 或 proxy。'
+        else
+            domains=$(printf '%s\n' "$@" | jq -Rsc 'split("\n")|map(split(" ")[])|map(select(length>0)|ascii_downcase)|unique') &&
+            jq --arg name "$name" --arg mode "$mode" --argjson domains "$domains" '.policies=(.policies|map(select(.name!=$name)))+[{name:$name,mode:$mode,domains:$domains}]' "$candidate" > "$tmp" &&
+            routing_check_conflicts "$tmp" "$name" && rc=0
+        fi;;
+      del)
+        name=${1:-}
+        if jq -e --arg name "$name" 'any(.policies[]; .name==$name)' "$candidate" >/dev/null; then
+            jq --arg name "$name" '.policies|=map(select(.name!=$name))' "$candidate" > "$tmp" && rc=0
+        else err "没有名为 ${name:-空} 的规则。"; fi;;
+      *) err '用法：srm routing [show|dns|egress|add|del]';;
+    esac
+    if [[ $rc == 0 ]]; then
+        rc=1
+        if mv "$tmp" "$candidate" && apply_state "$candidate"; then rc=0; fi
+    fi
+    rm -f "$candidate" "$tmp"
+    return "$rc"
+}
+# All mutation menu paths execute under with_lock.
+# node_add SELF [TYPE] [--name N] [--host H] [--port P|random] [--sni D] [--cert auto|webroot|import]
+#          [--webroot DIR] [--cert-file F] [--key-file F] [--email E] [--bbr enable|keep] [--yes]
+node_add() {
+    local self=$1 type='' name host port sni='' bbr=keep candidate node id tmp transport var assume_yes=0
+    local opt_name='' opt_host='' opt_port='' opt_sni='' opt_cert='' opt_webroot='' opt_cert_file='' opt_key_file='' opt_email='' opt_bbr=''
+    # Protocol prompt hooks fill these.
+    local mode=none email='' webroot='' cert='' key=''
+    shift
+    if [[ -n ${1:-} && $1 != -* ]]; then type=$1; shift; fi
+    while (( $# )); do
+        case $1 in
+          -y|--yes) assume_yes=1; shift; continue;;
+          --name|--host|--port|--sni|--cert|--webroot|--cert-file|--key-file|--email|--bbr) ;;
+          *) err "未知参数：$1（可用参数见 srm --help）"; return 1;;
+        esac
+        [[ $# -ge 2 && -n $2 ]] || { err "$1 需要一个值。"; return 1; }
+        var=${1#--}; var=opt_${var//-/_}
+        printf -v "$var" '%s' "$2"
+        shift 2
+    done
+    if [[ -z $type ]]; then
+        if [[ $assume_yes == 1 ]]; then err "非交互模式需要指定协议：$PROTOCOLS"; return 1; fi
+        local t i=0
+        msg '部署节点（任一步输入 0 返回）'
+        for t in $PROTOCOLS; do i=$((i+1)); printf '%s. %s\n' "$i" "$(proto_call "$t" label)"; done
+        ask '协议' 1 || return 1
+        type=$(proto_by_index "$REPLY") || { err "请选择 1–$i。"; return 1; }
+    fi
+    proto_known "$type" || { err "不支持的协议：$type（可选：$PROTOCOLS）"; return 1; }
+    ask_opt "$opt_name" '节点名称' "$type" || return 1; name=$REPLY
+    ask_opt "$opt_host" '客户端连接的服务器 IP 或域名（域名需 DNS only 灰云）' || return 1; host=$REPLY
+    valid_host "$host" || { err '地址不合法。'; return 1; }
+    ask_opt "$opt_port" '端口：10000–50000，回车随机' random || return 1; port=$REPLY
+    if [[ $port != random ]]; then valid_port "$port" || { err '端口必须在 10000–50000。'; return 1; }; fi
+    proto_call "$type" prompt || return 1
+    valid_domain "$sni" || { err '域名不合法，请使用 ASCII/Punycode 域名。'; return 1; }
+    if [[ ! -f $STATE ]]; then
+        [[ -n $opt_bbr || $assume_yes == 1 ]] || msg 'BBR：1.内核支持时自动启用（主机级 TCP 设置） 2.保持现状（与现有程序共存时选择）'
+        ask_opt "$opt_bbr" 'BBR 设置' 2 || return 1
+        case $REPLY in 1|enable) bbr=enable;; 2|keep) bbr=keep;; *) err '无效选项。'; return 1;; esac
+    fi
+    msg "部署：$name / $(proto_call "$type" label) / $host:$port / $sni"
+    if [[ $assume_yes != 1 ]]; then yesno '开始安装缺失依赖、申请证书并部署' || return 0; fi
+    [[ -f $SRM_ROOT/.srm-owned ]] || setup "$self" || return 1
+    ensure_dependencies || return 1
+    if [[ $port == random ]]; then port=$(choose_port) || return 1; else port_free "$port" || { err '端口被占用，原服务未改动。'; return 1; }; fi
+    id=$(random_hex 8) || return 1
+    proto_call "$type" create || return 1
+    node=$(jq -n --arg id "$id" --arg name "$name" --arg host "$host" --arg sni "$sni" --arg type "$type" --argjson port "$port" --argjson fields "$REPLY" \
+        '{id:$id,name:$name,host:$host,sni:$sni,port:$port,type:$type,enabled:true} + $fields') || return 1
+    if [[ $(sysctl -n net.ipv6.conf.all.disable_ipv6 2>/dev/null) == 1 ]]; then
+        node=$(printf '%s' "$node" | jq '.listen="0.0.0.0"') || return 1
+    fi
+    candidate=$(new_candidate) || return 1
+    tmp=$(mktemp) || return 1
+    jq --argjson n "$node" '.nodes += [$n]' "$candidate" > "$tmp" && mv "$tmp" "$candidate" || return 1
+    if apply_state "$candidate"; then
+        rm -f "$candidate"
+        if [[ $bbr == enable ]]; then
+            if [[ $(sysctl -n net.ipv4.tcp_congestion_control) == bbr ]]; then msg 'BBR 已开启。'; else bbr_enable || msg '节点已部署；BBR 未启用，原因见上方。'; fi
+        fi
+        transport=$(proto_call "$type" transport | tr '[:lower:]' '[:upper:]')
+        msg "节点 ID：$id"
+        msg "节点端口：${port}/${transport}；如仍无法连接，请在服务商控制台的云安全组允许 ${transport} ${port}。"
+        printf '%s' "$node" | share_uri
+        msg '二维码、详情和客户端配置：在菜单里选「2. 节点管理」。'
+        return 0
+    fi
+    rm -f "$candidate"; return 1
+}
+# Viewing nodes never touches the network: links and QR codes are built locally.
+export_node() {
+    local id=$1 format=$2 node type link
+    node=$(node_json "$STATE" "$id") || { err '节点不存在。'; return 1; }
+    type=$(printf '%s' "$node" | jq -r .type)
+    case $format in
+      uri) printf '%s' "$node" | share_uri;;
+      qr)
+        link=$(printf '%s' "$node" | share_uri) || return 1
+        if command -v qrencode >/dev/null; then
+            if use_color; then printf '%s' "$link" | qrencode -t ANSIUTF8; else printf '%s' "$link" | qrencode -t UTF8; fi
+        else msg '未安装 qrencode，只显示链接：'; msg "$link"; fi;;
+      outbound) printf '%s' "$node" | client_outbound;;
+      details)
+        printf '%s' "$node" | jq "del($(proto_call "$type" secrets))" || return 1
+        if [[ $(printf '%s' "$node" | jq -r '.cert_dir // empty') ]]; then
+            openssl x509 -in "$(printf '%s' "$node" | jq -r .cert_dir)/fullchain.pem" -noout -subject -enddate
+        fi;;
+      *) err '格式只能是 uri、qr、outbound 或 details。'; return 1;;
+    esac
+}
+list_nodes() {
+    [[ -f $STATE ]] || { msg '尚无节点。'; return 0; }
+    jq -r '.nodes[]|[.id,.name,.type,(.port|tostring),(if .enabled then "启用" else "停用" end)]|@tsv' "$STATE"
+}
+node_change() {
+    local id=$1 action=$2 value=${3:-} candidate tmp type node
+    candidate=$(new_candidate) || return 1
+    node=$(node_json "$candidate" "$id") || { rm -f "$candidate"; err '节点不存在。'; return 1; }
+    type=$(printf '%s' "$node" | jq -r .type)
+    tmp=$(mktemp) || return 1
+    case $action in
+      toggle)
+        if [[ $(printf '%s' "$node" | jq -r .enabled) == false ]]; then
+            port_free "$(printf '%s' "$node" | jq -r .port)" "$id" || { rm -f "$tmp" "$candidate"; err '端口被占用，无法启用。'; return 1; }
+        fi
+        jq --arg id "$id" '(.nodes[]|select(.id==$id)|.enabled) |= not' "$candidate" > "$tmp";;
+      delete) jq --arg id "$id" '.nodes |= map(select(.id!=$id))' "$candidate" > "$tmp";;
+      port)
+        port_free "$value" "$id" || { rm -f "$tmp" "$candidate"; err '端口无效或被占用。'; return 1; }
+        jq --arg id "$id" --argjson p "$value" '(.nodes[]|select(.id==$id)|.port)=$p' "$candidate" > "$tmp";;
+      name)
+        [[ -n $value ]] || { rm -f "$tmp" "$candidate"; err '名称不能为空。'; return 1; }
+        jq --arg id "$id" --arg name "$value" '(.nodes[]|select(.id==$id)|.name)=$name' "$candidate" > "$tmp";;
+      retarget)
+        proto_has "$type" retarget || { rm -f "$tmp" "$candidate"; err '此协议的节点不支持切换握手目标。'; return 1; }
+        proto_call "$type" retarget "$node" "$value" || { rm -f "$tmp" "$candidate"; return 1; }
+        [[ -n $REPLY ]] || { rm -f "$tmp" "$candidate"; return 0; }
+        jq --arg id "$id" --argjson f "$REPLY" '(.nodes[]|select(.id==$id)) += $f' "$candidate" > "$tmp";;
+      rotate)
+        proto_call "$type" rotate || { rm -f "$tmp" "$candidate"; return 1; }
+        jq --arg id "$id" --argjson f "$REPLY" '(.nodes[]|select(.id==$id)) += $f' "$candidate" > "$tmp";;
+      *) rm -f "$tmp" "$candidate"; err '操作只能是 toggle、port、name、rotate、retarget 或 delete。'; return 1;;
+    esac
+    local rc=1
+    if mv "$tmp" "$candidate" && apply_state "$candidate"; then rc=0; fi
+    rm -f "$candidate" "$tmp"
+    return "$rc"
+}
+node_menu() {
+    [[ -f $STATE ]] || { msg '尚无节点。'; return 0; }
+    local count index=0 id name type port status
+    count=$(jq '.nodes|length' "$STATE") || return 1
+    (( count > 0 )) || { msg '尚无节点，请先部署。'; return 0; }
+    msg $'\n已部署节点：'
+    while IFS=$'\t' read -r name type port status; do
+        index=$((index+1))
+        printf '  %s. %s | %s | 端口 %s | %s\n' "$index" "$name" "$type" "$port" "$status"
+    done < <(jq -r '.nodes[]|[.name,.type,(.port|tostring),(if .enabled then "启用" else "停用" end)]|@tsv' "$STATE")
+    ask '节点序号（也可输入完整 ID；0 返回）' || return 0
+    id=$REPLY
+    if [[ $REPLY =~ ^[1-9][0-9]{0,5}$ ]] && (( REPLY <= count )); then
+        id=$(jq -r --argjson i "$((REPLY-1))" '.nodes[$i].id' "$STATE") || return 1
+    fi
+    type=$(node_json "$STATE" "$id" | jq -r .type) || { err '节点不存在。'; return 1; }
+    msg $'1.详情 2.原始分享链接 3.二维码 4.sing-box 客户端出站\n5.启用/停用 6.修改端口 7.重置凭据 8.修改名称 9.删除'
+    ! proto_has "$type" retarget_select || msg "10.$(proto_call "$type" retarget_label)"
+    ask '操作' 1 || return 0
+    case $REPLY in
+      1) export_node "$id" details;; 2) export_node "$id" uri;; 3) export_node "$id" qr;; 4) export_node "$id" outbound;;
+      5) with_lock node_change "$id" toggle;;
+      6) ask '新端口' || return 0; with_lock node_change "$id" port "$REPLY";;
+      7) yesno '旧凭据会失效，确认重置' && with_lock node_change "$id" rotate;;
+      8) ask '新名称' || return 0; with_lock node_change "$id" name "$REPLY";;
+      9) yesno '确认删除此节点' && with_lock node_change "$id" delete;;
+      10)
+        proto_has "$type" retarget_select || { err '此协议的节点不支持切换握手目标。'; return 1; }
+        proto_call "$type" retarget_select || return 0
+        msg '切换后需更新客户端的原始链接 / SNI；端口和凭据保持不变，应用时可能短暂中断本脚本节点。'
+        if with_lock node_change "$id" retarget "$REPLY"; then
+            msg '当前节点原始链接：'; export_node "$id" uri
+        fi;;
+      *) err '无效选项。';;
+    esac
+}
+# Called under the same flock as node/configuration changes.
+update_all() {
+    owned_root || return 1
+    local before after backup
+    backup=$(mktemp "$SRM_ROOT/.update-before.XXXXXX") || return 1
+    cp -p "$SRM_ROOT/manager.sh" "$backup" || return 1
+    before=$(sha256 "$backup")
+    if ! update_latest; then rm -f "$backup"; return 1; fi
+    after=$(sha256 "$SRM_ROOT/manager.sh")
+    # Load the new script's validated core version without reacquiring our lock.
+    if bash -c 'source "$1" && update_core' bash "$SRM_ROOT/manager.sh"; then
+        rm -f "$backup"
+        msg '脚本和已验证核心已检查完成；协议实现随核心更新。'
+        return 0
+    fi
+    if [[ $before != "$after" ]]; then
+        mv -f "$backup" "$SRM_ROOT/manager.sh" || return 1
+        err '核心更新失败，管理脚本已恢复为更新前版本。'
+    else rm -f "$backup"; fi
+    return 1
+}
+# No automatic updates: replacing the core restarts the service and drops connections.
+update_menu() {
+    msg $'\n更新与回滚（不会自动更新；更新核心要重启服务，所有连接会断开几秒）\n1.一键更新脚本和已验证核心\n2.仅更新脚本（不重启服务）\n3.仅更新已验证核心\n4.回滚配置\n5.回滚脚本\n0.返回'
+    ask '请选择' || return 0
+    case $REPLY in
+      1) yesno '更新会重启服务，所有连接断开几秒，确认更新' && with_lock update_all;;
+      2) with_lock update_latest;;
+      3) yesno '更新会重启服务，所有连接断开几秒，确认更新' && with_lock update_core;;
+      4) yesno '恢复上一份配置（影响本脚本节点）' && with_lock rollback_config;;
+      5) with_lock rollback_script;;
+      *) err '无效选项。';;
+    esac
+}
+restart_nodes() {
+    owned_root || return 1
+    [[ -f $STATE ]] || { err '请先部署节点。'; return 1; }
+    if [[ $(jq '[.nodes[]|select(.enabled)]|length' "$STATE") == 0 ]]; then msg '没有启用的节点。'; return 0; fi
+    "$CORE" check -c "$DATA/current/config.json" && systemctl restart "$SERVICE" && service_healthy "$STATE"
+}
+menu_header() {
+    local status='未部署' counts='0 / 0' renew='未配置' routing='未启用' color='' reset=''
+    if use_color; then color=$'\033[1;36m'; reset=$'\033[0m'; fi
+    if [[ -f $SRM_ROOT/.srm-owned ]]; then
+        status='已安装，服务未运行'
+        systemctl is-active --quiet "$SERVICE" && status='运行中'
+    fi
+    if [[ -f $STATE ]] && command -v jq >/dev/null; then
+        counts=$(jq -r '"\([.nodes[]|select(.enabled)]|length) / \(.nodes|length)"' "$STATE")
+        routing=$(jq -r 'if (.policies|length)==0 then "未启用" else "\(.policies|length) 条平台规则" end' "$STATE")
+    fi
+    systemctl is-active --quiet srm-renew.timer && renew='每日自动检查'
+    printf '\n%s━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━%s\n' "$color" "$reset"
+    printf '  sing-box-reality-manager (srm)  v%s\n' "$SRM_VERSION"
+    printf '  %s\n' "$(proto_labels)"
+    printf '%s━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━%s\n' "$color" "$reset"
+    printf '  服务：%s    节点：%s（启用 / 总数）\n' "$status" "$counts"
+    printf '  分流：%s    证书续期：%s\n\n' "$routing" "$renew"
+}
+main_menu() {
+    require_linux || return 1
+    while :; do
+        menu_header
+        msg $'  1. 部署节点\n  2. 节点管理 · 原始链接 / 二维码\n  3. 流媒体分流 · 解锁 DNS / 代理出口\n  4. 运行状态 · 日志 / 重启 / 防火墙\n  5. 更新与回滚\n  6. BBR 与系统检测\n  7. 卸载\n  8. 证书管理 · 到期时间 / 自动续期\n\n  0. 退出\n'
+        ask '请选择' || return 0
+        case $REPLY in
+          1) with_lock node_add "$SRM_SELF";;
+          2) node_menu;;
+          3) with_lock routing_menu;;
+          4) status_menu;;
+          5) update_menu;;
+          6)
+            bbr_status
+            msg 'BBR 为主机级 TCP 设置。共存测试请保持现状。'
+            yesno '当前内核支持时自动开启 BBR + FQ（不更换内核、不重启）' && with_lock bbr_enable;;
+          7) with_lock uninstall; [[ -f $SRM_ROOT/.srm-owned ]] || return 0;;
+          8) certificate_menu;;
+          *) err '无效选项。';;
+        esac
+    done
+}
+status_menu() {
+    show_status
+    msg $'\n1.查看最近 50 行日志（分享前请检查敏感信息）\n2.重启本脚本节点（连接会断开几秒）\n3.重新同步防火墙端口规则\n0.返回'
+    ask '请选择' || return 0
+    case $REPLY in
+      1) journalctl -u "$SERVICE" -n 50 --no-pager;;
+      2) yesno '重启会断开所有连接几秒，确认重启' && with_lock restart_nodes;;
+      3) with_lock firewall_sync "$STATE";;
+      *) err '无效选项。';;
+    esac
+}
+rollback_script() {
+    owned_root || return 1
+    [[ -f $SRM_ROOT/manager.previous.sh ]] || { err '没有可回滚的脚本版本。'; return 1; }
+    bash -n "$SRM_ROOT/manager.previous.sh" && install -m 755 "$SRM_ROOT/manager.previous.sh" "$SRM_ROOT/manager.sh" && msg '脚本已回滚，请重新运行。'
+}
+usage() {
+    cat <<EOF
+srm $SRM_VERSION：sing-box 节点管理（$(proto_labels)）
+用法：srm [命令] [参数]；任何命令加 --help 显示本帮助。
+日常使用只需输入 srm 打开菜单，所有功能都能在菜单里选；下面的命令给进阶用户和自动化脚本。
+
+  srm                     打开管理菜单（常驻，做完回到菜单，输入 0 返回或退出）
+  srm menu                同上
+  srm install             只安装运行环境（核心、服务、srm / vasma 命令）
+  srm add [协议] [选项]   部署节点，协议：$PROTOCOLS
+                            --name 名称  --host 地址  --port 端口|random  --sni 域名
+                            --cert auto|webroot|import  --webroot 目录  --cert-file 文件  --key-file 文件
+                            --email 邮箱  --bbr enable|keep  --yes（不提问，未给的选项用默认值）
+  srm list                列出节点：ID、名称、协议、端口、状态
+  srm nodes               节点管理菜单：原始链接、二维码、启停、改端口、重置凭据
+  srm node ID 操作 [值]   toggle | delete | rotate | port 端口 | name 名称 | retarget 目标域名
+  srm export ID [格式]    uri（默认）| qr | outbound | details；只在本机生成，不联网
+  srm protocols           支持的协议和传输层
+  srm routing [show]      流媒体分流菜单；show 只查看
+  srm routing dns IP      设置解锁 DNS
+  srm routing egress 地址 [端口] [用户名]   设置 SOCKS5 代理出口；有用户名时从标准输入读密码
+  srm routing add 名称 dns|proxy 域名…     添加或替换平台规则（netflix.com 等域名后缀）
+  srm routing del 名称    删除平台规则
+  srm certs [status]      证书管理；status 只查看
+  srm renew               检查证书续期
+  srm firewall            同步本脚本的 UFW / firewalld 端口规则
+  srm status              运行状态
+  srm logs                最近 50 行日志
+  srm restart             重启本脚本节点
+  srm rollback            恢复上一份节点配置
+  srm rollback-script     恢复上一个版本的脚本
+  srm bbr [status|on]     查看或开启 BBR + FQ
+  srm update              更新脚本和已验证核心
+  srm update-script       仅更新脚本
+  srm update-core         仅更新已验证核心
+  srm uninstall [--yes]   卸载（默认需要确认）
+  srm render STATE        用 state 文件生成 sing-box 配置（调试用）
+  srm version             版本
+  srm help                本帮助
+EOF
+}
+list_protocols() {
+    local type
+    for type in $PROTOCOLS; do printf '%s\t%s\t%s\n' "$type" "$(proto_call "$type" label)" "$(proto_call "$type" transport)"; done
+}
+main() {
+    umask 077
+    local arg assume_yes=0
+    for arg in "$@"; do
+        case $arg in --help|-h) usage; return 0;; esac
+    done
+    case ${1:-menu} in
+      menu) main_menu;;
+      install) with_lock setup "$SRM_SELF";;
+      add) shift; with_lock node_add "$SRM_SELF" "$@";;
+      list) require_root && list_nodes;;
+      nodes) require_linux && node_menu;;
+      node)
+        [[ -n ${2:-} && -n ${3:-} ]] || { err '用法：srm node ID toggle|delete|rotate|port 端口|name 名称|retarget 目标域名'; return 1; }
+        with_lock node_change "$2" "$3" "${4:-}";;
+      export) require_root && export_node "${2:-}" "${3:-uri}";;
+      protocols) list_protocols;;
+      routing)
+        case ${2:-menu} in
+          menu) with_lock routing_menu;; show) require_root && routing_show;;
+          dns|egress|add|del) shift; with_lock routing_change "$@";;
+          *) err '用法：srm routing [show|dns|egress|add|del]'; return 1;;
+        esac;;
+      certs)
+        require_linux || return 1
+        case ${2:-menu} in
+          menu) certificate_menu;; status) certificate_status;;
+          *) err '用法：srm certs [status]'; return 1;;
+        esac;;
+      renew) with_lock renew_certificates;;
+      firewall) with_lock firewall_sync "$STATE";;
+      status) require_linux && show_status;;
+      logs) require_linux && journalctl -u "$SERVICE" -n 50 --no-pager;;
+      restart) with_lock restart_nodes;;
+      rollback) with_lock rollback_config;;
+      rollback-script) with_lock rollback_script;;
+      bbr)
+        case ${2:-status} in
+          status) require_linux && bbr_status;; on) with_lock bbr_enable;;
+          *) err '用法：srm bbr [status|on]'; return 1;;
+        esac;;
+      update) with_lock update_all;;
+      update-script) with_lock update_latest;;
+      update-core) with_lock update_core;;
+      uninstall)
+        case ${2:-} in -y|--yes) assume_yes=1;; '') ;; *) err '用法：srm uninstall [--yes]'; return 1;; esac
+        with_lock uninstall;;
+      render) [[ -n ${2:-} ]] || { err '用法：srm render STATE'; return 1; }; render_config "$2";;
+      version|--version) printf 'srm %s / tested core %s\n' "$SRM_VERSION" "$CORE_VERSION";;
+      help) usage;;
+      *) err "未知命令：$1。可用命令见 srm --help。"; return 1;;
+    esac
+}
+
+if [[ ${BASH_SOURCE[0]} == "$0" ]]; then main "$@"; fi

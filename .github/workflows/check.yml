@@ -1,0 +1,41 @@
+name: srm checks
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install validation tools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends jq openssl shellcheck
+      - name: Check syntax, lint and reproducible bundle
+        run: |
+          for file in build.sh srm.sh lib/*.sh tests/*.sh tests/support/*.sh install.sh; do bash -n "$file"; done
+          bash build.sh
+          git diff --exit-code -- dist/
+          # Modules share variables, so they are linted together as the bundle.
+          shellcheck -S warning -s bash dist/srm build.sh srm.sh
+      - name: Download checksum-pinned sing-box core
+        run: |
+          source ./srm.sh
+          core_download "$RUNNER_TEMP/sing-box"
+      - name: Unit tests and real proxy traffic through the core
+        env:
+          TEST_CORE: ${{ runner.temp }}/sing-box
+        run: |
+          for test in cli menu protocols local updates firewall certificates-menu management; do
+            echo "::group::tests/$test.sh"
+            bash "tests/$test.sh"
+            echo "::endgroup::"
+          done
+      - name: Verify real UFW in isolated network and mount namespaces
+        run: |
+          sudo apt-get install -y --no-install-recommends ufw
+          sudo env GITHUB_ACTIONS=true unshare --net --mount bash tests/firewall-live.sh
+      - name: Verify real systemd install, configuration transaction and uninstall
+        run: sudo env GITHUB_ACTIONS=true bash tests/install-live.sh
