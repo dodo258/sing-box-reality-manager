@@ -276,6 +276,8 @@ source lib/system.sh
 # BSD mv has no -T; the real atomic switch is covered by tests/install-live.sh.
 switch_generation() { rm -f "$DATA/current" && ln -s "$1" "$DATA/current"; }
 firewall_sync() { return 0; }
+# The unit lives in /etc/systemd/system; tests/install-live.sh writes the real one.
+service_unit_write() { return 0; }
 # The two-node configuration never becomes healthy.
 service_healthy() { [[ $(jq '[.nodes[]|select(.enabled)]|length' "$1") != 2 ]]; }
 # Units that were started stay known to systemd until disabled.

@@ -7,6 +7,8 @@ SERVICE=srm.service
 # Daily version check (timer + oneshot service); never downloads or restarts.
 CHECK_UNIT=srm-version-check
 STATE=$DATA/current/state.json
+# Held by every changing operation (with_lock).
+SRM_LOCK=/run/lock/srm.lock
 CORE=$SRM_ROOT/core/sing-box
 ACME=$SRM_ROOT/acme/acme.sh
 # Color only for an interactive terminal; NO_COLOR or redirected output disables it.
@@ -55,7 +57,7 @@ require_linux() {
 with_lock() (
     require_linux || exit 1
     command -v flock >/dev/null || { err '缺少 flock（util-linux）。'; exit 1; }
-    exec 9>/run/lock/srm.lock
+    exec 9>"$SRM_LOCK"
     flock -n 9 || { err '另一项操作尚未结束，请稍后重试。'; exit 1; }
     recover_pending || exit 1
     "$@"

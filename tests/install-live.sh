@@ -251,18 +251,18 @@ echo 'PASS no automatic update job is installed'
     echo 'PASS with real systemd the taken-over v3 unit cannot be started again (v3 renewal restarting it fails, srm keeps the port) until srm'"'"'s record is gone'
 )
 # Port hopping through the real transaction and systemd. A unit from before port
-# hopping (no hop-sync line) is rewritten when a node turns it on; the redirect rule
+# hopping (no firewall-restore line) is rewritten on the next change; the redirect rule
 # comes back when the service starts again (as after a reboot) and goes with the node.
 (
     source ./srm.sh
     # The rule of the node hy2-hop as its state says.
     hop_rule() { jq -r '.nodes[]|select(.name=="hy2-hop")|"\(.hop.start):\(.hop.end) \(.port)"' "$STATE" | { read -r range port
         iptables -t nat -S PREROUTING | grep -F -- "--dport $range -m comment --comment srm-hop -j REDIRECT --to-ports $port"; }; }
-    sed -i '/hop-sync/d' "/etc/systemd/system/$SERVICE"; systemctl daemon-reload
+    sed -i '/firewall-restore/d' "/etc/systemd/system/$SERVICE"; systemctl daemon-reload
     node_add "$PWD/dist/srm" hysteria2 --name hy2-hop --host 127.0.0.1 --hop auto --yes
     n=$(jq -c '.nodes[]|select(.name=="hy2-hop")' "$STATE"); id=$(jq -r .id <<< "$n"); port=$(jq -r .port <<< "$n")
     jq -e '.hop.start >= 20000 and .hop.end == .hop.start + 999' <<< "$n" >/dev/null || exit 1
-    [[ $(systemctl show -p ExecStartPre --value "$SERVICE") == *'argv[]=/opt/srm/manager.sh hop-sync'*'ignore_errors=yes'* ]] || { systemctl show -p ExecStartPre "$SERVICE"; exit 1; }
+    [[ $(systemctl show -p ExecStartPre --value "$SERVICE") == *'argv[]=/opt/srm/manager.sh firewall-restore'*'ignore_errors=yes'* ]] || { systemctl show -p ExecStartPre "$SERVICE"; exit 1; }
     systemd-analyze verify "/etc/systemd/system/$SERVICE"
     systemctl is-active --quiet "$SERVICE" && [[ -n $(ss -H -lun "sport = :$port") ]] || exit 1
     hop_rule || exit 1
@@ -285,7 +285,56 @@ echo 'PASS no automatic update job is installed'
     node_add "$PWD/dist/srm" hysteria2 --name hy2-hop --host 127.0.0.1 --hop auto --yes
     hop_rule || exit 1
 )
-echo 'PASS port hopping with real systemd: an old unit gets the hop-sync line, the redirect comes back when the service starts, and goes when hopping is off, the node stops or is deleted'
+echo 'PASS port hopping with real systemd: an old unit gets the firewall-restore line, the redirect comes back when the service starts, and goes when hopping is off, the node stops or is deleted'
+# iptables accept rules without netfilter-persistent: gone after a reboot while the
+# system's REJECT may come back. The service start puts them back, also from a unit
+# still calling the old name hop-sync; while another operation holds srm's lock it
+# leaves the port rules to that operation and the start is not held up.
+# The runner gets a catch-all UDP REJECT behind loopback and established traffic.
+(
+    source ./srm.sh
+    test_rules=('-i lo -j ACCEPT' '-m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT' '-p udp -j REJECT')
+    trap 'for r in "${test_rules[@]}"; do read -ra spec <<< "$r"; iptables -w 5 -D INPUT "${spec[@]}" 2>/dev/null || true; done' EXIT
+    for r in "${test_rules[@]}"; do read -ra spec <<< "$r"; iptables -w 5 -A INPUT "${spec[@]}"; done
+    port=$(jq -r '.nodes[]|select(.name=="hy2-hop")|.port' "$STATE")
+    allow="-A INPUT -p udp -m udp --dport $port -m comment --comment srm -j ACCEPT"
+    # The accept rule sits before the REJECT.
+    allowed() { iptables -S INPUT | grep -E -- '--comment srm -j ACCEPT|-j REJECT' | grep -Fxq -- "$allow" &&
+        [[ $(iptables -S INPUT | grep -nF -- "$allow" | cut -d: -f1) -lt $(iptables -S INPUT | grep -n -- '-p udp -j REJECT' | cut -d: -f1) ]]; }
+    # As after a reboot: every srm accept rule is gone.
+    drop_srm() { iptables -S INPUT | grep -- '--comment srm -j ACCEPT' | sed 's/^-A INPUT //' | while read -ra spec; do iptables -w 5 -D INPUT "${spec[@]}"; done
+        ! iptables -S INPUT | grep -q -- '--comment srm -j ACCEPT' || exit 1; }
+    hop_rule() { iptables -t nat -S PREROUTING | grep -q -- '--comment srm-hop'; }
+    firewall_sync "$STATE" > /dev/null
+    allowed || { iptables -S INPUT; exit 1; }
+    drop_srm
+    systemctl restart "$SERVICE"
+    allowed || { iptables -S INPUT; journalctl -u "$SERVICE" -n 30 --no-pager; exit 1; }
+    systemctl is-active --quiet "$SERVICE" || exit 1
+    # A unit written before (ExecStartPre … hop-sync) restores the same; the next change rewrites it.
+    sed -i 's/manager.sh firewall-restore$/manager.sh hop-sync/' "/etc/systemd/system/$SERVICE"; systemctl daemon-reload
+    [[ $(systemctl show -p ExecStartPre --value "$SERVICE") == *'argv[]=/opt/srm/manager.sh hop-sync'* ]] || exit 1
+    drop_srm
+    systemctl restart "$SERVICE"
+    allowed || { iptables -S INPUT; exit 1; }
+    id=$(jq -r '.nodes[]|select(.name=="hy2-hop")|.id' "$STATE")
+    node_change "$id" name hy2-hop
+    [[ $(systemctl show -p ExecStartPre --value "$SERVICE") == *'argv[]=/opt/srm/manager.sh firewall-restore'* ]] || { systemctl show -p ExecStartPre "$SERVICE"; exit 1; }
+    # Another operation holds the lock: the service still starts at once, the redirect
+    # comes back, the accept rule is left to that operation.
+    exec 9>"$SRM_LOCK"; flock -n 9
+    drop_srm
+    read -ra spec <<< "$(iptables -t nat -S PREROUTING | grep -- '--comment srm-hop' | sed 's/^-A PREROUTING //')"
+    iptables -t nat -D PREROUTING "${spec[@]}"
+    ! hop_rule || exit 1
+    timeout 20 systemctl restart "$SERVICE"
+    systemctl is-active --quiet "$SERVICE" && hop_rule || exit 1
+    ! iptables -S INPUT | grep -q -- '--comment srm -j ACCEPT' || exit 1
+    exec 9>&-
+    firewall_sync "$STATE" > /dev/null
+    allowed || exit 1
+)
+echo 'PASS iptables accept rules come back when the service starts (also from an old hop-sync unit, which the next change rewrites); with the lock held only the redirect does'
 # Uninstall with sing-box and a snell-server still running stops and removes both.
 systemctl is-active --quiet srm.service || exit 1
 cleanup
@@ -298,4 +347,5 @@ if systemctl list-units --all --plain --no-legend 'srm-snell@*' | grep -qw activ
 if compgen -G '/etc/systemd/system/multi-user.target.wants/srm*' > /dev/null; then echo 'FAIL unit still enabled'; exit 1; fi
 [[ ! -e /usr/local/sbin/srm && ! -L /usr/local/sbin/vasma ]] || exit 1
 if iptables-save -t nat | grep -q srm-hop; then echo 'FAIL port hopping rule left after uninstall'; exit 1; fi
+if iptables -S INPUT | grep -q -- '--comment srm -j'; then echo 'FAIL iptables accept rule left after uninstall'; exit 1; fi
 echo 'PASS uninstall stops sing-box and snell-server and removes manager, units (also the version check), both commands and the port hopping redirect'

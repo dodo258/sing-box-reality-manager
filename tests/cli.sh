@@ -39,6 +39,8 @@ echo 'PASS version and protocol list'
     [[ $(main node 1111111111111111 port 20000) == 'node_change 1111111111111111 port 20000' ]] || fail 'node dispatch'
     [[ $(main uninstall --yes) == uninstall ]] || fail 'uninstall dispatch'
     [[ $(main bbr on) == bbr_enable && $(main firewall) == "firewall_sync $STATE" ]] || fail 'subcommand dispatch'
+    firewall_restore() { echo firewall_restore; }
+    [[ $(main firewall-restore) == firewall_restore && $(main hop-sync) == firewall_restore ]] || fail 'firewall-restore dispatch (hop-sync in older units)'
     [[ $(main update --yes) == update_all && $(main update core --yes) == update_core && $(main update snell -y) == 'update_programs snell' ]] || fail 'update dispatch'
     [[ $(main update script) == update_latest && $(main update-check off) == 'update_check_set off' ]] || fail 'update script / update-check dispatch'
     if main update vless --yes > /dev/null 2>&1 || main update-check never > /dev/null 2>&1; then fail 'bad update target accepted'; fi

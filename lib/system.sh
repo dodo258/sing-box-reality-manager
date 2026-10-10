@@ -31,11 +31,10 @@ setup() {
     update_check_setup || { err '每日版本检查定时任务注册失败。'; return 1; }
     msg '运行环境就绪。'
 }
-# The sing-box unit; rewritten (and systemd reloaded) only when it differs, so
-# servers installed by an older version get new lines when they need them.
-service_unit_write() {
-    local unit
-    unit=$(cat <<UNIT
+# The sing-box unit; written (and systemd reloaded) only when it differs, so
+# servers installed by an older version get the new lines on their next change.
+service_unit() {
+    cat <<UNIT
 [Unit]
 Description=srm sing-box nodes
 After=network-online.target
@@ -43,9 +42,10 @@ Wants=network-online.target
 [Service]
 User=srm
 Group=srm
-# Port hopping redirects are runtime rules: put back before every start (also at
-# boot); "+" runs it as root, "-" never lets it block the service.
-ExecStartPre=-+$SRM_ROOT/manager.sh hop-sync
+# iptables accept rules (without netfilter-persistent) and port hopping redirects
+# are runtime rules: put back before every start (also at boot); "+" runs it as
+# root, "-" never lets it block the service.
+ExecStartPre=-+$SRM_ROOT/manager.sh firewall-restore
 ExecStart=$CORE run -c $DATA/current/config.json
 Restart=on-failure
 RestartSec=3
@@ -62,7 +62,10 @@ LimitNOFILE=65536
 [Install]
 WantedBy=multi-user.target
 UNIT
-)
+}
+service_unit_write() {
+    local unit
+    unit=$(service_unit)
     [[ $(cat "/etc/systemd/system/$SERVICE" 2>/dev/null) != "$unit" ]] || return 0
     printf '%s\n' "$unit" > "/etc/systemd/system/$SERVICE" && systemctl daemon-reload
 }
@@ -186,8 +189,8 @@ apply_state() (
         rm -rf "$gen"; err '核心校验失败，原节点未改动。'; exit 1
     fi
     install -m 600 "$candidate" "$gen/state.json" || exit 1
-    # Port hopping needs the unit's hop-sync line, missing on older installations.
-    if jq -e 'any(.nodes[]; .hop != null)' "$candidate" >/dev/null; then service_unit_write || exit 1; fi
+    # Older installations lack lines of the current unit (firewall-restore, CAP_NET_BIND_SERVICE).
+    service_unit_write || exit 1
     chmod 640 "$gen/config.json" && chgrp srm "$gen/config.json" || exit 1
     [[ ! -L $DATA/current ]] || old=$(readlink "$DATA/current")
     systemctl is-active --quiet "$SERVICE" && active=1

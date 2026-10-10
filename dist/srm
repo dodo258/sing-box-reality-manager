@@ -11,6 +11,8 @@ SERVICE=srm.service
 # Daily version check (timer + oneshot service); never downloads or restarts.
 CHECK_UNIT=srm-version-check
 STATE=$DATA/current/state.json
+# Held by every changing operation (with_lock).
+SRM_LOCK=/run/lock/srm.lock
 CORE=$SRM_ROOT/core/sing-box
 ACME=$SRM_ROOT/acme/acme.sh
 # Color only for an interactive terminal; NO_COLOR or redirected output disables it.
@@ -59,7 +61,7 @@ require_linux() {
 with_lock() (
     require_linux || exit 1
     command -v flock >/dev/null || { err '缺少 flock（util-linux）。'; exit 1; }
-    exec 9>/run/lock/srm.lock
+    exec 9>"$SRM_LOCK"
     flock -n 9 || { err '另一项操作尚未结束，请稍后重试。'; exit 1; }
     recover_pending || exit 1
     "$@"
@@ -1430,11 +1432,10 @@ setup() {
     update_check_setup || { err '每日版本检查定时任务注册失败。'; return 1; }
     msg '运行环境就绪。'
 }
-# The sing-box unit; rewritten (and systemd reloaded) only when it differs, so
-# servers installed by an older version get new lines when they need them.
-service_unit_write() {
-    local unit
-    unit=$(cat <<UNIT
+# The sing-box unit; written (and systemd reloaded) only when it differs, so
+# servers installed by an older version get the new lines on their next change.
+service_unit() {
+    cat <<UNIT
 [Unit]
 Description=srm sing-box nodes
 After=network-online.target
@@ -1442,9 +1443,10 @@ Wants=network-online.target
 [Service]
 User=srm
 Group=srm
-# Port hopping redirects are runtime rules: put back before every start (also at
-# boot); "+" runs it as root, "-" never lets it block the service.
-ExecStartPre=-+$SRM_ROOT/manager.sh hop-sync
+# iptables accept rules (without netfilter-persistent) and port hopping redirects
+# are runtime rules: put back before every start (also at boot); "+" runs it as
+# root, "-" never lets it block the service.
+ExecStartPre=-+$SRM_ROOT/manager.sh firewall-restore
 ExecStart=$CORE run -c $DATA/current/config.json
 Restart=on-failure
 RestartSec=3
@@ -1461,7 +1463,10 @@ LimitNOFILE=65536
 [Install]
 WantedBy=multi-user.target
 UNIT
-)
+}
+service_unit_write() {
+    local unit
+    unit=$(service_unit)
     [[ $(cat "/etc/systemd/system/$SERVICE" 2>/dev/null) != "$unit" ]] || return 0
     printf '%s\n' "$unit" > "/etc/systemd/system/$SERVICE" && systemctl daemon-reload
 }
@@ -1585,8 +1590,8 @@ apply_state() (
         rm -rf "$gen"; err '核心校验失败，原节点未改动。'; exit 1
     fi
     install -m 600 "$candidate" "$gen/state.json" || exit 1
-    # Port hopping needs the unit's hop-sync line, missing on older installations.
-    if jq -e 'any(.nodes[]; .hop != null)' "$candidate" >/dev/null; then service_unit_write || exit 1; fi
+    # Older installations lack lines of the current unit (firewall-restore, CAP_NET_BIND_SERVICE).
+    service_unit_write || exit 1
     chmod 640 "$gen/config.json" && chgrp srm "$gen/config.json" || exit 1
     [[ ! -L $DATA/current ]] || old=$(readlink "$DATA/current")
     systemctl is-active --quiet "$SERVICE" && active=1
@@ -1760,7 +1765,7 @@ firewall_ipt_save() {
     if command -v netfilter-persistent >/dev/null; then
         netfilter-persistent save >/dev/null 2>&1 || err 'iptables 规则已生效，但 netfilter-persistent 保存失败，服务器重启后可能失效。'
     else
-        msg 'iptables 规则已生效，但系统没有 netfilter-persistent，服务器重启后会失效；安装 iptables-persistent 时选「是」保存当前规则即可。'
+        msg 'iptables 规则已生效；系统没有 netfilter-persistent，服务器重启后由 srm 服务启动时补回。'
     fi
 }
 firewall_detect() {
@@ -1954,6 +1959,25 @@ firewall_sync() {
     rm -f "$ports" "$desired"
     return "$failures"
 }
+# Run by srm.service before every start (also at boot): iptables accept rules on
+# systems without netfilter-persistent and port hopping redirects are gone after a
+# reboot. Never waits for srm's lock and never recovers an interrupted change (that
+# restarts this very service): when another operation holds the lock (it may be the
+# one restarting the service) it syncs the port rules itself when it finishes, so
+# only the redirects (their own lock) are put back here.
+firewall_restore() {
+    local rc=0
+    if [[ -d ${SRM_LOCK%/*} ]] && command -v flock >/dev/null; then
+        exec 9>"$SRM_LOCK" || return 1
+        if flock -n 9; then
+            firewall_sync "$STATE" || rc=$?
+            exec 9>&-
+            return "$rc"
+        fi
+        exec 9>&-
+    fi
+    hop_sync "$STATE"
+}
 firewall_renew() (
     local domain=$1 port
     port=$(cert_challenge_port "$domain") || exit 1
@@ -1970,7 +1994,7 @@ firewall_renew() (
 # e.g. for containers). Rules carry the comment srm-hop: iptables / ip6tables nat
 # PREROUTING when iptables exists (the same backend as the rest of the system),
 # otherwise one nftables table inet srm_hop replaced atomically. Neither survives a
-# reboot by itself: srm.service runs `srm hop-sync` before every start
+# reboot by itself: srm.service runs `srm firewall-restore` before every start
 # (the Port Hopping page of the official documentation, linked in lib/protocols.sh).
 HOP_COMMENT=srm-hop
 HOP_TABLE=srm_hop
@@ -2071,8 +2095,8 @@ hop_backend() {
 # Redirect rules for STATE's enabled nodes; without STATE every srm-hop rule goes.
 # Systems that never had port hopping are not touched (no record). IPv6 is best
 # effort: a failure there is reported and does not fail the sync.
-# The service start (hop-sync) runs without srm's lock, maybe inside a locked
-# transaction restarting the service, so the rules have a lock of their own, taken
+# The service start (firewall-restore) runs it without srm's lock while a locked
+# transaction restarts the service, so the rules have a lock of their own, taken
 # only around the change (no subshell: FIREWALL_IPT_CHANGED must reach the caller).
 HOP_LOCK=/run/lock/srm-hop.lock
 hop_sync() {
@@ -4337,7 +4361,9 @@ srm $SRM_VERSION：sing-box 节点管理（$(proto_labels)）
   srm certs [status]      证书管理；status 只查看
   srm renew               检查证书续期
   srm firewall            同步本脚本的 UFW / firewalld / iptables 端口规则和端口跳跃转发
-  srm hop-sync            只按当前节点补上端口跳跃转发规则（服务每次启动前自动运行，不占 srm 主锁）
+  srm firewall-restore    按当前节点补回防火墙端口规则和端口跳跃转发（服务每次启动前自动运行；
+                          别的操作正在进行时只补端口跳跃转发，端口规则由那个操作同步）
+  srm hop-sync            旧版服务单元用的名字，同 firewall-restore
   srm status              运行状态
   srm logs                最近 50 行日志
   srm restart             重启本脚本节点
@@ -4413,8 +4439,8 @@ main() {
       renew) with_lock renew_certificates;;
       firewall) with_lock firewall_sync "$STATE";;
       # Run by srm.service before every start (also at boot), possibly while a locked
-      # transaction restarts the service; it only reads the current generation.
-      hop-sync) require_root && hop_sync "$STATE";;
+      # transaction restarts the service; hop-sync is its name in units written before.
+      firewall-restore|hop-sync) require_root && firewall_restore;;
       status) require_linux && show_status;;
       logs) require_linux && show_logs;;
       restart) with_lock restart_nodes;;
