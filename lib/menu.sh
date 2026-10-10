@@ -283,7 +283,7 @@ deploy_summary() {
     msg ''
     msg "━━━━━━━━ 部署完成：$(jq -r .name <<< "$node")（$(proto_call "$(jq -r .type <<< "$node")" label)）━━━━━━━━"
     msg "服务器：$(jq -r .host <<< "$node")    端口：$port/$transport    节点 ID：$(jq -r .id <<< "$node")"
-    msg "云服务器安全组：连不上时，到服务商控制台的安全组（云防火墙）放行入站 $transport $port；本机的 UFW / firewalld 已自动放行。"
+    msg "云服务器安全组：连不上时，到服务商控制台的安全组（云防火墙）放行入站 $transport $port；本机的 UFW / firewalld / iptables 已自动放行。"
     client_snippets qr <<< "$node"
     msg '以后在菜单里选「2. 节点管理」可以再次查看链接、二维码和这些配置。'
 }

@@ -14,7 +14,9 @@ cp -a /etc/ufw "$work/etc-ufw"
 cp /etc/default/ufw "$work/ufw-default"
 mount --bind "$work/etc-ufw" /etc/ufw
 mount --bind "$work/ufw-default" /etc/default/ufw
+server=''
 cleanup() {
+    [[ -z $server ]] || kill "$server" 2>/dev/null || true
     ufw --force disable >/dev/null || true
     umount /etc/ufw
     umount /etc/default/ufw
@@ -81,3 +83,42 @@ ufw --force disable >/dev/null
 firewall_sync "$STATE"
 [[ $(firewall_detect) == none ]] || exit 1
 echo 'PASS disabled UFW is never enabled by manager'
+# Oracle-like image: no UFW/firewalld, INPUT ends in REJECT, netfilter-persistent
+# saves the rules (simulated: the real package would remove ufw from the runner).
+ip link set lo up
+iptables -S INPUT | grep -q '^-A' && { echo 'FAIL INPUT not empty after UFW disable'; exit 1; }
+iptables -A INPUT -m state --state RELATED,ESTABLISHED -j ACCEPT
+iptables -A INPUT -p tcp -m tcp --dport 22222 -j ACCEPT
+iptables -A INPUT -j REJECT --reject-with icmp-host-prohibited
+ip6tables -A INPUT -m state --state RELATED,ESTABLISHED -j ACCEPT
+ip6tables -A INPUT -j REJECT
+iptables -S > "$work/ipt-original.v4"
+ip6tables -S > "$work/ipt-original.v6"
+mkdir -p "$work/bin"
+printf '#!/bin/sh\n[ "$1" = save ] && iptables-save > %q/saved.v4 && ip6tables-save > %q/saved.v6\n' "$work" "$work" > "$work/bin/netfilter-persistent"
+chmod 755 "$work/bin/netfilter-persistent"
+PATH=$work/bin:$PATH
+python3 -m http.server 24010 --bind 127.0.0.1 --directory "$work" >/dev/null 2>&1 &
+server=$!
+for _ in $(seq 50); do [[ -z $(ss -Hltn 'sport = :24010') ]] || break; sleep 0.1; done
+if curl -s --max-time 3 -o /dev/null http://127.0.0.1:24010/; then echo 'FAIL REJECT did not block the node port'; exit 1; fi
+[[ $(firewall_detect) == iptables ]] || exit 1
+printf '{"nodes":[{"port":24010,"type":"anytls","enabled":true},{"port":24011,"type":"hysteria2","enabled":true}]}\n' > "$STATE"
+firewall_sync "$STATE"
+curl -s --max-time 3 -o /dev/null http://127.0.0.1:24010/
+iptables -S INPUT | tail -n 1 | grep -q -- '-j REJECT'
+iptables -S INPUT | grep -q -- '--dport 24010 -m comment --comment srm -j ACCEPT'
+ip6tables -S INPUT | grep -q -- '--dport 24011 -m comment --comment srm -j ACCEPT'
+grep -q -- '--comment srm' "$work/saved.v4" && grep -q -- '--comment srm' "$work/saved.v6"
+echo 'PASS real iptables: the node port opens before the REJECT, rules commented srm are saved for IPv4 and IPv6'
+jq 'del(.nodes[0])' "$STATE" > "$work/new-state"
+firewall_sync "$work/new-state"
+if curl -s --max-time 3 -o /dev/null http://127.0.0.1:24010/; then echo 'FAIL deleted node port still open'; exit 1; fi
+! grep -q -- '--dport 24010 ' "$work/saved.v4" || exit 1
+ip6tables -S INPUT | grep -q -- '--dport 24011 -m comment --comment srm -j ACCEPT'
+echo 'PASS real iptables: deleting a node closes only its port'
+firewall_clear
+iptables -S | cmp - "$work/ipt-original.v4"
+ip6tables -S | cmp - "$work/ipt-original.v6"
+! grep -q -- '--comment srm' "$work/saved.v4" "$work/saved.v6" || exit 1
+echo 'PASS real iptables: uninstall restores the original rules exactly'
