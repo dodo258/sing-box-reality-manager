@@ -6,7 +6,7 @@
 
 从上往下做。正在做的条目后面标「（进行中：分支名 时间）」。
 
-- [ ] firewalld 停着时卸载 srm 会失败，报错没说要先启动 firewalld —— 来源：2026-10-11 PR #19 审查（原有问题）。`firewall_clear` 对 firewalld 记录调 `firewall-cmd`，firewalld 没运行时返回 252，卸载停在「端口规则清理失败，保留数据以便重试卸载」。要做：firewalld 没运行时提示「先 `systemctl start firewalld` 再卸载」，或用 `firewall-offline-cmd` 清永久规则、丢掉运行时记录。验收：测试覆盖 firewalld 停着时卸载的提示或清理结果；CI 全绿。
+- [ ] firewalld 停着时卸载 srm 会失败，报错没说要先启动 firewalld —— 来源：2026-10-11 PR #19 审查（原有问题）。`firewall_clear` 对 firewalld 记录调 `firewall-cmd`，firewalld 没运行时返回 252，卸载停在「端口规则清理失败，保留数据以便重试卸载」。要做：firewalld 没运行时提示「先 `systemctl start firewalld` 再卸载」，或用 `firewall-offline-cmd` 清永久规则、丢掉运行时记录。验收：测试覆盖 firewalld 停着时卸载的提示或清理结果；CI 全绿。（进行中：agent/1011-firewalld-stopped 2026-10-11 03:08）
 
 ## 等主人拍板
 
