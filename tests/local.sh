@@ -45,8 +45,8 @@ render_config "$work/routing.json" > "$work/routing-config.json"
 "$CORE" check -c "$work/routing-config.json"
 jq -e '.route.final=="direct" and .dns.final=="local" and ([.route.rules[]|select(.outbound=="media-proxy")]|length==1)' "$work/routing-config.json" >/dev/null
 ok 'DNS/proxy policies with unchanged default direct route'
-# A server without an IPv6 default route resolves domains to IPv4 only; the core takes the object form.
-ip() { :; }
+# A server without an IPv6 route resolves domains to IPv4 only; the core takes the object form.
+ip() { return 2; }
 render_config "$work/routing.json" > "$work/ipv4-config.json"
 unset -f ip
 "$CORE" check -c "$work/ipv4-config.json"

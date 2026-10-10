@@ -82,12 +82,13 @@ validate_state() {
     while IFS= read -r h; do valid_host "$h" || { err "地址不合法：$h"; return 1; }; done < <(jq -r '.nodes[].host, (.egress.server // empty)' "$1")
     while IFS= read -r h; do valid_domain "$h" || { err "域名不合法：$h"; return 1; }; done < <(jq -r '.nodes[].sni // empty, .policies[].domains[]' "$1")
 }
-# Without an IPv6 default route, AAAA answers only end in "network unreachable", so
-# domains are then resolved to IPv4 only (mack-a addSingBoxOutbound does the same).
-# Read locally at every render; without the ip command nothing changes.
+# Without an IPv6 route to the internet, AAAA answers only end in "network unreachable",
+# so domains are then resolved to IPv4 only (mack-a addSingBoxOutbound does the same).
+# Read locally at every render (route lookup, no packet sent; policy routing such as
+# WARP / wg-quick counts); without the ip command nothing changes.
 server_has_ipv6() {
     command -v ip >/dev/null || return 0
-    [[ -n $(ip -6 route show default 2>/dev/null) ]]
+    ip -6 route get 2606:4700:4700::1111 >/dev/null 2>&1
 }
 render_config() {
     validate_state "$1" || return 1
