@@ -295,3 +295,15 @@
   - 停用时连不用的端口也全保留：重新启用到下一次同步之间，删掉的节点端口仍开着。
 - 已知局限：永久从 UFW 换到 firewalld（UFW 还装着）或卸掉 ufw 后，旧记录一直留着（停用的 UFW 规则文件里也有），卸载 srm 时才清；提示只在没有别的活动防火墙时显示。「没有 ufw 命令时全保留」这一支没有单独测试（CI 机器装着 ufw，非 root 调用会报错，不好模拟）。
 - 拍板人：Claude
+
+## 2026-10-11 firewalld 停着时卸载 srm：用 firewall-offline-cmd 清永久规则
+- 决定：
+  - 卸载（`firewall_clear`）遇到 firewalld 记录而 `firewall-cmd --state` 返回 252（没有运行）时，不再失败：运行时记录直接丢掉（firewalld 停止时运行时规则已经没了，再启动时只从永久配置加载），永久规则用 `firewall-offline-cmd --zone=… --query-port / --remove-port` 在它的配置文件里删掉，原来就有的端口不动。Debian / Ubuntu 的 firewalld 包自带 `firewall-offline-cmd`。
+  - 同一端口的永久规则没删成功时，它的运行时记录也保留（永久记录排在前面先处理），否则 firewalld 一启动又从永久配置加回这条规则，srm 却已经没有记录可删。
+  - 没有 `firewall-offline-cmd`（非标准安装）时一条记录都不丢，报错写「先启动 firewalld（systemctl start firewalld）再重试」，卸载仍停在「端口规则清理失败，保留数据以便重试卸载」。
+  - 连 `firewall-cmd` 都没有（firewalld 已卸掉）时直接丢掉记录，和 iptables 协议族不可用时一样。
+- 备选/被否决的方案：
+  - 只提示先启动 firewalld（待办给的另一种做法）：新手要敲命令，和「只在菜单里选数字」的原则不符；离线工具在标准安装里一定有。
+  - 卸载时临时启动 firewalld 再清：会改变用户特意停掉的防火墙状态，启动瞬间还可能挡住别的服务。
+- 已知局限：日常同步（改节点）时 firewalld 停着照旧保留记录、不离线修改（见上一条决定）。firewalld 若是卡死而不是停止（推断：firewall-cmd 连不上它时可能同样返回 252），离线修改要等它重载才生效，运行时规则留到那时。
+- 拍板人：Claude
