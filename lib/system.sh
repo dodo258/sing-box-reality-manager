@@ -257,7 +257,10 @@ uninstall() {
     owned_root || return 1
     msg "删除本脚本服务、续期任务、$SRM_ROOT、$DATA 和快捷命令；节点凭据与本脚本证书会删除。系统依赖、其他服务和防火墙保留。"
     [[ ${assume_yes:-0} == 1 ]] || yesno '已导出需要的节点资料，确认卸载' || return 0
-    systemctl disable --now "$SERVICE" srm-renew.timer 2>/dev/null || true
+    # One unit per call: systemctl stops nothing when any unit in the list is missing
+    # (srm-renew.timer exists only after a certificate was issued).
+    systemctl disable --now "$SERVICE" 2>/dev/null || true
+    systemctl disable --now srm-renew.timer 2>/dev/null || true
     sidecars_sync || true
     if systemctl is-active --quiet "$SERVICE" || systemctl is-active --quiet srm-renew.service; then err '服务仍在运行，停止卸载。'; return 1; fi
     local unit
