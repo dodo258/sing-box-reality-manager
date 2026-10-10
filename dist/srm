@@ -1964,19 +1964,20 @@ firewall_sync() {
 # reboot. Never waits for srm's lock and never recovers an interrupted change (that
 # restarts this very service): when another operation holds the lock (it may be the
 # one restarting the service) it syncs the port rules itself when it finishes, so
-# only the redirects (their own lock) are put back here.
+# only the redirects (their own lock) are put back here, as also when the port rules
+# fail. Only errors reach the journal.
 firewall_restore() {
     local rc=0
     if [[ -d ${SRM_LOCK%/*} ]] && command -v flock >/dev/null; then
         exec 9>"$SRM_LOCK" || return 1
         if flock -n 9; then
-            firewall_sync "$STATE" || rc=$?
+            firewall_sync "$STATE" > /dev/null || { rc=$?; hop_sync "$STATE" > /dev/null || true; }
             exec 9>&-
             return "$rc"
         fi
         exec 9>&-
     fi
-    hop_sync "$STATE"
+    hop_sync "$STATE" > /dev/null
 }
 firewall_renew() (
     local domain=$1 port

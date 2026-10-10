@@ -273,7 +273,7 @@
 
 ## 2026-10-11 iptables 规则开机补回
 - 决定：
-  - srm.service 的 `ExecStartPre=-+/opt/srm/manager.sh hop-sync` 换成 `firewall-restore`（root 运行、失败不挡服务启动）。它不等待 srm 主锁：主锁空闲时按当前那一代的节点数据跑一遍完整的 `firewall_sync`（UFW / firewalld / iptables 端口规则和端口跳跃转发，失效的临时端口也一并撤掉）；主锁被占时（多半就是那个操作在重启服务，比如应用配置、恢复中断、更新核心）只补端口跳跃转发，端口规则留给持锁的操作在结尾同步——这样既不会死锁，也不会撤掉临时下载链接、证书验证正在用的临时端口。它不做 `recover_pending`（那会在服务自己的启动步骤里重启这个服务）。
+  - srm.service 的 `ExecStartPre=-+/opt/srm/manager.sh hop-sync` 换成 `firewall-restore`（root 运行、失败不挡服务启动）。它不等待 srm 主锁：主锁空闲时按当前那一代的节点数据跑一遍完整的 `firewall_sync`（UFW / firewalld / iptables 端口规则和端口跳跃转发，失效的临时端口也一并撤掉）；主锁被占时（多半就是那个操作在重启服务，比如应用配置、恢复中断、更新核心）只补端口跳跃转发，端口规则留给持锁的操作在结尾同步——这样既不会死锁，也不会撤掉临时下载链接、证书验证正在用的临时端口。端口规则同步失败（防火墙读不出来等）时照样补端口跳跃转发。它不做 `recover_pending`（那会在服务自己的启动步骤里重启这个服务），输出只留报错（每次启动都打的提示不进日志）。
   - `hop-sync` 保留为同一功能的旧名，2392455 写出的单元重启后照样补回全部规则。
   - 应用配置时总是检查单元（`service_unit_write`，内容不同才重写并 daemon-reload），不再只在有端口跳跃时检查：比 2392455 更早的单元在下一次改节点时补上这一行，顺带补上 CAP_NET_BIND_SERVICE。
   - 没装 netfilter-persistent 时的提示改成「服务器重启后由 srm 服务启动时补回」，不再建议装 iptables-persistent。
@@ -281,5 +281,5 @@
   - 单独的 oneshot 单元：多一个单元要注册、卸载和测试，且仍要和主服务排顺序；现有 ExecStartPre 已经在每次启动时运行。
   - 不管锁直接 `firewall_sync`：持锁的临时下载链接或证书验证期间 sing-box 崩溃重启，会把临时端口撤掉；两个同步并发还可能重复插规则。
   - 只补 iptables、不碰 UFW / firewalld：那两个自己会持久化，但完整同步也只是幂等地确认一遍，少一套只补不删的逻辑。
-- 已知局限：系统自己的 REJECT 如果在 srm.service 之后才恢复（比如晚于 network-online.target 的自定义脚本），启动时检测不到拦截规则，要等下次改节点或在「4. 运行状态」里重新同步；netfilter-persistent、UFW、firewalld 都在网络就绪之前加载，不受影响。
+- 已知局限：系统自己的 REJECT 如果在 srm.service 之后才恢复（比如晚于 network-online.target 的自定义脚本），启动时检测不到拦截规则，要等下次改节点或在「4. 运行状态」里重新同步；netfilter-persistent、UFW、firewalld 都在网络就绪之前加载，不受影响。开机那一刻主锁若正被证书续期定时任务（`Persistent=true`，关机期间错过时开机补跑）占着，而那次续期又不需要开临时端口，端口规则也要等下次改节点或手动同步（审查推断，概率很低）。
 - 拍板人：Claude

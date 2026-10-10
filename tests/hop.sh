@@ -196,6 +196,18 @@ firewall_clear || fail 'uninstall'
 cmp -s "$work/nat-ipv4" "$work/nat-original" || fail 'uninstall changed other nat rules'
 echo 'PASS changing the range replaces the rule; deleting the node and uninstalling remove it'
 
+# The service start (firewall-restore) puts the redirects back even when the port
+# rules fail, e.g. when the firewall cannot be read at boot.
+(
+    SRM_LOCK=$work/srm.lock
+    flock() { return 0; }
+    firewall_detect() { return 1; }
+    firewall_restore > /dev/null 2>&1 || true
+    [[ $(hop_rules ipv4) == 2 && $(hop_rules ipv6) == 2 ]] || fail 'redirects not restored when the port rules failed'
+) || exit 1
+firewall_clear
+echo 'PASS the service start restores the redirects even when the port rules fail'
+
 : > "$work/nat-calls"
 hop_sync "$work/s2"; firewall_clear
 [[ ! -s $work/nat-calls && ! -e $work/nft-calls ]] || fail 'a system without port hopping was touched'
