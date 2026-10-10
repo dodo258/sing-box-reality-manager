@@ -109,18 +109,29 @@ done
 echo 'PASS a wrong ShadowTLS password, PSK or v6 mode is refused'
 
 if [[ -n ${TEST_MIHOMO:-} ]]; then
+    # mihomo opens its ports before it starts routing and silently closes connections
+    # that arrive in between; a second inbound sent DIRECT to the page shows when it routes.
+    wait_mihomo_routing() {
+        local i
+        for ((i=0; i<50; i++)); do
+            [[ $(curl --noproxy '' --silent --max-time 2 --socks5-hostname 127.0.0.1:18396 http://127.0.0.1:18399/) == srm-snell-ok ]] && return 0
+            sleep 0.2
+        done
+        return 1
+    }
     node=$(node_json "$work/state.json" 5000000000000003)
     proxy=$(printf '%s' "$node" | clash_proxy)
     [[ -n $proxy ]] || fail 'no Clash Meta snippet for v5'
     mkdir -p "$work/mihomo"
-    printf 'mixed-port: 18397\nbind-address: 127.0.0.1\nmode: rule\nlog-level: warning\nipv6: false\nproxies:\n  %s\nrules:\n  - MATCH,snell-v5\n' "$proxy" > "$work/mihomo/config.yaml"
+    printf 'mixed-port: 18397\nbind-address: 127.0.0.1\nmode: rule\nlog-level: warning\nipv6: false\nlisteners:\n  - {name: ready, type: mixed, listen: 127.0.0.1, port: 18396, proxy: DIRECT}\nproxies:\n  %s\nrules:\n  - MATCH,snell-v5\n' "$proxy" > "$work/mihomo/config.yaml"
     "$TEST_MIHOMO" -t -d "$work/mihomo" > "$work/mihomo-check.log" 2>&1 || { cat "$work/mihomo/config.yaml" "$work/mihomo-check.log"; fail 'mihomo rejected the Snell v5 snippet'; }
     # mihomo trusts the stand-in handshake site through the system certificate path.
     SSL_CERT_FILE=$work/cert.pem "$TEST_MIHOMO" -d "$work/mihomo" > "$work/mihomo.log" 2>&1 & mihomo_pid=$!; pids+=("$mihomo_pid")
     wait_port 18397 || { cat "$work/mihomo.log"; fail 'mihomo did not start'; }
-    page=$(fetch_via 127.0.0.1:18397) || page=''
+    wait_mihomo_routing || { cat "$work/mihomo.log"; fail 'mihomo never started routing'; }
+    page=$(fetch_via 127.0.0.1:18397) || true
     kill "$mihomo_pid"; wait "$mihomo_pid" 2>/dev/null || true
-    [[ $page == srm-snell-ok ]] || { cat "$work/mihomo/config.yaml" "$work/mihomo.log" "$work/server.log" "$work/snell-5000000000000003.log"; fail 'mihomo through snell-v5'; }
+    [[ $page == srm-snell-ok ]] || { cat "$work/mihomo/config.yaml" "$work/mihomo.log" "$work/server.log" "$work/snell-5000000000000003.log"; printf '%s\n' "$page"; fail 'mihomo through snell-v5'; }
     echo 'PASS mihomo (Clash Meta snippet: snell v5 + shadow-tls v3) fetches the page through snell-v5'
 else
     skip_or_fail 'mihomo client check needs TEST_MIHOMO'
