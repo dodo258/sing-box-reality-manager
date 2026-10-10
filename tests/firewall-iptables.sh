@@ -87,7 +87,7 @@ if grep -q -- '--dport 24000 ' "$work/ipt-ipv4"; then fail 'deleted node rule re
 grep -v -- '--comment srm' "$work/ipt-ipv4" | cmp -s - "$work/original-v4" || fail 'existing rules changed'
 echo 'PASS deleting a node removes only its srm rule and saves'
 
-firewall_clear
+firewall_clear > /dev/null
 cmp -s "$work/ipt-ipv4" "$work/original-v4" && cmp -s "$work/saved/rules.v4" "$work/original-v4" || fail 'uninstall did not restore the original rules'
 [[ -z $(find "$DATA/firewall" -type f) ]] || fail 'records left after uninstall'
 grep -Fxq -- '-A INPUT -p tcp -m tcp --dport 23999 -j ACCEPT' "$work/ipt-ipv4" || fail 'existing allow on the same port removed'
@@ -99,7 +99,7 @@ cp "$work/ipt-ipv6" "$work/original-v6"
 firewall_sync "$work/state" > /dev/null
 [[ $(tail -n 1 "$work/ipt-ipv6") == '-A INPUT -p udp -m udp --dport 24001 -m comment --comment srm -j ACCEPT' && $(srm_rules ipv6) == 5 ]] || fail 'IPv6 DROP policy rules not appended'
 [[ $(srm_rules ipv4) == 4 ]] || fail 'IPv4 rules missing'
-firewall_clear
+firewall_clear > /dev/null
 cmp -s "$work/ipt-ipv6" "$work/original-v6" && cmp -s "$work/ipt-ipv4" "$work/original-v4" || fail 'cleanup changed foreign rules'
 echo 'PASS a DROP policy gets appended rules per family; cleanup keeps rules it did not add'
 
@@ -131,3 +131,25 @@ ip6tables() { printf 'ip6tables: Address family not supported by protocol\n' >&2
 firewall_sync "$work/state-deleted" > /dev/null || fail 'sync failed after IPv6 went away'
 [[ ! -e $DATA/firewall/iptables-ipv6-both-24001-udp && -f $DATA/firewall/iptables-ipv4-both-24001-udp ]] || fail 'IPv6 records kept'
 echo 'PASS records of a family that is no longer available are dropped instead of failing every change'
+
+ip6tables() { ipt_mock ipv6 "$@"; }
+printf -- '-P INPUT ACCEPT\n-A INPUT -j REJECT\n' > "$work/ipt-ipv6"
+firewall_sync "$work/state" > /dev/null
+ip6tables() { [[ $3 != -S ]] || return 4; ipt_mock ipv6 "$@"; }
+if firewall_clear > /dev/null 2>&1; then fail 'a lock timeout dropped records'; fi
+[[ -f $DATA/firewall/iptables-ipv6-both-24001-udp ]] || fail 'IPv6 record dropped on a temporary failure'
+ip6tables() { ipt_mock ipv6 "$@"; }
+firewall_clear > /dev/null
+[[ -z $(find "$DATA/firewall" -type f) && $(srm_rules ipv4) == 0 && $(srm_rules ipv6) == 0 ]] || fail 'retry did not clean'
+echo 'PASS a temporary iptables failure (exit 4) keeps the records so a retry cleans the rules'
+
+# Missing comment module: -C fails with 2; nothing is recorded, so later changes and uninstall still work.
+iptables() { [[ $3 != -C ]] || { printf "iptables: Couldn't load match 'comment'\n" >&2; return 2; }; ipt_mock ipv4 "$@"; }
+printf -- '-P INPUT ACCEPT\n-A INPUT -j REJECT\n' > "$work/ipt-ipv4"
+printf -- '-P INPUT ACCEPT\n' > "$work/ipt-ipv6"
+if firewall_sync "$work/state" > /dev/null 2> "$work/err"; then fail 'sync without the comment module succeeded'; fi
+grep -q 'comment 模块' "$work/err" || fail 'no hint about the comment module'
+[[ -z $(find "$DATA/firewall" -type f) ]] || fail 'a failed query left records'
+printf '{"nodes":[]}\n' > "$work/empty"
+firewall_sync "$work/empty" > /dev/null && firewall_clear || fail 'cleanup blocked after a failed query'
+echo 'PASS a failed query (no comment module) records nothing, so later syncs and uninstall still succeed'
