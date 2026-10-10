@@ -343,10 +343,11 @@ hop_backend() {
 # only around the change (no subshell: FIREWALL_IPT_CHANGED must reach the caller).
 HOP_LOCK=/run/lock/srm-hop.lock
 hop_sync() {
-    local rc=0
+    local rc=0 wanted=0
     # Nothing to add and nothing recorded: done without the lock.
-    if [[ ! -f $DATA/port-hopping ]] && ! { [[ -n ${1:-} && -f $1 ]] && jq -e 'any(.nodes[]; .enabled and .hop != null)' "$1" >/dev/null; }; then
-        return 0
+    if [[ ! -f $DATA/port-hopping ]]; then
+        if [[ -n ${1:-} && -f $1 ]]; then wanted=$(jq '[.nodes[]|select(.enabled and .hop != null)]|length' "$1") || return 1; fi
+        [[ $wanted != 0 ]] || return 0
     fi
     if [[ -d ${HOP_LOCK%/*} ]] && command -v flock >/dev/null; then
         exec 8>"$HOP_LOCK" || return 1

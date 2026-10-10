@@ -2076,10 +2076,11 @@ hop_backend() {
 # only around the change (no subshell: FIREWALL_IPT_CHANGED must reach the caller).
 HOP_LOCK=/run/lock/srm-hop.lock
 hop_sync() {
-    local rc=0
+    local rc=0 wanted=0
     # Nothing to add and nothing recorded: done without the lock.
-    if [[ ! -f $DATA/port-hopping ]] && ! { [[ -n ${1:-} && -f $1 ]] && jq -e 'any(.nodes[]; .enabled and .hop != null)' "$1" >/dev/null; }; then
-        return 0
+    if [[ ! -f $DATA/port-hopping ]]; then
+        if [[ -n ${1:-} && -f $1 ]]; then wanted=$(jq '[.nodes[]|select(.enabled and .hop != null)]|length' "$1") || return 1; fi
+        [[ $wanted != 0 ]] || return 0
     fi
     if [[ -d ${HOP_LOCK%/*} ]] && command -v flock >/dev/null; then
         exec 8>"$HOP_LOCK" || return 1
@@ -2907,7 +2908,7 @@ hop_menu() {
       2) [[ -n $range ]] || { err '没有可选的默认范围，请选 3 自己填。'; return 1; }; range=${range/ /-};;
       3)
         ask '端口范围（1024–65535，例如 40000-40999）' || return 0; range=$REPLY
-        [[ $(hop_parse "$range" 2>/dev/null) != "${current/–/ }" ]] || { msg '已经是这个范围，无需修改。'; return 0; };;
+        [[ -z $current || $(hop_parse "$range" 2>/dev/null) != "${current/–/ }" ]] || { msg '已经是这个范围，无需修改。'; return 0; };;
       *) err '无效选项。'; return 1;;
     esac
     with_lock node_change "$id" hop "$range" || return 1
@@ -4336,7 +4337,7 @@ srm $SRM_VERSION：sing-box 节点管理（$(proto_labels)）
   srm certs [status]      证书管理；status 只查看
   srm renew               检查证书续期
   srm firewall            同步本脚本的 UFW / firewalld / iptables 端口规则和端口跳跃转发
-  srm hop-sync            只按当前节点补上端口跳跃转发规则（服务每次启动前自动运行，不加锁）
+  srm hop-sync            只按当前节点补上端口跳跃转发规则（服务每次启动前自动运行，不占 srm 主锁）
   srm status              运行状态
   srm logs                最近 50 行日志
   srm restart             重启本脚本节点

@@ -114,7 +114,7 @@ srm $SRM_VERSION：sing-box 节点管理（$(proto_labels)）
   srm certs [status]      证书管理；status 只查看
   srm renew               检查证书续期
   srm firewall            同步本脚本的 UFW / firewalld / iptables 端口规则和端口跳跃转发
-  srm hop-sync            只按当前节点补上端口跳跃转发规则（服务每次启动前自动运行，不加锁）
+  srm hop-sync            只按当前节点补上端口跳跃转发规则（服务每次启动前自动运行，不占 srm 主锁）
   srm status              运行状态
   srm logs                最近 50 行日志
   srm restart             重启本脚本节点

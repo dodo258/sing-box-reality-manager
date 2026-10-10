@@ -345,7 +345,7 @@ hop_menu() {
       2) [[ -n $range ]] || { err '没有可选的默认范围，请选 3 自己填。'; return 1; }; range=${range/ /-};;
       3)
         ask '端口范围（1024–65535，例如 40000-40999）' || return 0; range=$REPLY
-        [[ $(hop_parse "$range" 2>/dev/null) != "${current/–/ }" ]] || { msg '已经是这个范围，无需修改。'; return 0; };;
+        [[ -z $current || $(hop_parse "$range" 2>/dev/null) != "${current/–/ }" ]] || { msg '已经是这个范围，无需修改。'; return 0; };;
       *) err '无效选项。'; return 1;;
     esac
     with_lock node_change "$id" hop "$range" || return 1

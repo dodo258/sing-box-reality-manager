@@ -296,8 +296,11 @@ node_menu <<< "$index"$'\n10\n0' > "$work/out" 2>&1 || true
 grep -qx '  3. 改为自己填的端口范围' "$work/out" && ! grep -Eq '^  2\. (开启|改为)' "$work/out" || { cat "$work/out"; fail 'menu of a node with hopping'; }
 node_menu <<< "$index"$'\n10\n3\n22000-22999' > "$work/out" 2>&1 || true
 grep -q '已经是这个范围，无需修改。' "$work/out" || fail 'same range applied again'
-# Off: docs/menu-preview.txt shows this screen.
+# Off: docs/menu-preview.txt shows this screen; a typed range that is no range is refused.
 plain=$(jq '[.nodes[].id]|index("1000000000000003") + 1' "$STATE")
+node_menu <<< "$plain"$'\n10\n3\nabc' > "$work/out" 2>&1 || true
+grep -q '端口跳跃范围要写成 起-止' "$work/out" && ! grep -q '无需修改' "$work/out" || { cat "$work/out"; fail 'typed non-range on a node without hopping'; }
+node 1000000000000003 | jq -e 'has("hop")|not' >/dev/null || fail 'non-range turned hopping on'
 node_menu <<< "$plain"$'\n10\n0' > "$work/out" 2>&1 || true
 while IFS= read -r line; do
     grep -qxF -- "$line" docs/menu-preview.txt || fail "docs/menu-preview.txt is out of date: $line"
