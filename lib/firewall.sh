@@ -79,7 +79,7 @@ firewall_add() {
         rc=0
         LC_ALL=C "$cmd" -w 5 -C INPUT "${rule[@]}" 2>/dev/null || rc=$?
         [[ $rc == 0 ]] && return 0
-        [[ $rc == 1 ]] || { err "无法查询 $cmd $port/${proto}。"; return 1; }
+        [[ $rc == 1 ]] || { err "无法查询 $cmd $port/${proto}（系统可能缺少 iptables comment 模块）。"; return 1; }
         spot=$(firewall_ipt_spot "$zone") || spot=end
         if [[ $spot == end ]]; then "$cmd" -w 5 -A INPUT "${rule[@]}" || return 1
         else "$cmd" -w 5 -I INPUT "$spot" "${rule[@]}" || return 1; fi
@@ -119,6 +119,8 @@ firewall_remove() {
         local cmd rule=()
         cmd=$(firewall_ipt_cmd "$zone")
         while IFS= read -r output; do rule+=("$output"); done < <(firewall_ipt_rule "$port" "$proto")
+        # A family that is gone (IPv6 disabled, iptables removed) holds no rules.
+        if ! LC_ALL=C "$cmd" -w 5 -S INPUT >/dev/null 2>&1; then rm -f "$file"; return 0; fi
         # Deletes only rules matching this exact spec, including the srm comment.
         while :; do
             rc=0

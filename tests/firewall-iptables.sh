@@ -121,3 +121,13 @@ firewall_sync "$work/state" > "$work/out"
 [[ $(srm_rules ipv4) == 0 && -z $(find "$DATA/firewall" -type f) ]] || fail 'rules added without a blocking rule'
 grep -q '没有拦截入站的 iptables 规则' "$work/out" || fail 'missing none message'
 echo 'PASS without a catch-all REJECT/DROP nothing is changed'
+
+# A family that disappears later (IPv6 disabled) must not block node changes forever.
+printf -- '-P INPUT ACCEPT\n-A INPUT -j REJECT\n' > "$work/ipt-ipv4"
+cp "$work/ipt-ipv4" "$work/ipt-ipv6"
+firewall_sync "$work/state" > /dev/null
+[[ -f $DATA/firewall/iptables-ipv6-both-24001-udp ]] || fail 'IPv6 records missing'
+ip6tables() { printf 'ip6tables: Address family not supported by protocol\n' >&2; return 3; }
+firewall_sync "$work/state-deleted" > /dev/null || fail 'sync failed after IPv6 went away'
+[[ ! -e $DATA/firewall/iptables-ipv6-both-24001-udp && -f $DATA/firewall/iptables-ipv4-both-24001-udp ]] || fail 'IPv6 records kept'
+echo 'PASS records of a family that is no longer available are dropped instead of failing every change'

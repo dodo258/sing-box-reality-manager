@@ -216,10 +216,11 @@
 
 ## 2026-10-10 防火墙加 iptables / ip6tables 后端（没有 UFW / firewalld 的系统）
 - 决定：
-  - **什么时候用 iptables**：UFW 和 firewalld 都没在运行，且 `iptables -S INPUT`（或 ip6tables）里有「兜底拦截」——INPUT 链里不带地址、端口、状态条件的 `-j REJECT` / `-j DROP`（允许只限 `-p tcp/udp/all`），或者 INPUT 默认策略是 DROP。甲骨文镜像的 `-A INPUT -j REJECT --reject-with icmp-host-prohibited` 正是这种。只封某个 IP、只丢 INVALID 包的规则不算，这时不加规则（加了也没用，还会多出「没有 netfilter-persistent」提示）。IPv4、IPv6 分开判断，哪边拦截就只改哪边。
+  - **什么时候用 iptables**：UFW 和 firewalld 都没在运行，且 `iptables -S INPUT`（或 ip6tables）里有「兜底拦截」——INPUT 链里不带地址、端口、状态条件的 `-j REJECT` / `-j DROP`（允许只限 `-p tcp/udp/all`），或者 INPUT 默认策略是 DROP。甲骨文镜像的 `-A INPUT -j REJECT --reject-with icmp-host-prohibited` 正是这种。只封某个 IP、只丢 INVALID 包的规则不算，拦截写在自定义链里（`-A INPUT -j 某链`）的也不认（UFW 关闭后留下的空链跳转就是这种），这时不加规则（加了也没用，还会多出「没有 netfilter-persistent」提示）。IPv4、IPv6 分开判断，哪边拦截就只改哪边。
   - **插在哪**：插在第一条兜底 REJECT/DROP 的正前方（只有默认策略 DROP 时追加到末尾），所以用户在它前面写的封 IP 等规则仍然先生效。mack-a 是 `iptables -I INPUT` 插到最前面，会跳过用户自己的封禁规则，没照抄。
   - **规则写法**：`-p <tcp|udp> -m <tcp|udp> --dport <端口> -m comment --comment srm -j ACCEPT`。增删都按这条完整规则（含注释）用 `-C` / `-D` 精确匹配，别人的规则（即使同端口、即使也写了 srm 注释但端口不同）不会被删；所有权记录照旧写在 `/var/lib/srm/firewall/iptables-<ipv4|ipv6>-both-<端口>-<协议>`。
   - **保存**：这次同步或清理确实改了规则，且有 `netfilter-persistent`，就执行一次 `netfilter-persistent save`（和 mack-a 一样，它会保存当前全部规则）；保存失败只报错不回滚节点（规则已经生效）。没有 netfilter-persistent 就提示「服务器重启后会失效；安装 iptables-persistent 时选「是」保存当前规则即可」，不自动安装（Ubuntu 上装 iptables-persistent 会卸掉 ufw）。
+  - **出错时**：系统缺 comment 模块（部分 OpenVZ / LXC）时加规则失败，和 UFW / firewalld 失败一样回滚这次节点修改，报错里说明可能缺 comment 模块。删除时如果该协议族已不可用（IPv6 被禁用、iptables 被卸载），视为规则已不存在、删掉记录，免得以后每次改节点都失败。
 - 备选/被否决的方案：
   - 只要有 iptables 命令就加规则：普通 Debian/Ubuntu 的 INPUT 是空的、全放行，加规则没用，反而每次都提示「没有 netfilter-persistent」。
   - 只在装了 netfilter-persistent 时才用 iptables（mack-a 的判断）：规则来自别的方式（开机脚本 `iptables-restore`）的机器照样连不上；按待办「没有就提示」做。

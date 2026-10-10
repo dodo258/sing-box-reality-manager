@@ -86,7 +86,11 @@ echo 'PASS disabled UFW is never enabled by manager'
 # Oracle-like image: no UFW/firewalld, INPUT ends in REJECT, netfilter-persistent
 # saves the rules (simulated: the real package would remove ufw from the runner).
 ip link set lo up
-iptables -S INPUT | grep -q '^-A' && { echo 'FAIL INPUT not empty after UFW disable'; exit 1; }
+# Disabled UFW leaves jumps to its emptied chains; detection above ignored them.
+iptables -S INPUT
+iptables -F INPUT
+ip6tables -F INPUT
+[[ $(iptables -S INPUT) == '-P INPUT ACCEPT' && $(ip6tables -S INPUT) == '-P INPUT ACCEPT' ]] || exit 1
 iptables -A INPUT -m state --state RELATED,ESTABLISHED -j ACCEPT
 iptables -A INPUT -p tcp -m tcp --dport 22222 -j ACCEPT
 iptables -A INPUT -j REJECT --reject-with icmp-host-prohibited
