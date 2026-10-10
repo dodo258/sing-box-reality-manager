@@ -47,12 +47,12 @@ jobs:
           TEST_SNELL_V6: ${{ runner.temp }}/snell-server-v6
           TEST_SNELL_V5: ${{ runner.temp }}/snell-server-v5
         run: |
-          for test in cli menu quick protocols clients snell state local traffic snell-traffic updates firewall certificates-menu management migrate; do
+          for test in cli menu quick protocols clients snell state local traffic snell-traffic updates firewall firewall-iptables certificates-menu management migrate; do
             echo "::group::tests/$test.sh"
             bash "tests/$test.sh"
             echo "::endgroup::"
           done
-      - name: Verify real UFW in isolated network and mount namespaces
+      - name: Verify real UFW and iptables in isolated network and mount namespaces
         run: |
           sudo apt-get install -y --no-install-recommends ufw
           sudo env GITHUB_ACTIONS=true unshare --net --mount bash tests/firewall-live.sh

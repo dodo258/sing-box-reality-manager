@@ -268,7 +268,7 @@ show_status() {
     if [[ -f $STATE ]]; then jq -r '.nodes[]|[.id,.name,.type,(.port|tostring),(if .enabled then "启用" else "停用" end)]|@tsv' "$STATE"; else msg '尚无节点。'; fi
     # shellcheck disable=SC2046 # unit names have no spaces
     systemctl --no-pager --full status "$SERVICE" $(sidecar_units "$STATE" true) || true
-    msg '节点变更时自动同步 UFW/firewalld 端口规则；云安全组需在服务商控制台放行对应端口。'
+    msg '节点变更时自动同步 UFW / firewalld / iptables 端口规则；云安全组需在服务商控制台放行对应端口。'
     local hint
     hint=$(update_hint)
     [[ -z $hint ]] || msg "可更新：$hint（在菜单里选「5. 更新」）"

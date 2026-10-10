@@ -30,7 +30,7 @@ srm v4 菜单预览（由 lib/ 的实际输出整理；tests/quick.sh 会核对�
 
 ━━━━━━━━ 部署完成：vless-JP（VLESS Reality）━━━━━━━━
 服务器：192.0.2.10    端口：44279/TCP    节点 ID：69916ba9073ff99f
-云服务器安全组：连不上时，到服务商控制台的安全组（云防火墙）放行入站 TCP 44279；本机的 UFW / firewalld 已自动放行。
+云服务器安全组：连不上时，到服务商控制台的安全组（云防火墙）放行入站 TCP 44279；本机的 UFW / firewalld / iptables 已自动放行。
 
 ── 分享链接 ──
 vless://<UUID>@192.0.2.10:44279?encryption=none&security=reality&type=tcp&flow=xtls-rprx-vision&fp=chrome&sni=www.mozilla.org&pbk=<公钥>&sid=<shortId>#vless-JP
