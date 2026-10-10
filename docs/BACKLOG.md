@@ -6,8 +6,6 @@
 
 从上往下做。正在做的条目后面标「（进行中：分支名 时间）」。
 
-- [ ] firewalld 停着时卸载 srm 会失败，报错没说要先启动 firewalld —— 来源：2026-10-11 PR #19 审查（原有问题）。`firewall_clear` 对 firewalld 记录调 `firewall-cmd`，firewalld 没运行时返回 252，卸载停在「端口规则清理失败，保留数据以便重试卸载」。要做：firewalld 没运行时提示「先 `systemctl start firewalld` 再卸载」，或用 `firewall-offline-cmd` 清永久规则、丢掉运行时记录。验收：测试覆盖 firewalld 停着时卸载的提示或清理结果；CI 全绿。（进行中：agent/1011-firewalld-stopped 2026-10-11 03:08）
-
 ## 等主人拍板
 
 - [ ] v4 切换发布 —— 前面 7 条合并、主人验收后才做。内容：
@@ -26,6 +24,7 @@
 
 ## 已完成
 
+- [x] firewalld 停着时也能卸载 srm —— 2026-10-11 合并，提交 e560303（PR #20）。firewalld 没运行时卸载不再停在「端口规则清理失败」：运行时记录丢掉（停止时规则已没了），srm 加的永久端口用 `firewall-offline-cmd` 从配置文件删掉，原有端口不动；同端口永久规则没删成功时运行时记录也保留；系统没有 `firewall-offline-cmd` 时报错提示「先启动 firewalld（systemctl start firewalld）再重试」；firewalld 已卸掉时直接丢记录。CI 新增一步装 firewalld 但不启动，用真实 `firewall-offline-cmd` 验证。验收：在装了 firewalld 的测试机上部署一个节点，`systemctl stop firewalld` 后在菜单里卸载，应显示「卸载完成。」，`firewall-offline-cmd --list-ports` 里不再有节点端口。
 - [x] UFW / firewalld 临时停用时保留 srm 的放行规则 —— 2026-10-11 合并，提交 a169bd5（PR #19）。同步时 UFW / firewalld 只要不是当前活动的防火墙（`ufw disable`、开机时还没起来、检测选了 iptables 或 none），它的记录就不当作多余删：UFW 停用时还能改规则文件，只删已经不用的端口（停用期间删掉的节点）；firewalld 停着时什么都改不了，记录全保留，等它运行后的第一次同步再清。iptables 记录照旧。同步结果提示「UFW 当前没有运行，还在用的节点的放行规则保留着…启用后在菜单「4. 运行状态」里选「重新同步防火墙端口规则」」。以前 firewalld 停着时每次同步都失败、改节点被回滚，现在也好了。
   - 替主人定了：不只 backend none，UFW 停用后检测选 iptables（Oracle 这类镜像）时也保留；停用期间新加的节点不往停用的 UFW 里加规则（Ubuntu 默认装了 UFW 但不启用）。理由见 DECISIONS.md「2026-10-11 UFW / firewalld 停用期间保留 srm 的放行规则」。
   - 验收：在 GitHub 打开 PR #19，CI「verify」全绿，日志里有 firewall-live 的「PASS real UFW disabled, synced, enabled again: the srm rules are still there and let the nodes through」「PASS real UFW: a node deleted while UFW is disabled loses its rule, the others keep theirs …」和 tests/firewall.sh 的「PASS firewalld stopped, synced (also deleting a node), started again …」。服务器上试：在开着 UFW 的机器上 `ufw disable`，菜单「4. 运行状态 → 3」同步一次（应提示 UFW 当前没有运行、规则保留着），`ufw enable` 后 `ufw status` 里仍有 `srm-<端口>-<协议>`，节点能连。
