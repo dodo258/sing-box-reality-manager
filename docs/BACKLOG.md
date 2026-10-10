@@ -6,7 +6,6 @@
 
 从上往下做。正在做的条目后面标「（进行中：分支名 时间）」。
 
-- [ ] v4 骨架：搬入 dodo-sbox 架构和协议注册表 —— 按 `docs/specs/2026-10-10-v4-rewrite.md`「架构」一节，以 `~/projects/dodo-sbox-next` 为蓝本，建立 `lib/`、`build.sh`、`srm.sh`、`dist/srm`、`tests/`、`.github/workflows/check.yml`。改名为 srm（路径 `/opt/srm`、`/var/lib/srm`，服务 `srm.service`，`vasma` 软链）。新增 `lib/protocols.sh` 协议注册表，把 Reality、AnyTLS、Hysteria2 的校验、生成配置、分享链接、客户端出站、传输层集中到注册表，其他模块只通过注册表分派。Reality shortId 每个节点随机生成。二维码只用本地 `qrencode`。支持所有子命令和 `--help`，菜单常驻。验收：CI 全绿（`bash -n`、shellcheck、重新构建后 dist 无差异、移植过来的全部测试）；新增测试证明打开菜单不调用 curl、wget，加一个不存在的协议名会被注册表拒绝；`srm --help` 列出全部子命令；不修改根目录 `install.sh`、`fodder/`、`documents/`。范围：新增 `lib/ build.sh srm.sh dist/ tests/ .github/workflows/check.yml`。（进行中：agent/1010-v4-skeleton 2026-10-10 14:01）
 - [ ] v4 多节点与节点级分流 —— state schema 升到 2：同一协议可以有多个独立节点，替代 v3 的「多实例」菜单；policies 加可选的 `inbounds` 字段，把分流规则限定到指定节点（替代 v3 的节点级 DNS 分流）；端口范围放宽到 1–65535（仍检查占用，默认随机 10000–50000）；写 schema 1→2 迁移函数。验收：测试覆盖同协议 3 个节点生成的配置通过 `sing-box check`、限定节点的分流规则只作用在指定 inbound、schema 1 的 state 自动迁移到 2 且节点不变；CI 全绿。
 - [ ] v4 补齐 sing-box 其余服务端协议 —— 属于 `docs/specs/2026-10-10-v4-rewrite.md`「协议」表：在协议注册表里新增 Shadowsocks 2022、TUIC v5、VLESS+TLS（tcp/ws/grpc/httpupgrade）、Trojan、VMess（TLS+ws）、Naive、Hysteria v1。每个协议都要有校验、生成配置、分享链接、各客户端出站片段和防火墙传输层（tcp/udp）。需要证书的协议复用证书模块；TUIC、Hysteria 无域名时用自签证书加 pin。验收：每个协议生成的配置都通过 `sing-box check`；集成测试里用 sing-box 客户端经每个协议的节点访问本地 HTTP 服务成功（Naive 客户端不可用就写明跳过原因）；分享链接格式有单元测试；CI 全绿。
 - [ ] v4 Snell v6（可选 v5）+ ShadowTLS v3 —— 属于 `docs/specs/2026-10-10-v4-rewrite.md`「Snell + ShadowTLS」一节：官方 `snell-server` 默认 v6（当前官方最新是 v6.0.0rc2，没有正式版）、可选 v5，v6 的 `mode` 默认 `default`、可选 `unshaped`；v6 的服务端配置项和 Surge 配置行参数用下载到的二进制和 Surge 官方文档实测确认，不凭猜，出处写进代码注释。作为独立服务 `srm-snell@<节点id>`，只监听 127.0.0.1；sing-box 的 shadowtls inbound `detour` 到 direct inbound，用 `override_address`/`override_port` 转发到 snell。先实测这条链路，跑不通就改用独立的 shadow-tls 二进制，并把原因写进 DECISIONS。输出能直接粘进 Surge 的配置行，另附 mihomo 写法。卸载、状态、日志、健康检查、防火墙同步都要覆盖 snell 服务。验收：CI 集成测试里 snell-server 起得来，ShadowTLS 端口握手成功（用 sing-box 的 shadowtls 客户端，或 mihomo 的 snell+shadow-tls 客户端端到端连通，择可行者）；v5、v6 两种 Surge 配置行格式都有单元测试；CI 全绿。
@@ -29,3 +28,5 @@
 ## 以后再说
 
 ## 已完成
+
+- [x] v4 骨架：搬入 dodo-sbox 架构和协议注册表 —— 2026-10-10 合并，提交 e843254（PR #3）。验收：在 GitHub 打开 PR #3 看 CI「srm checks」全绿（65 项 PASS）；本机 `bash srm.sh --help` 列出全部子命令，`bash tests/menu.sh`、`bash tests/protocols.sh`、`bash tests/cli.sh` 都输出 PASS。按 main 上主人新定的规则：去掉了 dodo-sbox 的每日自动更新，所有功能都有菜单项。没做：真实 VPS 上的完整部署（等「切换发布」前验收）。
