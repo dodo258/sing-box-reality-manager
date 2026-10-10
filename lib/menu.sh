@@ -472,10 +472,10 @@ node_menu() {
       9) yesno '确认删除此节点' && with_lock node_change "$id" delete;;
       10)
         proto_has "$type" retarget_select || { err '此协议的节点不支持切换握手目标。'; return 1; }
-        proto_call "$type" retarget_select || return 0
-        msg '切换后需更新客户端的原始链接 / SNI；端口和凭据保持不变，应用时可能短暂中断本脚本节点。'
+        proto_call "$type" retarget_select "$(node_json "$STATE" "$id" | jq -r '.sni // empty')" || return 0
+        msg '更换后客户端要重新导入（或把 SNI 改成新目标）；端口和凭据不变，应用时节点会断开几秒。'
         if with_lock node_change "$id" retarget "$REPLY"; then
-            msg '当前节点原始链接：'; export_node "$id" uri
+            msg $'\n新的客户端配置：'; node_json "$STATE" "$id" | client_snippets qr
         fi;;
       *) err '无效选项。';;
     esac

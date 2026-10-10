@@ -63,19 +63,19 @@ echo 'PASS atomic certificate origin switching and repeated activation'
     public=$(printf '%s\n' "$pair" | awk '/PublicKey:/{print $2}')
     uuid=$("$CORE" generate uuid)
     jq -n --arg private "$private" --arg public "$public" --arg uuid "$uuid" \
-      '{schema:1,policies:[],unlock_dns:null,egress:null,nodes:[{id:"1111111111111111",name:"test",type:"vless",enabled:false,host:"127.0.0.1",port:18101,sni:"www.ctrip.com",uuid:$uuid,private_key:$private,public_key:$public,short_id:"0123456789abcdef"}]}' > "$DATA/cert-test/state.json"
+      '{schema:1,policies:[],unlock_dns:null,egress:null,nodes:[{id:"1111111111111111",name:"test",type:"vless",enabled:false,host:"127.0.0.1",port:18101,sni:"www.python.org",uuid:$uuid,private_key:$private,public_key:$public,short_id:"0123456789abcdef"}]}' > "$DATA/cert-test/state.json"
     # Written as schema 1 on purpose: the real transaction must migrate it.
     apply_state "$DATA/cert-test/state.json"
     jq -e '.schema==2 and .nodes[0].id=="1111111111111111"' "$STATE" >/dev/null || exit 1
     original=$(readlink "$DATA/current")
     reality_target_check() { return 0; }
-    firewall_sync() { [[ $(jq -r '.nodes[0].sni' "$1") != www.ixigua.com ]]; }
-    ! node_change 1111111111111111 retarget www.ixigua.com || exit 1
+    firewall_sync() { [[ $(jq -r '.nodes[0].sni' "$1") != www.mozilla.org ]]; }
+    ! node_change 1111111111111111 retarget www.mozilla.org || exit 1
     [[ $(readlink "$DATA/current") == "$original" ]] || exit 1
     [[ ! -e $DATA/pending.json ]] || exit 1
     firewall_sync() { return 0; }
-    node_change 1111111111111111 retarget www.ixigua.com
-    jq -e '.nodes[0].sni=="www.ixigua.com" and .nodes[0].enabled==false' "$STATE" >/dev/null
+    node_change 1111111111111111 retarget www.mozilla.org
+    jq -e '.nodes[0].sni=="www.mozilla.org" and .nodes[0].enabled==false' "$STATE" >/dev/null
     ! systemctl is-active --quiet "$SERVICE" || exit 1
 )
 echo 'PASS real Reality configuration transaction rolls back on failure and preserves stopped state'

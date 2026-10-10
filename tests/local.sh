@@ -69,7 +69,7 @@ for i in 1 2 3; do
  pair=$("$CORE" generate reality-keypair)
  nodes=$(jq -c --arg i "$i" --arg private "$(awk '/PrivateKey:/{print $2}' <<< "$pair")" --arg public "$(awk '/PublicKey:/{print $2}' <<< "$pair")" \
   --arg uuid "$("$CORE" generate uuid)" --arg short "$(openssl rand -hex 8)" --arg password "$(openssl rand -hex 24)" --arg dir "$work" '. + [
-  {id:("a00000000000000"+$i),name:("vless-"+$i),type:"vless",enabled:true,host:"127.0.0.1",port:(18120+($i|tonumber)),sni:"www.ctrip.com",uuid:$uuid,private_key:$private,public_key:$public,short_id:$short},
+  {id:("a00000000000000"+$i),name:("vless-"+$i),type:"vless",enabled:true,host:"127.0.0.1",port:(18120+($i|tonumber)),sni:"www.python.org",uuid:$uuid,private_key:$private,public_key:$public,short_id:$short},
   {id:("b00000000000000"+$i),name:("anytls-"+$i),type:"anytls",enabled:true,host:"127.0.0.1",port:(18123+($i|tonumber)),sni:"test.example.com",password:($password+"a"),cert_dir:$dir},
   {id:("c00000000000000"+$i),name:("hysteria2-"+$i),type:"hysteria2",enabled:true,host:"127.0.0.1",port:(18126+($i|tonumber)),sni:"test.example.com",password:($password+"h"),cert_dir:$dir}]' <<< "$nodes")
 done

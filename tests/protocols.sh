@@ -38,11 +38,11 @@ if proto_register 'Bad-Name' 2>/dev/null; then fail 'invalid protocol name regis
 if proto_call socks label 2> "$work/err"; then fail 'unknown protocol dispatched'; fi
 grep -q '不支持的协议：socks' "$work/err" || fail 'unknown protocol message'
 if proto_known '' || proto_known socks || proto_known 'vless anytls'; then fail 'proto_known accepted unknown name'; fi
-if proto_call anytls retarget '{}' www.ctrip.com 2>/dev/null; then fail 'optional hook dispatched to a protocol without it'; fi
+if proto_call anytls retarget '{}' www.python.org 2>/dev/null; then fail 'optional hook dispatched to a protocol without it'; fi
 echo 'PASS registry rejects unknown names, incomplete protocols and missing hooks'
 
 jq -n '{schema:2,policies:[],unlock_dns:null,egress:null,nodes:[
- {id:"1111111111111111",name:"r",type:"vless",enabled:true,host:"192.0.2.1",port:18101,sni:"www.ctrip.com",uuid:"0f2a6c1e-3b4d-4e5f-8a9b-0c1d2e3f4a5b",private_key:"private",public_key:"public",short_id:"0123456789abcdef"},
+ {id:"1111111111111111",name:"r",type:"vless",enabled:true,host:"192.0.2.1",port:18101,sni:"www.python.org",uuid:"0f2a6c1e-3b4d-4e5f-8a9b-0c1d2e3f4a5b",private_key:"private",public_key:"public",short_id:"0123456789abcdef"},
  {id:"2222222222222222",name:"h",type:"hysteria2",enabled:true,host:"192.0.2.1",port:18103,sni:"test.example.com",password:"password",cert_dir:"/certs"}]}' > "$work/state.json"
 validate_state "$work/state.json" || fail 'valid state rejected'
 jq '.nodes[0].type="socks"' "$work/state.json" > "$work/unknown.json"
@@ -63,7 +63,6 @@ detect_public_ip() { return 1; }
 if node_add self anytls --yes > "$work/out" 2>&1; then fail 'non-interactive add without --host accepted'; fi
 grep -q '非交互模式缺少参数：--host' "$work/out" || fail 'missing option message'
 if node_add self vless --host 192.0.2.1 --bogus 1 --yes 2>/dev/null; then fail 'unknown option accepted'; fi
-if node_add self vless --host 192.0.2.1 --sni example.com --yes 2>/dev/null; then fail 'unverified Reality target accepted'; fi
 [[ $(sha256 "$STATE") == "$before" ]] || fail 'rejected adds changed state'
 echo 'PASS deploying an unknown protocol or with missing/invalid options changes nothing'
 
@@ -72,20 +71,24 @@ printf '#!/usr/bin/env bash\ncase $2 in reality-keypair) printf "PrivateKey: pri
 chmod 755 "$work/core"
 CORE=$work/core
 ensure_dependencies() { return 0; }
-reality_target_check() { [[ $1 == www.ctrip.com || $1 == www.ixigua.com ]]; }
+# Of the built-in candidates only www.python.org passes here; any other domain
+# that passes is taken as well.
+reality_target_check() { case $1 in www.python.org) REPLY=40;; custom.example.org) REPLY=70;; *) return 1;; esac; }
 ss() { return 0; }
 sysctl() { return 1; }
 apply_state() { validate_state "$1" && cp "$1" "$STATE"; }
 jq '.nodes=[]' "$work/state.json" > "$STATE"
 node_add self vless --name one --host 192.0.2.1 --port 20001 --yes > "$work/out" 2>&1 || { cat "$work/out"; fail 'non-interactive add'; }
-node_add self vless --name two --host 192.0.2.1 --port random --sni www.ixigua.com --yes > "$work/out" 2>&1 || { cat "$work/out"; fail 'second add'; }
+if node_add self vless --host 192.0.2.1 --sni example.com --yes > "$work/out" 2>&1; then fail 'a target that fails the check was accepted'; fi
+[[ $(jq '.nodes|length' "$STATE") == 1 ]] || fail 'failed target added a node'
+node_add self vless --name two --host 192.0.2.1 --port random --sni custom.example.org --yes > "$work/out" 2>&1 || { cat "$work/out"; fail 'second add'; }
 grep -q '^vless://' "$work/out" || fail 'share link printed after deploy'
 [[ $(jq '.nodes|length' "$STATE") == 2 ]] || fail 'two nodes expected'
 a=$(jq -r '.nodes[0].short_id' "$STATE"); b=$(jq -r '.nodes[1].short_id' "$STATE")
 [[ $a =~ ^[a-f0-9]{16}$ && $b =~ ^[a-f0-9]{16}$ && $a != "$b" && $a != 0123456789abcdef ]] || fail "shortIds $a $b"
-jq -e '.nodes[0].sni=="www.ctrip.com" and .nodes[1].sni=="www.ixigua.com" and .nodes[1].port>=10000 and .nodes[1].port<=50000' "$STATE" >/dev/null || fail 'defaults'
+jq -e '.nodes[0].sni=="www.python.org" and .nodes[1].sni=="custom.example.org" and .nodes[1].port>=10000 and .nodes[1].port<=50000' "$STATE" >/dev/null || fail 'defaults'
 [[ ! -e $work/setup-called ]] || fail 'setup called on an installed system'
-echo 'PASS non-interactive Reality deploy; every node gets its own random shortId'
+echo 'PASS non-interactive Reality deploy picks a built-in target that passes; --sni takes any domain that passes, not one that fails; every node gets its own random shortId'
 
 id=$(jq -r '.nodes[0].id' "$STATE")
 old=$(jq -r '.nodes[0].uuid' "$STATE")

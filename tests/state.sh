@@ -17,9 +17,9 @@ touch "$SRM_ROOT/.srm-owned" "$DATA/.srm-owned"
 
 # A schema 1 state as written by the v4 skeleton: three Reality nodes, a global rule.
 jq -n '{schema:1,policies:[{name:"Netflix",mode:"dns",domains:["netflix.com"]}],unlock_dns:"192.0.2.53",egress:null,nodes:[
- {id:"1111111111111111",name:"r1",type:"vless",enabled:true,host:"192.0.2.1",port:18101,sni:"www.ctrip.com",uuid:"0f2a6c1e-3b4d-4e5f-8a9b-0c1d2e3f4a51",private_key:"private1",public_key:"public1",short_id:"0123456789abcde1"},
- {id:"2222222222222222",name:"r2",type:"vless",enabled:true,host:"192.0.2.1",port:18102,sni:"www.ixigua.com",uuid:"0f2a6c1e-3b4d-4e5f-8a9b-0c1d2e3f4a52",private_key:"private2",public_key:"public2",short_id:"0123456789abcde2"},
- {id:"3333333333333333",name:"r3",type:"vless",enabled:false,host:"192.0.2.1",port:18103,sni:"www.ctrip.com",uuid:"0f2a6c1e-3b4d-4e5f-8a9b-0c1d2e3f4a53",private_key:"private3",public_key:"public3",short_id:"0123456789abcde3"}]}' > "$work/v1.json"
+ {id:"1111111111111111",name:"r1",type:"vless",enabled:true,host:"192.0.2.1",port:18101,sni:"www.python.org",uuid:"0f2a6c1e-3b4d-4e5f-8a9b-0c1d2e3f4a51",private_key:"private1",public_key:"public1",short_id:"0123456789abcde1"},
+ {id:"2222222222222222",name:"r2",type:"vless",enabled:true,host:"192.0.2.1",port:18102,sni:"www.mozilla.org",uuid:"0f2a6c1e-3b4d-4e5f-8a9b-0c1d2e3f4a52",private_key:"private2",public_key:"public2",short_id:"0123456789abcde2"},
+ {id:"3333333333333333",name:"r3",type:"vless",enabled:false,host:"192.0.2.1",port:18103,sni:"www.python.org",uuid:"0f2a6c1e-3b4d-4e5f-8a9b-0c1d2e3f4a53",private_key:"private3",public_key:"public3",short_id:"0123456789abcde3"}]}' > "$work/v1.json"
 cp "$work/v1.json" "$work/v1-original.json"
 
 state_upgrade "$work/v1.json" > "$work/v2.json" || fail 'upgrade schema 1'

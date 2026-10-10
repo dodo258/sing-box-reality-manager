@@ -23,7 +23,7 @@ touch "$SRM_ROOT/.srm-owned" "$DATA/.srm-owned"
 psk=0123456789abcdef0123456789abcdef
 pw=fedcba9876543210fedcba9876543210
 jq -n --arg psk "$psk" --arg pw "$pw" '
-  def node($id; $name; $port; $lp): {id:$id,name:$name,type:"snell",enabled:true,host:"192.0.2.1",port:$port,sni:"www.ctrip.com",
+  def node($id; $name; $port; $lp): {id:$id,name:$name,type:"snell",enabled:true,host:"192.0.2.1",port:$port,sni:"www.jetbrains.com",
     psk:$psk,shadowtls_password:$pw,local_port:$lp};
   {schema:2,policies:[],unlock_dns:null,egress:null,nodes:[
    node("5000000000000001"; "snell v6"; 20001; 30001) + {snell_version:6,snell_mode:"default"},
@@ -35,11 +35,11 @@ node() { node_json "$work/state.json" "$1"; }
 
 # Surge lines: manual.nssurge.com/policies/snell.html (version explicit, mode only
 # for v6) and tls.html#shadow-tls (shadow-tls-version defaults to 2).
-[[ $(node 5000000000000001 | surge_proxy) == "snell v6 = snell, 192.0.2.1, 20001, psk=$psk, version=6, mode=default, reuse=true, shadow-tls-password=$pw, shadow-tls-sni=www.ctrip.com, shadow-tls-version=3" ]] ||
+[[ $(node 5000000000000001 | surge_proxy) == "snell v6 = snell, 192.0.2.1, 20001, psk=$psk, version=6, mode=default, reuse=true, shadow-tls-password=$pw, shadow-tls-sni=www.jetbrains.com, shadow-tls-version=3" ]] ||
     fail "surge v6: $(node 5000000000000001 | surge_proxy)"
-[[ $(node 5000000000000002 | surge_proxy) == "snell-u = snell, 192.0.2.1, 20002, psk=$psk, version=6, mode=unshaped, reuse=true, shadow-tls-password=$pw, shadow-tls-sni=www.ctrip.com, shadow-tls-version=3" ]] ||
+[[ $(node 5000000000000002 | surge_proxy) == "snell-u = snell, 192.0.2.1, 20002, psk=$psk, version=6, mode=unshaped, reuse=true, shadow-tls-password=$pw, shadow-tls-sni=www.jetbrains.com, shadow-tls-version=3" ]] ||
     fail "surge v6 unshaped: $(node 5000000000000002 | surge_proxy)"
-[[ $(node 5000000000000003 | surge_proxy) == "snell-5 = snell, 192.0.2.1, 20003, psk=$psk, version=5, reuse=true, shadow-tls-password=$pw, shadow-tls-sni=www.ctrip.com, shadow-tls-version=3" ]] ||
+[[ $(node 5000000000000003 | surge_proxy) == "snell-5 = snell, 192.0.2.1, 20003, psk=$psk, version=5, reuse=true, shadow-tls-password=$pw, shadow-tls-sni=www.jetbrains.com, shadow-tls-version=3" ]] ||
     fail "surge v5: $(node 5000000000000003 | surge_proxy)"
 # Setting mode below v6 is a Surge profile error.
 node 5000000000000003 | surge_proxy | grep -q 'mode=' && fail 'v5 line carries mode'
@@ -55,13 +55,13 @@ node 5000000000000003 | surge_proxy | grep -q 'mode=' && fail 'v5 line carries m
   模式（mode）：default
   连接复用（reuse）：开
   Shadow TLS 密码（shadow-tls-password）：$pw
-  Shadow TLS SNI（shadow-tls-sni）：www.ctrip.com
+  Shadow TLS SNI（shadow-tls-sni）：www.jetbrains.com
   Shadow TLS 版本（shadow-tls-version）：3" ]] || fail "surge v6 fields: $(node 5000000000000001 | surge_proxy | surge_form)"
 if node 5000000000000003 | surge_proxy | surge_form | grep -q '模式'; then fail 'v5 fields carry mode'; fi
 echo 'PASS Surge lines for Snell v6 (default / unshaped) and v5 with ShadowTLS v3, and the same as form fields for Surge for iOS'
 
 # mihomo: v5 with ShadowTLS in obfs-opts; no Snell v6 client.
-[[ $(node 5000000000000003 | clash_proxy) == "- {\"name\":\"snell-5\",\"server\":\"192.0.2.1\",\"port\":20003,\"type\":\"snell\",\"psk\":\"$psk\",\"version\":5,\"udp\":true,\"obfs-opts\":{\"mode\":\"shadow-tls\",\"host\":\"www.ctrip.com\",\"password\":\"$pw\",\"version\":3}}" ]] ||
+[[ $(node 5000000000000003 | clash_proxy) == "- {\"name\":\"snell-5\",\"server\":\"192.0.2.1\",\"port\":20003,\"type\":\"snell\",\"psk\":\"$psk\",\"version\":5,\"udp\":true,\"obfs-opts\":{\"mode\":\"shadow-tls\",\"host\":\"www.jetbrains.com\",\"password\":\"$pw\",\"version\":3}}" ]] ||
     fail "clash v5: $(node 5000000000000003 | clash_proxy)"
 [[ -z $(node 5000000000000001 | clash_proxy) ]] || fail 'clash snippet for v6'
 echo 'PASS Clash Meta snippet only for v5, with ShadowTLS v3 in obfs-opts'
@@ -69,7 +69,7 @@ echo 'PASS Clash Meta snippet only for v5, with ShadowTLS v3 in obfs-opts'
 # sing-box client: snell (v6, or v4 against a v5 server) dialing through shadowtls.
 node 5000000000000001 | client_outbound | jq -e --arg psk "$psk" --arg pw "$pw" '. == [
   {tag:"snell v6",server:"192.0.2.1",server_port:20001,type:"snell",version:6,psk:$psk,reuse:true,detour:"snell v6-shadowtls",mode:"default"},
-  {type:"shadowtls",tag:"snell v6-shadowtls",server:"192.0.2.1",server_port:20001,version:3,password:$pw,tls:{enabled:true,server_name:"www.ctrip.com"}}]' >/dev/null ||
+  {type:"shadowtls",tag:"snell v6-shadowtls",server:"192.0.2.1",server_port:20001,version:3,password:$pw,tls:{enabled:true,server_name:"www.jetbrains.com"}}]' >/dev/null ||
     fail "sing-box v6: $(node 5000000000000001 | client_outbound)"
 node 5000000000000003 | client_outbound | jq -e '.[0].version == 4 and (.[0]|has("mode")|not) and .[1].type == "shadowtls"' >/dev/null || fail 'sing-box v5 client'
 echo 'PASS sing-box client outbounds: snell v6 / v4 through a shadowtls outbound'
@@ -79,7 +79,7 @@ echo 'PASS sing-box client outbounds: snell v6 / v4 through a shadowtls outbound
 render_config "$work/state.json" > "$work/config.json"
 jq -e --arg pw "$pw" '
   .inbounds[0] == {tag:"5000000000000001",listen:"::",listen_port:20001,type:"shadowtls",version:3,
-    users:[{name:"5000000000000001",password:$pw}],handshake:{server:"www.ctrip.com",server_port:443},strict_mode:true,detour:"5000000000000001-snell"} and
+    users:[{name:"5000000000000001",password:$pw}],handshake:{server:"www.jetbrains.com",server_port:443},strict_mode:true,detour:"5000000000000001-snell"} and
   .inbounds[1] == {type:"direct",tag:"5000000000000001-snell",listen:"127.0.0.1",network:"tcp",override_address:"127.0.0.1",override_port:30001} and
   (.inbounds|length) == 6' "$work/config.json" >/dev/null || fail 'rendered front end'
 # Firewall and health checks see only the TCP node port.
@@ -191,24 +191,25 @@ CORE=$work/core
 ensure_dependencies() { return 0; }
 sysctl() { return 1; }
 ss() { return 0; }
-reality_target_check() { printf '%s\n' "$1" >> "$work/checked"; }
+# Every domain passes except example.com; ties keep the list order (the first one).
+reality_target_check() { printf '%s\n' "$1" >> "$work/checked"; [[ $1 != example.com ]]; }
 snell_install() { printf '%s\n' "$1" >> "$work/installed"; }
 apply_state() { validate_state "$1" && cp "$1" "$STATE"; }
 last() { jq -c '.nodes[-1]' "$STATE"; }
 jq '.nodes=[]' "$work/state.json" > "$STATE"
 node_add self snell --host 192.0.2.1 --port 20010 --yes > "$work/out" 2>&1 || { cat "$work/out"; fail 'deploy defaults'; }
-last | jq -e '.snell_version==6 and .snell_mode=="default" and .sni=="www.ctrip.com" and .port==20010 and
+last | jq -e '.snell_version==6 and .snell_mode=="default" and .sni=="www.jetbrains.com" and .port==20010 and
   (.psk|test("^[a-f0-9]{32}$")) and (.shadowtls_password|test("^[a-f0-9]{32}$")) and .psk != .shadowtls_password and
   .local_port >= 10000 and .local_port < 32768 and .local_port != 20010' >/dev/null || { last; fail 'default fields'; }
 grep -q '= snell, 192.0.2.1, 20010, psk=' "$work/out" && grep -q 'Clash Meta (mihomo) 不支持 Snell v6' "$work/out" &&
     grep -q '端口：20010/TCP ' "$work/out" && grep -q '── Surge：手机版新建代理后按下面逐项填写' "$work/out" &&
-    grep -q '^  Shadow TLS SNI（shadow-tls-sni）：www.ctrip.com$' "$work/out" || { cat "$work/out"; fail 'deploy output'; }
+    grep -q '^  Shadow TLS SNI（shadow-tls-sni）：www.jetbrains.com$' "$work/out" || { cat "$work/out"; fail 'deploy output'; }
 if grep -q '只走 UDP' "$work/out"; then fail 'UDP note for Snell'; fi
 # Shadowrocket and v2rayN cannot import the Surge line: no link, QR code or their sections.
 if grep -qE '── (分享链接|Shadowrocket|v2rayN)' "$work/out"; then cat "$work/out"; fail 'link clients for Snell'; fi
-[[ $(cat "$work/installed") == 6 && $(cat "$work/checked") == www.ctrip.com ]] || fail 'install / target check'
-node_add self snell --host 192.0.2.1 --proto-mode unshaped --sni www.ixigua.com --yes > /dev/null 2>&1 || fail 'deploy unshaped'
-last | jq -e '.snell_version==6 and .snell_mode=="unshaped" and .sni=="www.ixigua.com"' >/dev/null || fail 'unshaped fields'
+[[ $(cat "$work/installed") == 6 && $(wc -l < "$work/checked" | tr -d ' ') == $(wc -w <<< "$REALITY_TARGETS" | tr -d ' ') ]] || fail 'install / target check'
+node_add self snell --host 192.0.2.1 --proto-mode unshaped --sni www.example.org --yes > /dev/null 2>&1 || fail 'deploy unshaped'
+last | jq -e '.snell_version==6 and .snell_mode=="unshaped" and .sni=="www.example.org"' >/dev/null || fail 'unshaped fields'
 node_add self snell --host 192.0.2.1 --proto-version 5 --yes > /dev/null 2>&1 || fail 'deploy v5'
 last | jq -e '.snell_version==5 and (has("snell_mode")|not)' >/dev/null || fail 'v5 fields'
 [[ $(tail -n 1 "$work/installed") == 5 ]] || fail 'v5 binary installed'
@@ -216,11 +217,11 @@ last | jq -e '.snell_version==5 and (has("snell_mode")|not)' >/dev/null || fail 
 # so the name takes its default. The handshake target is picked automatically.
 detect_public_ip() { PUBLIC_IP=192.0.2.1; }
 node_add self <<< $'3\n3\n\n\n' > "$work/out" 2>&1 || { cat "$work/out"; fail 'menu deploy'; }
-last | jq -e '.snell_version==5 and .sni=="www.ctrip.com" and .host=="192.0.2.1"' >/dev/null || fail 'menu v5 fields'
+last | jq -e '.snell_version==5 and .sni=="www.jetbrains.com" and .host=="192.0.2.1"' >/dev/null || fail 'menu v5 fields'
 grep -q '1. v6 · default 模式（推荐' "$work/out" && grep -q 'Snell 版本 \[1\]' "$work/out" || { cat "$work/out"; fail 'menu text'; }
 if grep -q '节点名称' "$work/out"; then fail 'a third question'; fi
 node_add self <<< $'3\n2\n\n\n' > /dev/null 2>&1 || fail 'menu deploy unshaped'
-last | jq -e '.snell_version==6 and .snell_mode=="unshaped" and .sni=="www.ctrip.com"' >/dev/null || fail 'menu v6 unshaped fields'
+last | jq -e '.snell_version==6 and .snell_mode=="unshaped" and .sni=="www.jetbrains.com"' >/dev/null || fail 'menu v6 unshaped fields'
 before=$(sha256 "$STATE")
 for bad in 'snell --proto-version 4' 'snell --proto-mode unsafe-raw' 'snell --proto-version 5 --proto-mode default' \
   'snell --sni example.com' 'vless --proto-version 6' 'anytls --sni a.example.com --proto-mode default'; do
@@ -236,9 +237,10 @@ old=$(last); id=$(jq -r .id <<< "$old")
 node_change "$id" rotate > /dev/null || fail rotate
 jq -e -n --argjson a "$old" --argjson b "$(last)" '($a|del(.psk,.shadowtls_password)) == ($b|del(.psk,.shadowtls_password)) and
   $a.psk != $b.psk and $a.shadowtls_password != $b.shadowtls_password' >/dev/null || fail 'rotate fields'
-node_change "$id" retarget www.ixigua.com > /dev/null || fail retarget
-last | jq -e '.sni=="www.ixigua.com"' >/dev/null || fail 'retarget field'
-if node_change "$id" retarget example.com 2>/dev/null; then fail 'retarget outside the list'; fi
+node_change "$id" retarget custom.example.org > /dev/null || fail 'retarget to a domain outside the list that passes'
+last | jq -e '.sni=="custom.example.org"' >/dev/null || fail 'retarget field'
+if node_change "$id" retarget example.com 2>/dev/null; then fail 'retarget to a domain that fails the check'; fi
+last | jq -e '.sni=="custom.example.org"' >/dev/null || fail 'failed retarget changed the node'
 # Re-enabling refuses a loopback port another program took meanwhile.
 node_change "$id" toggle > /dev/null || fail 'disable'
 lp=$(last | jq -r .local_port)

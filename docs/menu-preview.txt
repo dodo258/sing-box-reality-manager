@@ -24,7 +24,8 @@ srm v4 菜单预览（由 lib/ 的实际输出整理；tests/quick.sh 会核对�
 端口（1–65535，回车随机选一个空闲端口） [随机]：      ← 回车
 节点名称 [vless-JP]：                                 ← 回车
 部署：vless-JP / VLESS Reality / 192.0.2.10:随机端口
-检查握手目标 www.ctrip.com 的 TLS 1.3、证书和 HTTP/2…
+检测伪装目标：在本机检查内置的海外网站（TLS 1.3、HTTP/2、证书、握手耗时，排除经 Cloudflare 代理的），最多约 20 秒…
+伪装目标：自动选用 www.mozilla.org（握手 35 ms；以后可以在「2. 节点管理」里更换）
 配置已应用，服务和监听正常；外部客户端连通仍需验证。
 
 ━━━━━━━━ 部署完成：vless-JP（VLESS Reality）━━━━━━━━
@@ -32,11 +33,11 @@ srm v4 菜单预览（由 lib/ 的实际输出整理；tests/quick.sh 会核对�
 云服务器安全组：连不上时，到服务商控制台的安全组（云防火墙）放行入站 TCP 44279；本机的 UFW / firewalld 已自动放行。
 
 ── 分享链接 ──
-vless://<UUID>@192.0.2.10:44279?encryption=none&security=reality&type=tcp&flow=xtls-rprx-vision&fp=chrome&sni=www.ctrip.com&pbk=<公钥>&sid=<shortId>#vless-JP
+vless://<UUID>@192.0.2.10:44279?encryption=none&security=reality&type=tcp&flow=xtls-rprx-vision&fp=chrome&sni=www.mozilla.org&pbk=<公钥>&sid=<shortId>#vless-JP
 （这里显示本地生成的二维码）
 
 ── Clash Meta (mihomo)：放进 proxies: 列表 ──
-- {"name":"vless-JP","server":"192.0.2.10","port":44279,"type":"vless","uuid":"<UUID>","network":"tcp","tls":true,"udp":true,"flow":"xtls-rprx-vision","servername":"www.ctrip.com","reality-opts":{"public-key":"<公钥>","short-id":"<shortId>"},"client-fingerprint":"chrome"}
+- {"name":"vless-JP","server":"192.0.2.10","port":44279,"type":"vless","uuid":"<UUID>","network":"tcp","tls":true,"udp":true,"flow":"xtls-rprx-vision","servername":"www.mozilla.org","reality-opts":{"public-key":"<公钥>","short-id":"<shortId>"},"client-fingerprint":"chrome"}
 
 ── sing-box：放进 outbounds 列表 ──
 {
@@ -46,7 +47,7 @@ vless://<UUID>@192.0.2.10:44279?encryption=none&security=reality&type=tcp&flow=x
   "type": "vless",
   "uuid": "<UUID>",
   "flow": "xtls-rprx-vision",
-  "tls": { "enabled": true, "server_name": "www.ctrip.com", "utls": { "enabled": true, "fingerprint": "chrome" },
+  "tls": { "enabled": true, "server_name": "www.mozilla.org", "utls": { "enabled": true, "fingerprint": "chrome" },
            "reality": { "enabled": true, "public_key": "<公钥>", "short_id": "<shortId>" } }
 }
 
@@ -70,10 +71,10 @@ vless://<UUID>@192.0.2.10:44279?encryption=none&security=reality&type=tcp&flow=x
   模式（mode）：default
   连接复用（reuse）：开
   Shadow TLS 密码（shadow-tls-password）：<密码>
-  Shadow TLS SNI（shadow-tls-sni）：www.ctrip.com
+  Shadow TLS SNI（shadow-tls-sni）：www.mozilla.org
   Shadow TLS 版本（shadow-tls-version）：3
 Mac 版或在配置文本里编辑：把下面整行放进配置的 [Proxy] 段
-snell-JP = snell, 192.0.2.10, 36256, psk=<PSK>, version=6, mode=default, reuse=true, shadow-tls-password=<密码>, shadow-tls-sni=www.ctrip.com, shadow-tls-version=3
+snell-JP = snell, 192.0.2.10, 36256, psk=<PSK>, version=6, mode=default, reuse=true, shadow-tls-password=<密码>, shadow-tls-sni=www.mozilla.org, shadow-tls-version=3
 
 （Hysteria2、TUIC、Hysteria v1 只走 UDP，客户端配置的最后多一句：）
 只走 UDP：Shadowrocket 等客户端的 TCP 延迟测试对这个节点显示不出延迟，属于正常；连不上多半是本地网络限制了 UDP，可以在菜单里选「1. 添加节点」换 TCP 类协议（VLESS Reality、AnyTLS）。
@@ -103,7 +104,23 @@ snell-JP = snell, 192.0.2.10, 36256, psk=<PSK>, version=6, mode=default, reuse=t
 「2. 节点管理 → 选节点」：
 1.详情 2.原始分享链接 3.二维码 4.客户端配置（Surge / Clash Meta / sing-box / Shadowrocket / v2rayN）
 5.启用/停用 6.修改端口 7.重置凭据 8.修改名称 9.删除
-10.切换 Reality 目标（携程 / 西瓜视频）
+10.更换伪装目标（Reality 借用握手的网站）
+（Snell 节点是「10.更换伪装目标（ShadowTLS 借用握手的网站）」）
+操作 [1]：10                                          ← 输入 10
+检测伪装目标：在本机检查内置的海外网站（TLS 1.3、HTTP/2、证书、握手耗时，排除经 Cloudflare 代理的），最多约 20 秒…
+伪装目标（借用这个网站的 TLS 握手；不用拥有这个域名，也不用申请证书）：
+  当前：www.mozilla.org
+  1. www.python.org         握手 20 ms（最快）
+  2. www.mozilla.org        握手 35 ms
+  3. 自己填一个网站域名（同样要通过检测）
+  0. 返回
+请选择 [1]：                                          ← 回车
+更换后客户端要重新导入（或把 SNI 改成新目标）；端口和凭据不变，应用时节点会断开几秒。
+检查伪装目标 www.python.org：TLS 1.3、HTTP/2、证书，以及是否经 Cloudflare 代理…
+配置已应用，服务和监听正常；外部客户端连通仍需验证。
+
+新的客户端配置：
+（接着是和部署完成时一样的分享链接、二维码和各客户端配置，SNI 已换成新目标）
 
 ══ 快速部署 → 5. 更多协议… ══
 

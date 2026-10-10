@@ -82,9 +82,9 @@ printf '6.0.0rc2\n' > "$SRM_ROOT/snell/v6/version"
 make_snell 5.0.1 "$SRM_ROOT/snell/v5/snell-server"
 printf '{"outbounds":[{"type":"direct","tag":"direct"}]}\n' > "$DATA/current/config.json"
 jq -n '{schema:2,policies:[],unlock_dns:null,egress:null,nodes:[
- {id:"1111111111111111",name:"r",type:"vless",enabled:true,host:"192.0.2.1",port:18101,sni:"www.ctrip.com",uuid:"0f2a6c1e-3b4d-4e5f-8a9b-0c1d2e3f4a5b",private_key:"private",public_key:"public",short_id:"0123456789abcdef"},
- {id:"5000000000000001",name:"s6",type:"snell",enabled:true,host:"192.0.2.1",port:18102,sni:"www.ctrip.com",snell_version:6,snell_mode:"default",psk:"p",shadowtls_password:"w",local_port:20001},
- {id:"5000000000000002",name:"s5",type:"snell",enabled:false,host:"192.0.2.1",port:18103,sni:"www.ctrip.com",snell_version:5,psk:"p",shadowtls_password:"w",local_port:20002}]}' > "$STATE"
+ {id:"1111111111111111",name:"r",type:"vless",enabled:true,host:"192.0.2.1",port:18101,sni:"www.python.org",uuid:"0f2a6c1e-3b4d-4e5f-8a9b-0c1d2e3f4a5b",private_key:"private",public_key:"public",short_id:"0123456789abcdef"},
+ {id:"5000000000000001",name:"s6",type:"snell",enabled:true,host:"192.0.2.1",port:18102,sni:"www.python.org",snell_version:6,snell_mode:"default",psk:"p",shadowtls_password:"w",local_port:20001},
+ {id:"5000000000000002",name:"s5",type:"snell",enabled:false,host:"192.0.2.1",port:18103,sni:"www.python.org",snell_version:5,psk:"p",shadowtls_password:"w",local_port:20002}]}' > "$STATE"
 touch "$work/timer-enabled"
 
 # --- the daily check ----------------------------------------------------------

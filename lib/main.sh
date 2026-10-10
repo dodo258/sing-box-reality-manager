@@ -84,7 +84,7 @@ srm $SRM_VERSION：sing-box 节点管理（$(proto_labels)）
                             --port 端口|random  --domain 证书域名（需要证书的协议；先检查解析到本机）
                             --name 名称  --host 客户端连接的地址（默认自动检测本机公网 IP）
                             --yes（不提问，未给的选项用默认值）  --json（结果输出为 JSON，其余信息写到 stderr）
-                            进阶：--sni 域名（Reality / ShadowTLS 的握手目标，或证书域名）
+                            进阶：--sni 域名（Reality / ShadowTLS 的伪装目标，要通过检测；或证书域名）
                             --cert auto|webroot|import|selfsigned（自签只用于客户端能校验证书指纹的协议）
                             --webroot 目录  --cert-file 文件  --key-file 文件  --email 邮箱
                             --transport tcp|ws|grpc|httpupgrade（只用于能选传输方式的协议）
@@ -92,7 +92,7 @@ srm $SRM_VERSION：sing-box 节点管理（$(proto_labels)）
                             --bbr enable|keep
   srm list                列出节点：ID、名称、协议、端口、状态
   srm nodes               节点管理菜单：原始链接、二维码、启停、改端口、重置凭据
-  srm node ID 操作 [值]   toggle | delete | rotate | port 端口 | name 名称 | retarget 目标域名
+  srm node ID 操作 [值]   toggle | delete | rotate | port 端口 | name 名称 | retarget 伪装目标域名
   srm export ID [格式]    uri（默认）| qr | outbound（sing-box）| clash | surge | clients（全部客户端）| details
                           只在本机生成，不联网
   srm protocols           支持的协议和传输层

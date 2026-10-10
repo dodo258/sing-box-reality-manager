@@ -140,7 +140,6 @@ proto_labels() {
 }
 
 # --- VLESS Reality -----------------------------------------------------------
-REALITY_TARGETS='www.ctrip.com www.ixigua.com'
 proto_vless_label() { printf 'VLESS Reality'; }
 proto_vless_transport() { printf 'tcp'; }
 proto_vless_domain() { printf 'none'; }
@@ -182,8 +181,8 @@ proto_vless_rotate() {
     uuid=$("$CORE" generate uuid) || return 1
     REPLY=$(jq -nc --arg v "$uuid" '{uuid:$v}')
 }
-proto_vless_retarget_label() { printf '切换 Reality 目标（携程 / 西瓜视频）'; }
-proto_vless_retarget_select() { reality_target_select; }
+proto_vless_retarget_label() { printf '更换伪装目标（Reality 借用握手的网站）'; }
+proto_vless_retarget_select() { reality_target_select "$@"; }
 # REPLY = JSON fields to merge, or empty when the node already uses the target.
 proto_vless_retarget() { handshake_retarget "$@"; }
 # v3 Reality: the handshake server is the SNI, and v3 links use its fixed non-empty
@@ -214,60 +213,115 @@ reality_public_key() {
     [[ $out =~ ^[A-Za-z0-9_-]{43}$ ]] && printf '%s\n' "$out"
 }
 
-# Reality and ShadowTLS borrow the TLS 1.3 handshake of the same vetted sites.
+# Reality and ShadowTLS borrow the TLS 1.3 handshake of a real website, the target.
+# Built-in candidates are overseas sites: from mainland China, the SNI of a domestic
+# site sent to a server abroad failed every handshake in a real test (DECISIONS.md).
+# All answered TLS 1.3, HTTP/2 and a valid certificate without a redirect and were not
+# behind Cloudflare when listed; each server checks them again and takes the fastest.
+REALITY_TARGETS='www.jetbrains.com www.mozilla.org addons.mozilla.org www.python.org www.cisco.com www.mysql.com www.oracle.com www.adobe.com www.mongodb.com www.toyota.com www.harvard.edu www.stanford.edu www.tesla.com www.sony.com'
 # Without --sni the target is picked at create time (handshake_target_ready).
 handshake_target_prompt() {
     sni=''
     [[ -n ${opt_sni:-} ]] || return 0
-    reality_target_allowed "$opt_sni" || return 1
     sni=$opt_sni
 }
 # At create, with dependencies installed: checks the chosen target, or takes the
-# first built-in one that passes the check, so users never have to find one.
+# built-in one with the fastest handshake, so users never have to find one.
 handshake_target_ready() {
-    local target
-    if [[ -n $sni ]]; then reality_target_check "$sni"; return; fi
-    for target in $REALITY_TARGETS; do
-        if reality_target_check "$target" 2>/dev/null; then sni=$target; return 0; fi
-    done
-    err '内置的握手目标都没有通过检查，请检查本机 DNS / 网络 / 系统时间后重试。'; return 1
+    local ranked ms
+    if [[ -n $sni ]]; then reality_target_custom "$sni"; return; fi
+    ranked=$(reality_targets_rank) || return 1
+    [[ -n $ranked ]] || { err '内置的伪装目标都没有通过检测，请检查本机 DNS / 网络 / 系统时间后重试。'; return 1; }
+    read -r ms sni <<< "$ranked"
+    msg "伪装目标：自动选用 $sni（握手 $ms ms；以后可以在「2. 节点管理」里更换）"
 }
 handshake_retarget() {
     local node=$1 target=$2
-    reality_target_allowed "$target" || return 1
     if [[ $(printf '%s' "$node" | jq -r .sni) == "$target" ]]; then
         msg '当前已经使用此目标，无需修改。'; REPLY=''; return 0
     fi
-    reality_target_check "$target" || return 1
+    reality_target_custom "$target" || return 1
     REPLY=$(jq -nc --arg sni "$target" '{sni:$sni}')
 }
-reality_target_allowed() {
-    [[ " $REALITY_TARGETS " == *" $1 "* ]] || { err "握手目标只能选择：$REALITY_TARGETS"; return 1; }
+# A target the user named: it must pass the check; one behind Cloudflare is taken
+# with a warning (it does work, e.g. www.seagate.com in the 2026-10-10 test).
+reality_target_custom() {
+    local rc=0
+    reality_target_check "$1" || rc=$?
+    [[ $rc == 2 ]] || return "$rc"
+    msg "提示：$1 经 Cloudflare 代理，内置候选不选这类网站（本机 IP 不在 Cloudflare 的网段里，主动探测能看出来）；你指定了它，照常使用。"
 }
+# Built-in candidates that pass the check, fastest first: lines "<ms> <domain>".
+# All are checked at once, so the wait is one check, not one per candidate.
+reality_targets_rank() {
+    local dir domain i=0 pids=() pid
+    dir=$(mktemp -d) || return 1
+    msg '检测伪装目标：在本机检查内置的海外网站（TLS 1.3、HTTP/2、证书、握手耗时，排除经 Cloudflare 代理的），最多约 20 秒…' >&2
+    for domain in $REALITY_TARGETS; do
+        i=$((i+1))
+        ( REPLY=''; reality_target_check "$domain" > /dev/null 2>&1 && printf '%s %s\n' "${REPLY:-99999}" "$domain" > "$dir/$(printf '%03d' "$i")" ) &
+        pids+=("$!")
+    done
+    for pid in "${pids[@]}"; do wait "$pid" || true; done
+    # The candidates' list order breaks ties.
+    set -- "$dir"/*
+    [[ ! -e $1 ]] || cat "$@" | sort -s -n -k1,1
+    rm -rf "$dir"
+}
+# Menu: the checked candidates (Enter = the fastest) or a domain typed by the user;
+# REPLY = the target, failure = back. CURRENT is the node's target, if any.
 reality_target_select() {
-    msg $'握手目标（无需拥有该域名或申请证书）：\n1. 携程：www.ctrip.com\n2. 西瓜视频：www.ixigua.com'
-    ask '选择目标（0 返回）' 1 || return 1
-    case $REPLY in
-      1) REPLY=www.ctrip.com;;
-      2) REPLY=www.ixigua.com;;
-      *) err '请选择 1 或 2。'; return 1;;
-    esac
+    local current=${1:-} ranked ms domain i=0 default custom
+    ranked=$(reality_targets_rank) || return 1
+    msg '伪装目标（借用这个网站的 TLS 握手；不用拥有这个域名，也不用申请证书）：'
+    [[ -z $current ]] || msg "  当前：$current"
+    while read -r ms domain; do
+        [[ -n $domain ]] || continue
+        i=$((i+1))
+        printf '  %s. %-22s 握手 %s ms%s\n' "$i" "$domain" "$ms" "$([[ $i != 1 ]] || printf '（最快）')"
+    done <<< "$ranked"
+    (( i > 0 )) || msg '  内置的网站这次都没有通过检测（本机 DNS / 网络 / 系统时间有问题时也会这样）。'
+    custom=$((i+1)); default=1; (( i > 0 )) || default=$custom
+    printf '  %s. 自己填一个网站域名（同样要通过检测）\n  0. 返回\n' "$custom"
+    while :; do
+        ask '请选择' "$default" || return 1
+        if [[ $REPLY =~ ^[1-9][0-9]*$ ]] && (( REPLY <= i )); then
+            REPLY=$(sed -n "${REPLY}p" <<< "$ranked" | awk '{print $2}'); return 0
+        fi
+        [[ $REPLY == "$custom" ]] || { err "请选择 0–$custom。"; continue; }
+        while :; do
+            ask '网站域名（例如 www.example.com）' || return 1
+            REPLY=$(tr '[:upper:]' '[:lower:]' <<< "$REPLY")
+            if [[ $REPLY =~ ^[0-9.]+$ ]] || ! valid_domain "$REPLY"; then err '域名格式不对，例如 www.example.com。'; continue; fi
+            return 0
+        done
+    done
 }
+# Returns 0 with REPLY = milliseconds until the TLS handshake finished (DNS, TCP and
+# TLS together), 1 when the domain fails, 2 when it passes but is behind Cloudflare.
 reality_target_check() {
-    local domain=$1 output rc=0
-    valid_domain "$domain" || return 1
+    local domain=$1 output rc=0 probe ms
+    valid_domain "$domain" || { err "域名不合法：$domain"; return 1; }
     output=$(mktemp) || return 1
-    msg "检查握手目标 ${domain} 的 TLS 1.3、证书和 HTTP/2…"
-    timeout 15 openssl s_client -connect "$domain:443" -servername "$domain" \
+    msg "检查伪装目标 ${domain}：TLS 1.3、HTTP/2、证书，以及是否经 Cloudflare 代理…"
+    timeout 10 openssl s_client -connect "$domain:443" -servername "$domain" \
         -tls1_3 -alpn h2 -verify_hostname "$domain" -verify_return_error \
         </dev/null > "$output" 2>&1 || rc=$?
     if [[ $rc != 0 ]] || ! grep -q 'TLSv1.3' "$output" ||
        ! grep -q 'ALPN protocol: h2$' "$output" || ! grep -q 'Verify return code: 0 (ok)' "$output"; then
         rm -f "$output"
-        err '目标检测失败，请重新部署并选择另一个目标，或检查本机 DNS / 网络 / 系统时间。'
+        err "$domain 没有通过检测（要 TLS 1.3、HTTP/2、有效证书，10 秒内连上）。请换一个目标，或检查本机 DNS / 网络 / 系统时间。"
         return 1
     fi
     rm -f "$output"
+    # Cloudflare answers /cdn-cgi/trace on every site it proxies (mack-a checkRealityDest);
+    # the same request measures the handshake (TLS 1.3 was checked above).
+    probe=$(curl --proto '=https' --silent --connect-timeout 5 --max-time 8 \
+        -w '\n%{time_appconnect}' "https://$domain/cdn-cgi/trace" 2>/dev/null) || true
+    ms=$(tail -n 1 <<< "$probe" | awk '{ printf "%d", $1 * 1000 }')
+    [[ $ms =~ ^[0-9]+$ ]] && (( ms > 0 )) || { err "$domain 的 HTTPS 请求失败。请换一个目标。"; return 1; }
+    REPLY=$ms
+    if grep -q '^visit_scheme=' <<< "$probe"; then return 2; fi
 }
 
 # --- Shared TLS certificate handling ------------------------------------------
@@ -601,8 +655,8 @@ proto_snell_rotate() {
     psk=$(random_hex 16) && password=$(random_hex 16) || return 1
     REPLY=$(jq -nc --arg psk "$psk" --arg pw "$password" '{psk:$psk,shadowtls_password:$pw}')
 }
-proto_snell_retarget_label() { printf '切换 ShadowTLS 握手目标（携程 / 西瓜视频）'; }
-proto_snell_retarget_select() { reality_target_select; }
+proto_snell_retarget_label() { printf '更换伪装目标（ShadowTLS 借用握手的网站）'; }
+proto_snell_retarget_select() { reality_target_select "$@"; }
 proto_snell_retarget() { handshake_retarget "$@"; }
 # v3 kept each Snell + ShadowTLS node in snell-shadowtls/nodes/<id>.env (shell
 # assignments, read as text and never sourced), served by snell-server v4 or v5 behind
