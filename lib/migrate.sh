@@ -68,7 +68,7 @@ migrate_scan() {
     done
     [[ ! -d $V3_ROOT/website-manager ]] || migrate_skip "$plan" '网站' 'v4 不管理网站；nginx 和网站文件保持原样' runs
     if compgen -G "$V3_ROOT/subscribe*" >/dev/null; then
-        migrate_skip "$plan" '订阅链接' 'v4 不提供订阅；已导入的节点照常可用，新设备请用菜单「2. 节点管理」里的分享链接'
+        migrate_skip "$plan" '订阅链接' 'v4 不提供长期订阅；已导入的节点照常可用，新设备请用菜单「2. 节点管理」里的分享链接或「临时导入链接」'
     fi
     local tmp
     tmp=$(mktemp) || return 1

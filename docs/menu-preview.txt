@@ -54,7 +54,7 @@ vless://<UUID>@192.0.2.10:44279?encryption=none&security=reality&type=tcp&flow=x
 ── Shadowrocket：扫上面的二维码，或复制分享链接后打开 Shadowrocket，会提示从剪贴板添加 ──
 
 ── v2rayN：复制分享链接，在 v2rayN 主界面按 Ctrl+V（从剪贴板导入分享链接）──
-以后在菜单里选「2. 节点管理」可以再次查看链接、二维码和这些配置。
+以后在菜单里选「2. 节点管理」可以再次查看链接、二维码和这些配置，也能用「临时导入链接」把整份配置一键导入 Clash Verge、sing-box App 或 Surge。
 按回车继续                                            ← 回车
 
 （Surge 不支持 VLESS，所以没有 Surge 段；支持的协议会多一段 Surge。Surge 手机版不能粘贴整行，
@@ -89,7 +89,7 @@ snell-JP = snell, 192.0.2.10, 36256, psk=<PSK>, version=6, mode=default, reuse=t
   分流：未启用    证书续期：未配置
 
   1. 添加节点 · 快速部署
-  2. 节点管理 · 原始链接 / 二维码
+  2. 节点管理 · 链接 / 二维码 / 完整配置
   3. 流媒体分流 · 解锁 DNS / 代理出口
   4. 运行状态 · 日志 / 重启 / 防火墙
   5. 更新 · 新版本检查 / 回滚
@@ -121,6 +121,49 @@ snell-JP = snell, 192.0.2.10, 36256, psk=<PSK>, version=6, mode=default, reuse=t
 
 新的客户端配置：
 （接着是和部署完成时一样的分享链接、二维码和各客户端配置，SNI 已换成新目标）
+
+══ 「2. 节点管理」：节点后面是「导出完整配置」和「临时导入链接」══
+
+已部署节点：
+  1. vless-JP | vless | 端口 44279 | 启用
+  2. hysteria2-JP | hysteria2 | 端口 36256 | 启用
+  3. 导出完整配置 · 可直接导入 Clash Verge / sing-box App / Surge
+  4. 临时导入链接 · 扫码一键导入，用完自动关闭
+请选择（序号，也可输入节点完整 ID；0 返回）：4         ← 输入 4（输入 1、2 进入上面「选节点」的操作）
+包含哪些节点：
+  1. 全部启用的节点（2 个）
+  2. vless-JP
+  3. hysteria2-JP
+  0. 返回
+请选择 [1]：                                          ← 回车
+导入到哪个 App：
+  1. Clash Verge / Clash Meta for Android（mihomo）
+  2. sing-box 官方 App（iOS / Android / macOS）
+  3. Surge
+  0. 返回
+请选择 [1]：2                                         ← 输入 2
+临时端口（回车随机选一个空闲端口） [随机]：           ← 回车
+
+━━━━━━━━ 临时导入链接：sing-box 官方 App（iOS / Android / macOS） ━━━━━━━━
+sing-box App：手机扫码或点开一键导入链接，确认后创建配置；也可以在 App 里新建远程配置，粘贴下面的下载地址。
+
+── 一键导入链接（手机扫码，或在装了 App 的设备上点开）──
+sing-box://import-remote-profile?url=http%3A%2F%2F192.0.2.10%3A19081%2F<随机路径>%2Fsrm.json#srm-192.0.2.10
+（这里显示本地生成的二维码）
+
+── 下载地址 ──
+http://192.0.2.10:19081/<随机路径>/srm.json
+
+注意：没有域名证书，只能用 HTTP 传输：链接里带节点密码，用完即关。
+下载一次或 10 分钟后自动关闭，并撤掉防火墙放行。导入失败时到云服务器安全组放行入站 TCP 19081，或在菜单里选「导出完整配置」复制文本。
+等待下载…（按 Ctrl+C 提前关闭）
+已下载一次，临时链接已关闭。
+
+（有节点用 Let's Encrypt 等正式证书、域名解析到本机时，改用 https://<域名>:<端口>/…，没有上面的「注意」。
+ Clash 的一键导入链接是 clash://install-config?name=…&url=…，Surge 是 surge:///install-config?url=…。
+ 「3. 导出完整配置」选完节点和 App 后直接在屏幕上显示整份配置，保存成 srm.yaml / srm.json / srm.conf 后在 App 里导入。
+ 完整配置含所选节点、一个「节点选择」策略组、DNS，以及局域网和国内网站直连、其余走代理的基本分流；
+ App 不支持的协议不放进去，并列出跳过了哪些节点。）
 
 ══ 快速部署 → 5. 更多协议… ══
 
@@ -201,7 +244,7 @@ AnyTLS 需要一个已经解析到本机（192.0.2.10）的域名，用来申请
   - 分流 / 出站设置 31_VLESS_vision_reality_multi_dns_jp1.json：v4 的分流按平台规则设置，不能自动迁移；迁移后在菜单「3. 流媒体分流」里重新设置
   - Xray vless（端口 31448）：v4 只用 sing-box；旧 Xray 服务继续运行，迁移不会停掉它
   - 网站：v4 不管理网站；nginx 和网站文件保持原样
-  - 订阅链接：v4 不提供订阅；已导入的节点照常可用，新设备请用菜单「2. 节点管理」里的分享链接
+  - 订阅链接：v4 不提供长期订阅；已导入的节点照常可用，新设备请用菜单「2. 节点管理」里的分享链接或「临时导入链接」
 
 迁移时会：
   - 停止并停用旧服务：dodo258-sing-box.service、dodo258-shadowtls-20260101120000-32443.service、dodo258-snell-20260101120000-32443.service；上面不能迁移的旧 sing-box 节点随之停止

@@ -34,7 +34,7 @@ main_menu() {
     fi
     while :; do
         menu_header
-        msg $'  1. 添加节点 · 快速部署\n  2. 节点管理 · 原始链接 / 二维码\n  3. 流媒体分流 · 解锁 DNS / 代理出口\n  4. 运行状态 · 日志 / 重启 / 防火墙\n  5. 更新 · 新版本检查 / 回滚\n  6. BBR 与系统检测\n  7. 卸载\n  8. 证书管理 · 到期时间 / 自动续期'
+        msg $'  1. 添加节点 · 快速部署\n  2. 节点管理 · 链接 / 二维码 / 完整配置\n  3. 流媒体分流 · 解锁 DNS / 代理出口\n  4. 运行状态 · 日志 / 重启 / 防火墙\n  5. 更新 · 新版本检查 / 回滚\n  6. BBR 与系统检测\n  7. 卸载\n  8. 证书管理 · 到期时间 / 自动续期'
         ! migrate_pending || msg '  9. 迁移旧版节点 · 发现 v3 安装'
         msg $'\n  0. 退出\n'
         ask '请选择' || return 0
@@ -95,6 +95,11 @@ srm $SRM_VERSION：sing-box 节点管理（$(proto_labels)）
   srm node ID 操作 [值]   toggle | delete | rotate | port 端口 | name 名称 | retarget 伪装目标域名
   srm export ID [格式]    uri（默认）| qr | outbound（sing-box）| clash | surge | clients（全部客户端）| details
                           只在本机生成，不联网
+  srm profile 客户端 [ID]  完整客户端配置（含节点、国内直连的基本分流和 DNS），客户端：$PROFILE_CLIENTS
+                          （clash = Clash Verge / Clash Meta for Android）；不写 ID 为全部启用的节点；只在本机生成
+  srm profile-link 客户端 [ID] [--port 端口] [--minutes 分钟]
+                          临时导入链接：在随机路径上开一个临时下载端口，下载一次或到时间（默认 10 分钟）
+                          自动关闭并撤掉防火墙放行；给出二维码和该 App 的一键导入链接
   srm protocols           支持的协议和传输层
   srm routing [show]      流媒体分流菜单；show 只查看
   srm routing dns IP      设置解锁 DNS
@@ -148,6 +153,23 @@ main() {
         [[ -n ${2:-} && -n ${3:-} ]] || { err '用法：srm node ID toggle|delete|rotate|port 端口|name 名称|retarget 目标域名'; return 1; }
         with_lock node_change "$2" "$3" "${4:-}";;
       export) require_root && export_node "${2:-}" "${3:-uri}";;
+      profile) require_root && profile_render "${2:-}" "$STATE" "${3:-}";;
+      profile-link)
+        local client=${2:-} id='' port='' minutes=10
+        shift 2 2>/dev/null || shift
+        while (( $# )); do
+            case $1 in
+              --port|--minutes)
+                [[ $# -ge 2 && -n $2 ]] || { err "$1 需要一个值。"; return 1; }
+                if [[ $1 == --port ]]; then port=$2; else minutes=$2; fi
+                shift 2; continue;;
+              -*) err "未知参数：$1（可用参数见 srm --help）"; return 1;;
+              *) id=$1;;
+            esac
+            shift
+        done
+        [[ $minutes =~ ^[1-9][0-9]{0,3}$ ]] || { err '--minutes 要是 1–9999 的整数。'; return 1; }
+        with_lock profile_link "$client" "$id" "$port" "$((minutes * 60))";;
       protocols) list_protocols;;
       routing)
         case ${2:-menu} in

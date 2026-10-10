@@ -5,7 +5,7 @@ mkdir -p dist
 file=$(mktemp dist/.bundle.XXXXXX)
 trap 'rm -f "$file"' EXIT
 printf '#!/usr/bin/env bash\n# SRM_BUNDLE\nset -o pipefail\nSRM_SELF=$(readlink -f -- "${BASH_SOURCE[0]}")\n' > "$file"
-for part in common config protocols system firewall certificates routing menu updates migrate main; do cat "lib/$part.sh" >> "$file"; done
+for part in common config protocols system firewall certificates routing menu profiles updates migrate main; do cat "lib/$part.sh" >> "$file"; done
 printf '\nif [[ ${BASH_SOURCE[0]} == "$0" ]]; then main "$@"; fi\n' >> "$file"
 bash -n "$file"
 chmod 755 "$file"
