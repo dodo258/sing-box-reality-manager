@@ -126,7 +126,7 @@ python3 -I -c 'import sys, zipfile; zipfile.ZipFile(sys.argv[1], "w").write(sys.
 (
     fetch() { cp "$work/fake.zip" "$2"; }
     if snell_download 6 "$work/snell-bad" 2> "$work/err"; then fail 'unverified download accepted'; fi
-    grep -q 'Snell v6 下载、SHA256 校验或试运行失败' "$work/err" && [[ ! -e $work/snell-bad ]] || fail 'failed download left a binary'
+    grep -q 'Snell 6.0.0rc2 下载、SHA256 校验或试运行失败' "$work/err" && [[ ! -e $work/snell-bad ]] || fail 'failed download left a binary'
     if snell_download 4 "$work/snell-bad" 2>/dev/null; then fail 'Snell v4 download accepted'; fi
 ) || exit 1
 echo 'PASS snell-server downloads must match the pinned SHA-256'

@@ -111,3 +111,15 @@
   - 流媒体分流对 Snell 节点不生效，因为 snell-server 自己发起出站连接。分流菜单和「查看」页会列出这些节点并说明。
   - 已装好的 v4 开发版不受影响，第一次部署 Snell 时会写入单元模板。
 - 拍板人：Claude
+
+## 2026-10-10 核心更新的实现取舍（待办「核心更新」）
+- 决定：
+  - sing-box 最新版取 GitHub `/releases/latest`（GitHub 定义上不含 draft 和 pre-release），再拒绝 `prerelease`/`draft` 为真或 tag 带后缀的结果；只在比已装版本新时更新，不降级；附件 SHA256 用 API 返回的 `digest`。安装也取最新稳定版，Release API 不通时退回本脚本测试过的 1.14.1（固定 SHA256）。CI 的单元测试仍用固定的 1.14.1。
+  - snell-server 只检查和更新「现有节点用到的大版本」，没有 Snell 节点就不查；部署新节点仍装固定 SHA256 的已知构建，手动更新才取发布说明里的最新构建。官方不给校验和，新构建靠 HTTPS 下载 + 运行 `-v` 核对版本号（去掉 rc/beta 后缀比较，因为 rc2 自报 v6.0.0）；实际装的完整版本号写进 `/opt/srm/snell/v<大版本>/version`。
+  - 每日检查用 `srm-version-check.timer`（凌晨 2 点起随机 4 小时内），服务只跑 `srm update-check run`，systemd 沙箱 `ProtectSystem=strict`、只允许写 `/var/lib/srm`、不带任何 capability；检查不拿锁（拿锁会触发「恢复中断操作」，可能重启服务）。关闭后写 `/var/lib/srm/update-check.off`，重装也保持关闭，并删除缓存，菜单不再显示旧提示。
+  - 菜单「5. 更新」里确认用「1. 确认更新 / 0. 返回」，回车 = 返回；只更新脚本不重启服务，不弹确认。
+  - 命令行 `srm update-script`、`srm update-core` 去掉，统一成 `srm update [core|snell|script] [--yes]`（v4 尚未发布，没有外部用户依赖旧子命令）。
+  - Snell 的版本查询、下载放在协议注册表的 `program_*` 钩子里，更新模块只按钩子分派，不出现协议名。
+- 理由：主人定的「后台只查、菜单提示、手动更新」；`/releases/latest` 一次只下 300 多 KB，列表接口一页 10 条就 3.5MB；只查在用的大版本避免没有 Snell 的用户每天访问第三方网站。
+- 备选/被否决的方案：拉 Release 列表自行挑稳定版（体积大，翻页才能保证找到）；Snell 新构建要求固定 SHA256（每出一个构建都要发新脚本，等于不能跟进）；timer 命名 `srm-update-*`（和「不自动更新」的守护测试冲突，也容易误解为自动更新）。
+- 拍板人：Claude

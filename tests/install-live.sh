@@ -13,6 +13,18 @@ systemd-analyze verify /etc/systemd/system/srm.service
 [[ $(readlink /usr/local/sbin/srm) == /opt/srm/manager.sh && $(readlink /usr/local/sbin/vasma) == /opt/srm/manager.sh ]] || exit 1
 srm version | grep -q '^srm ' || exit 1
 echo 'PASS install links srm and vasma to the manager'
+# The daily version check is registered with systemd at install; its service only
+# runs the check, sandboxed so it cannot write outside /var/lib/srm.
+systemd-analyze verify /etc/systemd/system/srm-version-check.service /etc/systemd/system/srm-version-check.timer
+systemctl is-enabled --quiet srm-version-check.timer && systemctl is-active --quiet srm-version-check.timer || exit 1
+systemctl list-timers --all --no-pager srm-version-check.timer | grep -q 'srm-version-check.timer' || exit 1
+[[ $(systemctl show -p ExecStart --value srm-version-check.service) == *'path=/usr/local/sbin/srm ; argv[]=/usr/local/sbin/srm update-check run ;'* ]] || exit 1
+[[ $(systemctl show -p ProtectSystem --value srm-version-check.service) == strict ]] || exit 1
+srm update-check off | grep -q '每日检查已关闭' || exit 1
+! systemctl is-enabled --quiet srm-version-check.timer && ! systemctl is-active --quiet srm-version-check.timer || exit 1
+srm update-check on | grep -q '每日检查已开启' || exit 1
+systemctl is-enabled --quiet srm-version-check.timer && systemctl is-active --quiet srm-version-check.timer || exit 1
+echo 'PASS the daily version check timer registers with real systemd and turns off and on'
 # A v3 installation owns /usr/bin/vasma; srm must leave it alone.
 (
     source ./srm.sh
@@ -141,6 +153,22 @@ echo 'PASS self-signed TUIC and TCP+UDP Shadowsocks run under the service user'
     systemctl is-active --quiet "$SERVICE" && systemctl is-active --quiet "$unit" || exit 1
 )
 echo 'PASS Snell v6 and v5 run as srm-snell@<node> on loopback behind sing-box; toggle and delete stop the unit'
+# The real check service, run by systemd as the timer would: it records versions
+# (sing-box from GitHub, Snell v5 from the vendor's release notes) and replaces or
+# restarts nothing. A lookup failure is recorded in the cache, not fatal here.
+(
+    unit=$(systemctl list-units --plain --no-legend 'srm-snell@*' | awk '{print $1}')
+    [[ -n $unit ]] || exit 1
+    before=$(sha256sum /opt/srm/core/sing-box /opt/srm/snell/v*/snell-server)
+    ids="$(systemctl show -p InvocationID --value srm.service) $(systemctl show -p InvocationID --value "$unit")"
+    systemctl start srm-version-check.service || journalctl -u srm-version-check.service -n 20 --no-pager
+    jq . /var/lib/srm/update-check.json
+    jq -e --arg v "$(/opt/srm/core/sing-box version | awk 'NR == 1 {print $3}')" \
+        '.items[0].name == "sing-box" and .items[0].current == $v and any(.items[]; .name == "Snell v5")' /var/lib/srm/update-check.json >/dev/null || exit 1
+    [[ $(sha256sum /opt/srm/core/sing-box /opt/srm/snell/v*/snell-server) == "$before" ]] || exit 1
+    [[ "$(systemctl show -p InvocationID --value srm.service) $(systemctl show -p InvocationID --value "$unit")" == "$ids" ]] || exit 1
+)
+echo 'PASS the real check service records versions without replacing or restarting anything'
 # Updates are manual only: installation must not schedule any update job.
 if compgen -G '/etc/systemd/system/srm-update*' > /dev/null; then echo 'FAIL update unit installed'; exit 1; fi
 if crontab -l 2>/dev/null | grep -q srm; then echo 'FAIL update cron job installed'; exit 1; fi
@@ -150,8 +178,10 @@ systemctl is-active --quiet srm.service || exit 1
 cleanup
 trap - EXIT
 [[ ! -e /opt/srm && ! -e /var/lib/srm && ! -e /etc/systemd/system/srm.service && ! -e /etc/systemd/system/srm-snell@.service ]] || exit 1
+[[ ! -e /etc/systemd/system/srm-version-check.timer && ! -e /etc/systemd/system/srm-version-check.service ]] || exit 1
+! systemctl is-active --quiet srm-version-check.timer || exit 1
 ! systemctl is-active --quiet srm.service || exit 1
 if systemctl list-units --all --plain --no-legend 'srm-snell@*' | grep -qw active; then echo 'FAIL snell-server still running'; exit 1; fi
 if compgen -G '/etc/systemd/system/multi-user.target.wants/srm*' > /dev/null; then echo 'FAIL unit still enabled'; exit 1; fi
 [[ ! -e /usr/local/sbin/srm && ! -L /usr/local/sbin/vasma ]] || exit 1
-echo 'PASS uninstall stops sing-box and snell-server and removes manager, units and both commands'
+echo 'PASS uninstall stops sing-box and snell-server and removes manager, units (also the version check) and both commands'

@@ -4,6 +4,8 @@ SRM_REPO=dodo258/sing-box-reality-manager
 SRM_ROOT=/opt/srm
 DATA=/var/lib/srm
 SERVICE=srm.service
+# Daily version check (timer + oneshot service); never downloads or restarts.
+CHECK_UNIT=srm-version-check
 STATE=$DATA/current/state.json
 CORE=$SRM_ROOT/core/sing-box
 ACME=$SRM_ROOT/acme/acme.sh
@@ -69,24 +71,76 @@ ensure_dependencies() {
     fi
     for pkg in curl jq openssl qrencode ss flock tar; do command -v "$pkg" >/dev/null || return 1; done
 }
-core_download() {
-    local target=$1 platform=${2:-linux} arch hash asset tmp
-    case $(uname -m) in x86_64) arch=amd64;; aarch64|arm64) arch=arm64;; *) err '只支持 amd64/arm64。'; return 1;; esac
-    case $platform-$arch in
-      linux-amd64) hash=12cb2816b52febb356f6a885b740cc8758c3f30b8ae0ca8edba80f0d2d35343f;;
-      linux-arm64) hash=6060b42fa84c5dcaeae1799af7f61b0f1ae4855d9d5ddc9e02baba17154b3ae2;;
-      darwin-arm64) hash=b9024642ef7b4848252df5469b7f60ef3c18bb5e217a16a0934f0174f8ad11b4;;
+core_arch() {
+    case $(uname -m) in x86_64) printf 'amd64\n';; aarch64|arm64) printf 'arm64\n';; *) err '只支持 amd64/arm64。'; return 1;; esac
+}
+# Version order for sing-box and the Snell server: 1.14.1 < 1.14.3; pre-releases (alpha,
+# b/beta, rc; a bare "rc" counts as rc1) sort before their release.
+version_latest() {
+    printf '%s\n' "$@" | awk '{
+        base = $0; stage = 3; num = 0
+        if (match($0, /-?(alpha|beta|b|rc)\.?[0-9]*$/)) {
+            suf = substr($0, RSTART); base = substr($0, 1, RSTART - 1)
+            sub(/^-/, "", suf); sub(/\./, "", suf)
+            if (suf ~ /^alpha/) stage = 0; else if (suf ~ /^b/) stage = 1; else stage = 2
+            sub(/^[a-z]+/, "", suf); num = (suf == "" ? 1 : suf + 0)
+        }
+        split(base, p, ".")
+        printf "%09d %09d %09d %d %09d %s\n", p[1], p[2], p[3], stage, num, $0
+    }' | sort | tail -n 1 | awk '{print $NF}'
+}
+# True when NEW is a later version than OLD; an unreadable OLD counts as older.
+version_newer() {
+    local new=$1 old=$2 pattern='^[0-9]+\.[0-9]+\.[0-9]+'
+    [[ $new =~ $pattern ]] || return 1
+    [[ $old =~ $pattern ]] || return 0
+    [[ $new != "$old" && $(version_latest "$new" "$old") == "$new" ]]
+}
+# Newest stable sing-box (1.14 or later): "VERSION SHA256" of this machine's Linux
+# archive, the SHA256 being the asset digest GitHub's Release API reports.
+# /releases/latest skips drafts and pre-releases; a payload that is one is refused.
+core_release() {
+    local tmp arch out=''
+    arch=$(core_arch) || return 1
+    tmp=$(mktemp) || return 1
+    if fetch https://api.github.com/repos/SagerNet/sing-box/releases/latest "$tmp"; then
+        out=$(jq -r --arg arch "$arch" 'select(.draft == false and .prerelease == false and (.tag_name|test("^v[0-9]+\\.[0-9]+\\.[0-9]+$")))
+          | (.tag_name|ltrimstr("v")) as $v | .assets[]? | select(.name == "sing-box-\($v)-linux-\($arch).tar.gz")
+          | select(.digest|test("^sha256:[a-f0-9]{64}$")) | "\($v) \(.digest|ltrimstr("sha256:"))"' "$tmp" 2>/dev/null) || out=''
+    fi
+    rm -f "$tmp"
+    [[ $out =~ ^[0-9]+\.[0-9]+\.[0-9]+\ [a-f0-9]{64}$ ]] || { err '没有查到 sing-box 的稳定版发布信息（或缺少 SHA256）。'; return 1; }
+    ! version_newer 1.14.0 "${out%% *}" || { err "sing-box ${out%% *} 低于最低支持的 1.14。"; return 1; }
+    printf '%s\n' "$out"
+}
+# The release this script was tested with, pinned by archive SHA256.
+core_pinned_hash() {
+    case $(core_arch) in
+      amd64) printf '12cb2816b52febb356f6a885b740cc8758c3f30b8ae0ca8edba80f0d2d35343f\n';;
+      arm64) printf '6060b42fa84c5dcaeae1799af7f61b0f1ae4855d9d5ddc9e02baba17154b3ae2\n';;
       *) return 1;;
     esac
-    asset=sing-box-$CORE_VERSION-$platform-$arch
+}
+core_fetch() {
+    local target=$1 version=$2 hash=$3 arch asset tmp
+    arch=$(core_arch) || return 1
+    asset=sing-box-$version-linux-$arch
     tmp=$(mktemp -d) || return 1
-    if fetch "https://github.com/SagerNet/sing-box/releases/download/v$CORE_VERSION/$asset.tar.gz" "$tmp/core.tar.gz" &&
+    if [[ $hash =~ ^[a-f0-9]{64}$ ]] &&
+       fetch "https://github.com/SagerNet/sing-box/releases/download/v$version/$asset.tar.gz" "$tmp/core.tar.gz" &&
        [[ $(sha256 "$tmp/core.tar.gz") == "$hash" ]] &&
        tar -xzf "$tmp/core.tar.gz" -C "$tmp" "$asset/sing-box" &&
        install -m 755 "$tmp/$asset/sing-box" "$target"; then
         rm -rf "$tmp"; return 0
     fi
-    rm -rf "$tmp"; err '核心下载或 SHA256 校验失败。'; return 1
+    rm -rf "$tmp"; err "sing-box $version 下载或 SHA256 校验失败。"; return 1
+}
+# Installation takes the newest stable release; without the Release API the tested one.
+core_download() {
+    local release
+    if release=$(core_release); then core_fetch "$1" "${release% *}" "${release#* }"; return; fi
+    msg "改为安装本脚本测试过的 sing-box $CORE_VERSION。"
+    core_fetch "$1" "$CORE_VERSION" "$(core_pinned_hash)"
 }
 port_free() {
     local port=$1 exclude=${2:-} output

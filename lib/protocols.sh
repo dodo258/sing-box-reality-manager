@@ -16,6 +16,11 @@
 # by its own program next to sing-box: sidecar (jq string: systemd unit of the node,
 # which listens on 127.0.0.1:.local_port) and sidecar_render NODE DIR (writes the
 # node's files into the generation, so switching generations switches them too).
+# A protocol whose server program srm downloads adds the program group, used by the
+# version check and manual updates: program_label (name shown to users), program_key
+# (jq string: the program variant a node runs, e.g. "v6"), program_path KEY,
+# program_current KEY (installed version), program_latest KEY… (one network lookup;
+# prints KEY<TAB>VERSION lines) and program_fetch KEY VERSION TARGET (download and verify).
 PROTO_HOOKS='label transport validate render_inbound share_uri client_outbound secrets prompt create rotate'
 PROTOCOLS=''
 PROTO_JQ_DEFS='
@@ -44,6 +49,9 @@ proto_register() {
     optional=0
     for hook in sidecar sidecar_render; do declare -F "proto_${type}_$hook" >/dev/null && optional=$((optional+1)); done
     (( optional == 0 || optional == 2 )) || { err "协议 $type 的 sidecar 钩子不完整，未注册。"; return 1; }
+    optional=0
+    for hook in program_label program_key program_path program_current program_latest program_fetch; do declare -F "proto_${type}_$hook" >/dev/null && optional=$((optional+1)); done
+    (( optional == 0 || optional == 6 )) || { err "协议 $type 的 program 钩子不完整，未注册。"; return 1; }
     proto_known "$type" || PROTOCOLS="${PROTOCOLS:+$PROTOCOLS }$type"
 }
 proto_known() { [[ $1 =~ ^[a-z][a-z0-9]*$ && " $PROTOCOLS " == *" $1 "* ]]; }
@@ -311,34 +319,49 @@ proto_hysteria2_rotate() { REPLY=''; with_password; }
 # whose override_address/override_port point at snell-server, so the front end goes
 # through sing-box check, the generation switch and rollback like any other node.
 # Routing rules do not apply: snell-server makes its own outbound connections.
-# Server binaries are pinned by the SHA-256 of the official zip (the vendor publishes
-# no checksums): https://dl.nssurge.com/snell/snell-server-v<version>-linux-<arch>.zip,
+# Deploying installs a pinned build, checked against the SHA-256 of the official zip
+# (the vendor publishes no checksums): https://dl.nssurge.com/snell/snell-server-v<version>-linux-<arch>.zip,
 # versions from kb.nssurge.com/surge-knowledge-base/release-notes/snell (2026-10-10:
-# v6.0.0rc2 is the newest v6, v5.0.1 the newest v5).
+# v6.0.0rc2 is the newest v6, v5.0.1 the newest v5). Manual updates take the newest
+# build of the node's major version listed there; a build without a pinned SHA-256
+# relies on HTTPS from the vendor and must report its own version when run.
 SNELL_V6=6.0.0rc2
 SNELL_V5=5.0.1
+SNELL_NOTES=https://kb.nssurge.com/surge-knowledge-base/release-notes/snell
 snell_download() {
-    local major=$1 target=$2 version arch hash tmp
-    case $major in 6) version=$SNELL_V6;; 5) version=$SNELL_V5;; *) err 'Snell 版本只能是 6 或 5。'; return 1;; esac
+    local major=$1 target=$2 version=${3:-} arch hash='' tmp
+    case $major in 6) version=${version:-$SNELL_V6};; 5) version=${version:-$SNELL_V5};; *) err 'Snell 版本只能是 6 或 5。'; return 1;; esac
+    [[ $version =~ ^$major\.[0-9]+\.[0-9]+((b|beta|rc)[0-9]*)?$ ]] || { err "Snell 版本号不合法：$version"; return 1; }
     case $(uname -m) in x86_64) arch=amd64;; aarch64|arm64) arch=aarch64;; *) err 'Snell 只支持 amd64/arm64。'; return 1;; esac
     case $version-$arch in
       6.0.0rc2-amd64) hash=8a9c4463ca87cfa5eaa37c6af0d37ab93ea275aa12391985bb2a375ca3abd7f2;;
       6.0.0rc2-aarch64) hash=a0b2915cbc77dc3baf8fa069e741c20808d8a10c3a8a93e709a0a580645c3bd7;;
       5.0.1-amd64) hash=9bea1c2b9e35b73b31634856c04d18c393072b9e5dcde6a32781d8b8f908c539;;
       5.0.1-aarch64) hash=2f178bf5ac468ce1a130454efa40a0603fbbe4e47ecc4880a989f4abc7f824cf;;
-      *) return 1;;
     esac
     tmp=$(mktemp -d) || return 1
-    # `snell-server -v` prints "snell-server v6.0.0 (…)" for 6.0.0rc2, so only the
-    # major version is compared; running it also proves the binary loads here.
+    # `snell-server -v` prints "snell-server v6.0.0 (…)" for 6.0.0rc2, so the
+    # version without its beta/RC suffix is compared; running it also proves the
+    # binary loads here.
     if fetch "https://dl.nssurge.com/snell/snell-server-v$version-linux-$arch.zip" "$tmp/snell.zip" &&
-       [[ $(sha256 "$tmp/snell.zip") == "$hash" ]] &&
+       [[ -z $hash || $(sha256 "$tmp/snell.zip") == "$hash" ]] &&
        unzip -p "$tmp/snell.zip" snell-server > "$tmp/snell-server" && chmod 755 "$tmp/snell-server" &&
-       "$tmp/snell-server" -v 2>&1 | grep -q "snell-server v$major\." &&
+       "$tmp/snell-server" -v 2>&1 | grep -qF "snell-server v${version%%[a-z]*}" &&
        install -m 755 "$tmp/snell-server" "$target"; then
         rm -rf "$tmp"; return 0
     fi
-    rm -rf "$tmp"; err "Snell v$major 下载、SHA256 校验或试运行失败。"; return 1
+    rm -rf "$tmp"; err "Snell $version 下载、SHA256 校验或试运行失败。"; return 1
+}
+# Newest build of MAJOR in the release notes on stdin: the newest release, or the
+# newest beta/RC while the major version has no release yet.
+snell_pick() {
+    local versions stable
+    versions=$(grep -oE "snell-server-v$1\.[0-9]+\.[0-9]+((b|beta|rc)[0-9]*)?-linux-" | sed -E 's/^snell-server-v//; s/-linux-$//' | sort -u) || true
+    stable=$(grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' <<< "$versions") || true
+    [[ -z $stable ]] || versions=$stable
+    [[ -n $versions ]] || return 1
+    # shellcheck disable=SC2086 # one version per word
+    version_latest $versions
 }
 # Under the lock while deploying: the binary of this major version, and the unit.
 # The unit starts whatever the current generation links for the node, so switching
@@ -351,6 +374,7 @@ snell_install() {
             { apt-get update && DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l apt-get install -y --no-install-recommends unzip; } || return 1
         fi
         install -d -m 755 "$SRM_ROOT/snell" "$SRM_ROOT/snell/v$major" && snell_download "$major" "$SRM_ROOT/snell/v$major/snell-server" || return 1
+        if [[ $major == 6 ]]; then printf '%s\n' "$SNELL_V6"; else printf '%s\n' "$SNELL_V5"; fi > "$SRM_ROOT/snell/v$major/version" || return 1
     fi
     tmp=$(mktemp) || return 1
     cat > "$tmp" <<UNIT
@@ -464,6 +488,25 @@ proto_snell_retarget_label() { printf '切换 ShadowTLS 握手目标（携程 / 
 proto_snell_retarget_select() { reality_target_select; }
 proto_snell_retarget() { handshake_retarget "$@"; }
 proto_snell_sidecar() { printf '%s' '"srm-snell@\(.id).service"'; }
+proto_snell_program_label() { printf 'Snell'; }
+proto_snell_program_key() { printf '%s' '"v\(.snell_version)"'; }
+proto_snell_program_path() { printf '%s\n' "$SRM_ROOT/snell/$1/snell-server"; }
+# Installations before version files existed run the pinned build.
+proto_snell_program_current() {
+    if [[ -f $SRM_ROOT/snell/$1/version ]]; then cat "$SRM_ROOT/snell/$1/version"
+    elif [[ $1 == v6 ]]; then printf '%s\n' "$SNELL_V6"; else printf '%s\n' "$SNELL_V5"; fi
+}
+proto_snell_program_latest() {
+    local tmp key version
+    tmp=$(mktemp) || return 1
+    if ! fetch "$SNELL_NOTES" "$tmp"; then rm -f "$tmp"; err '无法读取 Snell 官方发布说明。'; return 1; fi
+    for key in "$@"; do
+        version=$(snell_pick "${key#v}" < "$tmp") || { rm -f "$tmp"; err "Snell 发布说明里没有找到 $key 的版本。"; return 1; }
+        printf '%s\t%s\n' "$key" "$version"
+    done
+    rm -f "$tmp"
+}
+proto_snell_program_fetch() { snell_download "${1#v}" "$3" "$2"; }
 # Server configuration as written by `snell-server --wizard` of each version, with
 # listen moved to loopback (v6 `--help` lists listen, psk, mode, dns,
 # dns-ip-preference, ipv6 (deprecated) and egress-interface; the v5 wizard writes

@@ -1,5 +1,5 @@
 menu_header() {
-    local status='未部署' counts='0 / 0' renew='未配置' routing='未启用' color='' reset=''
+    local status='未部署' counts='0 / 0' renew='未配置' routing='未启用' updates color='' reset=''
     if use_color; then color=$'\033[1;36m'; reset=$'\033[0m'; fi
     if [[ -f $SRM_ROOT/.srm-owned ]]; then
         status='已安装，服务未运行'
@@ -10,18 +10,22 @@ menu_header() {
         routing=$(jq -r 'if (.policies|length)==0 then "未启用" else "\(.policies|length) 条平台规则" end' "$STATE")
     fi
     systemctl is-active --quiet srm-renew.timer && renew='每日自动检查'
+    # Versions come from the daily check's cache; the menu never looks them up.
+    updates=$(update_hint)
     printf '\n%s━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━%s\n' "$color" "$reset"
     printf '  sing-box-reality-manager (srm)  v%s\n' "$SRM_VERSION"
     printf '  %s\n' "$(proto_labels 3)"
     printf '%s━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━%s\n' "$color" "$reset"
     printf '  服务：%s    节点：%s（启用 / 总数）\n' "$status" "$counts"
-    printf '  分流：%s    证书续期：%s\n\n' "$routing" "$renew"
+    printf '  分流：%s    证书续期：%s\n' "$routing" "$renew"
+    [[ -z $updates ]] || printf '  可更新：%s（选 5 更新）\n' "$updates"
+    printf '\n'
 }
 main_menu() {
     require_linux || return 1
     while :; do
         menu_header
-        msg $'  1. 部署节点\n  2. 节点管理 · 原始链接 / 二维码\n  3. 流媒体分流 · 解锁 DNS / 代理出口\n  4. 运行状态 · 日志 / 重启 / 防火墙\n  5. 更新与回滚\n  6. BBR 与系统检测\n  7. 卸载\n  8. 证书管理 · 到期时间 / 自动续期\n\n  0. 退出\n'
+        msg $'  1. 部署节点\n  2. 节点管理 · 原始链接 / 二维码\n  3. 流媒体分流 · 解锁 DNS / 代理出口\n  4. 运行状态 · 日志 / 重启 / 防火墙\n  5. 更新 · 新版本检查 / 回滚\n  6. BBR 与系统检测\n  7. 卸载\n  8. 证书管理 · 到期时间 / 自动续期\n\n  0. 退出\n'
         ask '请选择' || return 0
         case $REPLY in
           1) with_lock node_add "$SRM_SELF";;
@@ -93,9 +97,12 @@ srm $SRM_VERSION：sing-box 节点管理（$(proto_labels)）
   srm rollback            恢复上一份节点配置
   srm rollback-script     恢复上一个版本的脚本
   srm bbr [status|on]     查看或开启 BBR + FQ
-  srm update              更新脚本和已验证核心
-  srm update-script       仅更新脚本
-  srm update-core         仅更新已验证核心
+  srm update [core|$(program_types | tr '\n' '|')script] [--yes]
+                          手动更新，不写为全部（脚本、sing-box、$(program_labels)）；core 只更新 sing-box，
+                          $(program_types | paste -sd / -) 只更新 $(program_labels)，script 只更新脚本（不重启服务）；
+                          更新 sing-box 或 $(program_labels) 会重启服务、断开连接几秒，--yes 跳过确认
+  srm update-check [on|off|status|run]
+                          每日检查新版本（只查版本号，不下载、不重启）：开启、关闭、查看（默认）、立即检查
   srm uninstall [--yes]   卸载（默认需要确认）
   srm render STATE        用 state 文件生成 sing-box 配置（调试用）
   srm version             版本
@@ -147,9 +154,27 @@ main() {
           status) require_linux && bbr_status;; on) with_lock bbr_enable;;
           *) err '用法：srm bbr [status|on]'; return 1;;
         esac;;
-      update) with_lock update_all;;
-      update-script) with_lock update_latest;;
-      update-core) with_lock update_core;;
+      update)
+        local target=all
+        shift
+        while (( $# )); do
+            case $1 in
+              -y|--yes) assume_yes=1;;
+              all|core|script) target=$1;;
+              *)
+                proto_has "$1" program_latest || { err "用法：srm update [core|$(program_types | tr '\n' '|')script] [--yes]"; return 1; }
+                target=$1;;
+            esac
+            shift
+        done
+        require_linux && update_run "$target";;
+      update-check)
+        case ${2:-status} in
+          on|off) with_lock update_check_set "$2";;
+          status) require_linux && update_summary;;
+          run) require_linux && update_check_run;;
+          *) err '用法：srm update-check [on|off|status|run]'; return 1;;
+        esac;;
       uninstall)
         case ${2:-} in -y|--yes) assume_yes=1;; '') ;; *) err '用法：srm uninstall [--yes]'; return 1;; esac
         with_lock uninstall;;
