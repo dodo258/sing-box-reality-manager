@@ -45,6 +45,13 @@ render_config "$work/routing.json" > "$work/routing-config.json"
 "$CORE" check -c "$work/routing-config.json"
 jq -e '.route.final=="direct" and .dns.final=="local" and ([.route.rules[]|select(.outbound=="media-proxy")]|length==1)' "$work/routing-config.json" >/dev/null
 ok 'DNS/proxy policies with unchanged default direct route'
+# A server without an IPv6 default route resolves domains to IPv4 only; the core takes the object form.
+ip() { :; }
+render_config "$work/routing.json" > "$work/ipv4-config.json"
+unset -f ip
+"$CORE" check -c "$work/ipv4-config.json"
+jq -e '.route.default_domain_resolver=={server:"local",strategy:"ipv4_only"}' "$work/ipv4-config.json" >/dev/null
+ok 'without IPv6 the ipv4_only domain resolver is accepted by real core'
 node_json "$work/state.json" 2222222222222222 | jq '.password="a:@ /?#&"|.host="2001:db8::1"|.name="中文 & test"' | share_uri > "$work/url"
 grep -q 'anytls://a%3A%40%20%2F%3F%23%26@\[2001:db8::1\]:18102' "$work/url"
 grep -q '#%E4%B8%AD%E6%96%87%20%26%20test' "$work/url"

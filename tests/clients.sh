@@ -144,6 +144,9 @@ expect 1000000000000009 clash '- {"name":"vmess","server":"192.0.2.1","port":200
 expect 100000000000000c clash '- {"name":"hy1-self","server":"192.0.2.1","port":20012,"type":"hysteria","auth-str":"pw","up":"30 Mbps","down":"100 Mbps","protocol":"udp","sni":"www.bing.com","alpn":["hysteria"],"fingerprint":"'"$pin"'"}'
 expect 100000000000000f clash '- {"name":"reality","server":"192.0.2.1","port":20015,"type":"vless","uuid":"'"$uuid"'","network":"tcp","tls":true,"udp":true,"flow":"xtls-rprx-vision","servername":"www.python.org","reality-opts":{"public-key":"pub","short-id":"0123456789abcdef"},"client-fingerprint":"chrome"}'
 expect 100000000000000a clash ''
+# AnyTLS and Trojan look like Chrome (mihomo docs; mack-a writes them the same way).
+expect 100000000000000e clash '- {"name":"anytls","server":"192.0.2.1","port":20014,"type":"anytls","password":"pw","sni":"test.example.com","udp":true,"client-fingerprint":"chrome","alpn":["h2","http/1.1"]}'
+expect 1000000000000008 clash '- {"name":"trojan","server":"192.0.2.1","port":20008,"type":"trojan","password":"pw","sni":"test.example.com","udp":true,"client-fingerprint":"chrome"}'
 echo 'PASS Clash Meta snippets, with the certificate fingerprint for self-signed nodes; none for Naive'
 
 # Surge proxy lines (manual.nssurge.com/policies); no VLESS, Naive or Hysteria v1.
@@ -245,7 +248,16 @@ done
 for id in 1000000000000001 1000000000000008 100000000000000f; do
     if export_node "$id" clients | grep -q '只走 UDP'; then fail "UDP note for the TCP node $id"; fi
 done
-echo 'PASS Surge is listed field by field for Surge for iOS plus the whole line; UDP-only nodes (Hysteria v1/v2, TUIC) carry the latency and UDP note'
+# Vision nodes (Reality, VLESS TLS over tcp): Shadowrocket sends UDP without the flow, so
+# their client page says UDP needs another protocol; VLESS TLS over ws has no flow.
+udp_note='说明：Shadowrocket 走这个节点时 UDP 不可用，需要 UDP 请用 Hysteria2 / TUIC / AnyTLS'
+for id in 100000000000000f 1000000000000004; do
+    export_node "$id" clients | grep -q "^$udp_note" || fail "Shadowrocket UDP note for $id"
+done
+for id in 1000000000000005 100000000000000e 1000000000000010; do
+    if export_node "$id" clients | grep -q 'Shadowrocket 走这个节点时 UDP 不可用'; then fail "Shadowrocket UDP note for $id"; fi
+done
+echo 'PASS Surge is listed field by field for Surge for iOS plus the whole line; UDP-only nodes (Hysteria v1/v2, TUIC) carry the latency and UDP note; Vision nodes say Shadowrocket has no UDP through them'
 
 # Non-interactive deployment with stubs for the system parts.
 printf '#!/usr/bin/env bash\ncase $2 in uuid) printf "%%s\\n" 0f2a6c1e-3b4d-4e5f-8a9b-$(openssl rand -hex 6);; esac\n' > "$work/core"

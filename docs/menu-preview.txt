@@ -54,6 +54,8 @@ vless://<UUID>@192.0.2.10:44279?encryption=none&security=reality&type=tcp&flow=x
 ── Shadowrocket：扫上面的二维码，或复制分享链接后打开 Shadowrocket，会提示从剪贴板添加 ──
 
 ── v2rayN：复制分享链接，在 v2rayN 主界面按 Ctrl+V（从剪贴板导入分享链接）──
+
+说明：Shadowrocket 走这个节点时 UDP 不可用，需要 UDP 请用 Hysteria2 / TUIC / AnyTLS（在菜单里选「1. 添加节点」部署）。原因：Shadowrocket 的 UDP 请求不带 Vision 流控，服务端会拒绝；网页会自动改走 TCP 照常打开，游戏、语音通话等纯 UDP 应用不通。
 以后在菜单里选「2. 节点管理」可以再次查看链接、二维码和这些配置，也能用「临时导入链接」把整份配置一键导入 Clash Verge、sing-box App 或 Surge。
 按回车继续                                            ← 回车
 
