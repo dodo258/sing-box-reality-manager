@@ -62,9 +62,7 @@ issue_certificate() (
         msg '复用有效证书。'; exit 0
     fi
     if [[ $mode == auto ]]; then
-        if [[ -z $(ss -H -ltn 'sport = :80') ]]; then mode=http
-        elif [[ -z $(ss -H -ltn 'sport = :443') ]]; then mode=alpn
-        else err '80 和 443 已被占用，请选择现有网站目录验证。'; exit 1; fi
+        mode=$(cert_auto_mode) || { err '80 和 443 已被占用（或留给正在部署的节点），请选择现有网站目录验证。'; exit 1; }
         msg "自动选择证书验证方式：$mode"
     fi
     local challenge_port=80
@@ -104,6 +102,34 @@ issue_certificate() (
     if [[ $rc != 0 && $rc != 2 ]]; then err "证书申请失败。日志：$SRM_ROOT/acme-accounts/$domain/issue.log（分享前请检查敏感信息）。"; exit 1; fi
     copy_acme_cert "$domain" && install_renew_timer
 )
+# Automatic validation listens on 80 (http) or 443 (alpn). node_add sets
+# cert_avoid_port when the node being deployed will itself listen on one of them.
+cert_auto_mode() {
+    if [[ ${cert_avoid_port:-} != 80 && -z $(ss -H -ltn 'sport = :80') ]]; then printf 'http\n'
+    elif [[ ${cert_avoid_port:-} != 443 && -z $(ss -H -ltn 'sport = :443') ]]; then printf 'alpn\n'
+    else return 1; fi
+}
+# TCP port that renewing DOMAIN needs: the recorded one, else what acme.sh saved.
+cert_challenge_port() {
+    local domain=$1 port=80 account=$SRM_ROOT/acme-accounts/$1
+    if [[ -f $account/challenge-port ]]; then
+        read -r port < "$account/challenge-port" || return 1
+    elif grep -q "^Le_Webroot='alpn'" "$account/${domain}_ecc/$domain.conf" 2>/dev/null; then port=443; fi
+    printf '%s\n' "$port"
+}
+# A TCP node must not take the port a renewed certificate validates on, or every
+# renewal fails until the certificate expires. Checks the certificates of current
+# nodes plus an optional DOMAIN about to be used.
+cert_port_ok() {
+    local port=$1 transport=$2 domain
+    [[ $transport == tcp ]] || return 0
+    while IFS= read -r domain; do
+        [[ -n $domain && $(certificate_source "$domain") == acme ]] || continue
+        if [[ $(cert_challenge_port "$domain") == "$port" ]]; then
+            err "TCP $port 要留给证书 $domain 自动续期验证，节点不能占用；请换一个端口。"; return 1
+        fi
+    done < <({ [[ ! -f $STATE ]] || jq -r '.nodes[]|select(.cert_dir != null)|.sni' "$STATE"; printf '%s\n' "${3:-}"; } | sort -u)
+}
 install_renew_timer() {
     cat > /etc/systemd/system/srm-renew.service <<UNIT
 [Unit]

@@ -829,10 +829,8 @@ firewall_sync() {
     return "$failures"
 }
 firewall_renew() (
-    local domain=$1 port=80 account=$SRM_ROOT/acme-accounts/$1
-    if [[ -f $account/challenge-port ]]; then
-        read -r port < "$account/challenge-port" || exit 1
-    elif grep -q "^Le_Webroot='alpn'" "$account/${domain}_ecc/$domain.conf" 2>/dev/null; then port=443; fi
+    local domain=$1 port
+    port=$(cert_challenge_port "$domain") || exit 1
     [[ $port == 80 || $port == 443 ]] || { err '证书验证端口记录异常。'; exit 1; }
     trap 'firewall_sync "$STATE" || err "证书临时端口清理失败，请在菜单「4. 运行状态」里选「重新同步防火墙端口规则」重试。"' EXIT
     trap 'exit 130' INT TERM HUP
@@ -903,9 +901,7 @@ issue_certificate() (
         msg '复用有效证书。'; exit 0
     fi
     if [[ $mode == auto ]]; then
-        if [[ -z $(ss -H -ltn 'sport = :80') ]]; then mode=http
-        elif [[ -z $(ss -H -ltn 'sport = :443') ]]; then mode=alpn
-        else err '80 和 443 已被占用，请选择现有网站目录验证。'; exit 1; fi
+        mode=$(cert_auto_mode) || { err '80 和 443 已被占用（或留给正在部署的节点），请选择现有网站目录验证。'; exit 1; }
         msg "自动选择证书验证方式：$mode"
     fi
     local challenge_port=80
@@ -945,6 +941,34 @@ issue_certificate() (
     if [[ $rc != 0 && $rc != 2 ]]; then err "证书申请失败。日志：$SRM_ROOT/acme-accounts/$domain/issue.log（分享前请检查敏感信息）。"; exit 1; fi
     copy_acme_cert "$domain" && install_renew_timer
 )
+# Automatic validation listens on 80 (http) or 443 (alpn). node_add sets
+# cert_avoid_port when the node being deployed will itself listen on one of them.
+cert_auto_mode() {
+    if [[ ${cert_avoid_port:-} != 80 && -z $(ss -H -ltn 'sport = :80') ]]; then printf 'http\n'
+    elif [[ ${cert_avoid_port:-} != 443 && -z $(ss -H -ltn 'sport = :443') ]]; then printf 'alpn\n'
+    else return 1; fi
+}
+# TCP port that renewing DOMAIN needs: the recorded one, else what acme.sh saved.
+cert_challenge_port() {
+    local domain=$1 port=80 account=$SRM_ROOT/acme-accounts/$1
+    if [[ -f $account/challenge-port ]]; then
+        read -r port < "$account/challenge-port" || return 1
+    elif grep -q "^Le_Webroot='alpn'" "$account/${domain}_ecc/$domain.conf" 2>/dev/null; then port=443; fi
+    printf '%s\n' "$port"
+}
+# A TCP node must not take the port a renewed certificate validates on, or every
+# renewal fails until the certificate expires. Checks the certificates of current
+# nodes plus an optional DOMAIN about to be used.
+cert_port_ok() {
+    local port=$1 transport=$2 domain
+    [[ $transport == tcp ]] || return 0
+    while IFS= read -r domain; do
+        [[ -n $domain && $(certificate_source "$domain") == acme ]] || continue
+        if [[ $(cert_challenge_port "$domain") == "$port" ]]; then
+            err "TCP $port 要留给证书 $domain 自动续期验证，节点不能占用；请换一个端口。"; return 1
+        fi
+    done < <({ [[ ! -f $STATE ]] || jq -r '.nodes[]|select(.cert_dir != null)|.sni' "$STATE"; printf '%s\n' "${3:-}"; } | sort -u)
+}
 install_renew_timer() {
     cat > /etc/systemd/system/srm-renew.service <<UNIT
 [Unit]
@@ -1114,26 +1138,31 @@ routing_menu() {
         domains=$(platform_domains "$name") || domains=''
         ask '匹配域名后缀，空格分隔（会显示完整范围）' "$domains" || return 0; domains=$REPLY
         ask '方式：dns 或 proxy' dns || return 0; mode=$REPLY
-        routing_scope_select || return 0; scope=$REPLY
+        routing_scope_select "$name" || return 0; scope=$REPLY
         routing_change add "$name" "$mode" "$domains" ${scope:+--nodes "$scope"};;
       5) ask '要删除的规则名称' || return 0; routing_change del "$REPLY";;
       *) err '无效选项。'; return 1;;
     esac
 }
-# Picks the nodes a rule applies to by menu number; REPLY = comma-separated
-# node IDs, or empty for every node (the default).
+# Picks the nodes rule NAME applies to by menu number. REPLY = comma-separated
+# node IDs, "all" for every node, or empty to keep an existing rule's scope
+# (every node for a new rule). Replacing a rule offers its current nodes first.
 routing_scope_select() {
-    local count index=0 name type port picks pick ids=''
+    local count index=0 name type port picks pick ids='' current default=全部
     count=$(jq '.nodes|length' "$STATE") || return 1
     REPLY=''
     (( count > 1 )) || return 0
+    current=$(jq -r --arg name "$1" '. as $s | .policies[]|select(.name==$name and .inbounds)|
+      [.inbounds[] as $i | $s.nodes|map(.id)|index($i)+1|tostring]|join(" ")' "$STATE") || return 1
+    [[ -z $current ]] || default=$current
     msg '作用范围（可以只让部分节点走这条规则）：'
     while IFS=$'\t' read -r name type port; do
         index=$((index+1))
         printf '  %s. %s | %s | 端口 %s\n' "$index" "$name" "$type" "$port"
     done < <(jq -r '.nodes[]|[.name,.type,(.port|tostring)]|@tsv' "$STATE")
-    ask '节点序号，多个用空格分隔（回车 = 全部节点）' 全部 || return 1
-    [[ $REPLY != 全部 ]] || { REPLY=''; return 0; }
+    ask "节点序号，多个用空格分隔（输入「全部」= 所有节点）" "$default" || return 1
+    [[ $REPLY != 全部 ]] || { REPLY=all; return 0; }
+    [[ $REPLY =~ ^[0-9\ ]+$ ]] || { err "请输入 1–$count 的序号。"; return 1; }
     picks=$REPLY
     for pick in $picks; do
         [[ $pick =~ ^[1-9][0-9]{0,5}$ ]] && (( pick <= count )) || { err "请输入 1–$count 的序号。"; return 1; }
@@ -1152,7 +1181,9 @@ routing_node_ids() {
 }
 # Non-interactive routing changes, shared with the menu:
 #   dns IP | egress HOST PORT [USER] (password read from stdin) | del NAME
-#   add NAME dns|proxy DOMAIN… [--nodes ID,ID…]  (--nodes limits the rule to those nodes)
+#   add NAME dns|proxy DOMAIN… [--nodes ID,ID…|all]
+#     --nodes limits the rule to those nodes, "all" makes it apply to every node;
+#     without it a replaced rule keeps its nodes and a new rule applies to every node.
 # Domain arguments may also hold several space-separated suffixes.
 routing_change() {
     local op=${1:-} candidate tmp host port user pass='' name mode domains nodes='' rc=1 max=0 arg suffixes=()
@@ -1185,12 +1216,14 @@ routing_change() {
             if [[ $arg == --nodes ]]; then nodes=${1:-,}; shift $(( $# ? 1 : 0 ))
             else suffixes+=("$arg"); fi
         done
-        if [[ -z $name ]] || (( ${#suffixes[@]} == 0 )); then err '用法：srm routing add 名称 dns|proxy 域名后缀… [--nodes 节点ID,…]'
+        if [[ -z $name ]] || (( ${#suffixes[@]} == 0 )); then err '用法：srm routing add 名称 dns|proxy 域名后缀… [--nodes 节点ID,…|all]'
         elif [[ $mode != dns && $mode != proxy ]]; then err '方式只能是 dns 或 proxy。'
-        elif [[ -n $nodes ]] && ! nodes=$(routing_node_ids "$candidate" "$nodes"); then :
+        elif [[ -n $nodes && $nodes != all ]] && ! nodes=$(routing_node_ids "$candidate" "$nodes"); then :
         else
+            [[ -n $nodes ]] || nodes=$(jq -c --arg name "$name" 'first(.policies[]|select(.name==$name)|.inbounds) // null' "$candidate") || nodes=null
+            [[ $nodes != all ]] || nodes=null
             domains=$(printf '%s\n' "${suffixes[@]}" | jq -Rsc 'split("\n")|map(split(" ")[])|map(select(length>0)|ascii_downcase)|unique') &&
-            jq --arg name "$name" --arg mode "$mode" --argjson domains "$domains" --argjson nodes "${nodes:-null}" '
+            jq --arg name "$name" --arg mode "$mode" --argjson domains "$domains" --argjson nodes "$nodes" '
               .policies=(.policies|map(select(.name!=$name)))+[{name:$name,mode:$mode,domains:$domains} + (if $nodes then {inbounds:$nodes} else {} end)]' "$candidate" > "$tmp" &&
             routing_check_conflicts "$tmp" "$name" && rc=0
         fi;;
@@ -1212,7 +1245,7 @@ routing_change() {
 # node_add SELF [TYPE] [--name N] [--host H] [--port P|random] [--sni D] [--cert auto|webroot|import]
 #          [--webroot DIR] [--cert-file F] [--key-file F] [--email E] [--bbr enable|keep] [--yes]
 node_add() {
-    local self=$1 type='' name host port sni='' bbr=keep candidate node id tmp transport var assume_yes=0
+    local self=$1 type='' name host port sni='' bbr=keep candidate node id tmp transport var assume_yes=0 cert_avoid_port=''
     local opt_name='' opt_host='' opt_port='' opt_sni='' opt_cert='' opt_webroot='' opt_cert_file='' opt_key_file='' opt_email='' opt_bbr=''
     # Protocol prompt hooks fill these.
     local mode=none email='' webroot='' cert='' key=''
@@ -1255,8 +1288,13 @@ node_add() {
     [[ -f $SRM_ROOT/.srm-owned ]] || setup "$self" || return 1
     ensure_dependencies || return 1
     if [[ $port == random ]]; then port=$(choose_port) || return 1; else port_free "$port" || { err '端口被占用，原服务未改动。'; return 1; }; fi
+    transport=$(proto_call "$type" transport) || return 1
+    cert_port_ok "$port" "$transport" || return 1
+    [[ $transport != tcp ]] || cert_avoid_port=$port
     id=$(random_hex 8) || return 1
     proto_call "$type" create || return 1
+    # A reused certificate may validate on this node's port.
+    cert_port_ok "$port" "$transport" "$sni" || return 1
     node=$(jq -n --arg id "$id" --arg name "$name" --arg host "$host" --arg sni "$sni" --arg type "$type" --argjson port "$port" --argjson fields "$REPLY" \
         '{id:$id,name:$name,host:$host,sni:$sni,port:$port,type:$type,enabled:true} + $fields') || return 1
     if [[ $(sysctl -n net.ipv6.conf.all.disable_ipv6 2>/dev/null) == 1 ]]; then
@@ -1270,7 +1308,7 @@ node_add() {
         if [[ $bbr == enable ]]; then
             if [[ $(sysctl -n net.ipv4.tcp_congestion_control) == bbr ]]; then msg 'BBR 已开启。'; else bbr_enable || msg '节点已部署；BBR 未启用，原因见上方。'; fi
         fi
-        transport=$(proto_call "$type" transport | tr '[:lower:]' '[:upper:]')
+        transport=$(printf '%s' "$transport" | tr '[:lower:]' '[:upper:]')
         msg "节点 ID：$id"
         msg "节点端口：${port}/${transport}；如仍无法连接，请在服务商控制台的云安全组允许 ${transport} ${port}。"
         printf '%s' "$node" | share_uri
@@ -1323,6 +1361,7 @@ node_change() {
       toggle)
         if [[ $(printf '%s' "$node" | jq -r .enabled) == false ]]; then
             port_free "$(printf '%s' "$node" | jq -r .port)" "$id" || { rm -f "$tmp" "$candidate"; err '端口被占用，无法启用。'; return 1; }
+            cert_port_ok "$(printf '%s' "$node" | jq -r .port)" "$(proto_call "$type" transport)" || { rm -f "$tmp" "$candidate"; return 1; }
         fi
         jq --arg id "$id" '(.nodes[]|select(.id==$id)|.enabled) |= not' "$candidate" > "$tmp";;
       delete)
@@ -1332,6 +1371,7 @@ node_change() {
           .policies |= map(if .inbounds then .inbounds -= [$id] else . end | select(.inbounds != []))' "$candidate" > "$tmp";;
       port)
         port_free "$value" "$id" || { rm -f "$tmp" "$candidate"; err '端口无效或被占用。'; return 1; }
+        cert_port_ok "$value" "$(proto_call "$type" transport)" || { rm -f "$tmp" "$candidate"; return 1; }
         jq --arg id "$id" --argjson p "$value" '(.nodes[]|select(.id==$id)|.port)=$p' "$candidate" > "$tmp";;
       name)
         [[ -n $value ]] || { rm -f "$tmp" "$candidate"; err '名称不能为空。'; return 1; }
@@ -1508,8 +1548,9 @@ srm $SRM_VERSION：sing-box 节点管理（$(proto_labels)）
   srm routing [show]      流媒体分流菜单；show 只查看
   srm routing dns IP      设置解锁 DNS
   srm routing egress 地址 [端口] [用户名]   设置 SOCKS5 代理出口；有用户名时从标准输入读密码
-  srm routing add 名称 dns|proxy 域名… [--nodes ID,…]
-                          添加或替换平台规则（netflix.com 等域名后缀）；--nodes 只对这些节点生效
+  srm routing add 名称 dns|proxy 域名… [--nodes ID,…|all]
+                          添加或替换平台规则（netflix.com 等域名后缀）；--nodes 只对这些节点生效，
+                          all 对所有节点；不写时替换的规则保留原来的节点
   srm routing del 名称    删除平台规则
   srm certs [status]      证书管理；status 只查看
   srm renew               检查证书续期

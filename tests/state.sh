@@ -126,6 +126,12 @@ routing_change add Video proxy youtube.com --nodes 2222222222222222,111111111111
 jq -e '.policies[-1]=={name:"Video",mode:"proxy",domains:["youtube.com"],inbounds:["1111111111111111","2222222222222222"]}' "$STATE" >/dev/null || fail 'stored inbounds'
 routing_change add Video proxy --nodes 2222222222222222 googlevideo.com youtube.com > /dev/null || fail '--nodes before domains'
 jq -e '.policies[-1]=={name:"Video",mode:"proxy",domains:["googlevideo.com","youtube.com"],inbounds:["2222222222222222"]}' "$STATE" >/dev/null || fail 'replace scoped rule'
+# Replacing a rule without --nodes keeps its nodes; only "all" widens it on purpose.
+routing_change add Video proxy youtube.com > /dev/null || fail 'replace without --nodes'
+jq -e '.policies[-1]=={name:"Video",mode:"proxy",domains:["youtube.com"],inbounds:["2222222222222222"]}' "$STATE" >/dev/null || fail 'replacement widened the rule'
+routing_change add Video proxy youtube.com --nodes all > /dev/null || fail '--nodes all'
+jq -e '.policies[-1]=={name:"Video",mode:"proxy",domains:["youtube.com"]}' "$STATE" >/dev/null || fail '--nodes all should make the rule global'
+routing_change add Video proxy youtube.com --nodes 2222222222222222 > /dev/null || fail 'scope again'
 before=$(sha256 "$STATE")
 for bad in 'add X dns a.com --nodes 9999999999999999' 'add X dns a.com --nodes' 'add X dns a.com --nodes ,' 'add X dns --nodes 1111111111111111'; do
     # shellcheck disable=SC2086 # split the argument list
@@ -142,8 +148,14 @@ grep -q '1. r1 | vless | 端口 18101' "$work/out" || fail 'menu lists nodes'
 jq -e '.policies[]|select(.name=="N2")|.inbounds==["1111111111111111","3333333333333333"]' "$STATE" >/dev/null || fail 'menu stored inbounds'
 routing_menu <<< $'4\nN3\nhulu.com\ndns\n' > /dev/null 2>&1 || fail 'menu default scope'
 jq -e '.policies[]|select(.name=="N3")|has("inbounds")|not' "$STATE" >/dev/null || fail 'Enter should mean every node'
+# Replacing a scoped rule from the menu offers its current nodes as the default.
+routing_menu <<< $'4\nN2\nnetflix.com nflxvideo.net\ndns\n' > "$work/out" 2>&1 || fail 'menu replace'
+grep -q '\[1 3\]' "$work/out" || fail 'current nodes not offered as default'
+jq -e '.policies[]|select(.name=="N2")|.inbounds==["1111111111111111","3333333333333333"] and .domains==["netflix.com","nflxvideo.net"]' "$STATE" >/dev/null || fail 'menu replace widened the rule'
+routing_menu <<< $'4\nN2\nnetflix.com\ndns\n全部' > /dev/null 2>&1 || fail 'menu choose all'
+jq -e '.policies[]|select(.name=="N2")|has("inbounds")|not' "$STATE" >/dev/null || fail 'choosing 全部 should make the rule global'
 before=$(sha256 "$STATE")
-for bad in '4' '1 9' 'x'; do
+for bad in '4' '1 9' 'x' '*' '1,2'; do
     routing_menu <<< $'4\nN4\nmax.com\ndns\n'"$bad" > "$work/out" 2>&1 || true
     grep -q '请输入 1–3 的序号' "$work/out" || fail "no message for node choice $bad"
 done
@@ -197,3 +209,39 @@ node_add self vless --host 192.0.2.1 --yes > /dev/null 2>&1 || fail 'another vle
 [[ $(jq '[.nodes[]|select(.type=="vless")]|length' "$STATE") == 6 ]] || fail 'six vless nodes'
 jq -e '[.nodes[].port]|length==(unique|length)' "$STATE" >/dev/null || fail 'ports unique'
 echo 'PASS repeated deploys of one protocol give independent nodes with numbered default names'
+
+# Certificate renewal validates on TCP 80 or 443. A TCP node may not take the
+# port a renewed certificate needs; UDP nodes and other ports are fine.
+jq '.nodes += [{id:"4444444444444444",name:"a",type:"anytls",enabled:true,host:"192.0.2.1",port:18104,sni:"test.example.com",password:"pw",cert_dir:"/certs"}]' "$work/v2.json" > "$STATE"
+mkdir -p "$DATA/certs/test.example.com/active" "$SRM_ROOT/acme-accounts/test.example.com"
+printf 'acme\n' > "$DATA/certs/test.example.com/active/renewal-source"
+printf '443\n' > "$SRM_ROOT/acme-accounts/test.example.com/challenge-port"
+if cert_port_ok 443 tcp 2> "$work/err"; then fail 'renewal port accepted for tcp'; fi
+grep -q 'TCP 443 要留给证书 test.example.com 自动续期验证' "$work/err" || fail 'renewal port message'
+cert_port_ok 443 udp || fail 'udp node on 443 refused'
+cert_port_ok 80 tcp || fail '80 refused although renewal uses 443'
+before=$(sha256 "$STATE")
+if node_add self vless --host 192.0.2.1 --port 443 --yes > /dev/null 2>&1; then fail 'deploy on renewal port accepted'; fi
+if node_change 1111111111111111 port 443 > /dev/null 2>&1; then fail 'move onto renewal port accepted'; fi
+[[ $(sha256 "$STATE") == "$before" ]] || fail 'renewal-port refusals modified state'
+issue_certificate() { :; }
+node_add self hysteria2 --host 192.0.2.1 --port 443 --sni test.example.com --yes > /dev/null 2>&1 || fail 'udp node on 443'
+# A certificate issued (or reused) during deploy that validates on the node's own
+# port is caught after issuing, before anything is applied.
+issue_certificate() {
+    mkdir -p "$DATA/certs/$1/active" "$SRM_ROOT/acme-accounts/$1"
+    printf 'acme\n' > "$DATA/certs/$1/active/renewal-source"
+    printf '80\n' > "$SRM_ROOT/acme-accounts/$1/challenge-port"
+}
+before=$(sha256 "$STATE")
+if node_add self anytls --host 192.0.2.1 --port 80 --sni new.example.com --yes > "$work/out" 2>&1; then fail 'node on its own renewal port accepted'; fi
+grep -q 'TCP 80 要留给证书 new.example.com' "$work/out" || fail 'post-issue message'
+[[ $(sha256 "$STATE") == "$before" ]] || fail 'post-issue refusal modified state'
+# Automatic validation steers clear of the port the new node will use.
+cert_avoid_port=''; [[ $(cert_auto_mode) == http ]] || fail 'auto mode default'
+cert_avoid_port=80; [[ $(cert_auto_mode) == alpn ]] || fail 'auto mode avoids 80'
+cert_avoid_port=443; [[ $(cert_auto_mode) == http ]] || fail 'auto mode avoids 443'
+ss() { [[ $* == *':80'* ]] && printf 'LISTEN 0 0 *:80 *:*\n'; return 0; }
+if cert_avoid_port=443 cert_auto_mode > /dev/null; then fail 'auto mode picked a busy or reserved port'; fi
+cert_avoid_port=''
+echo 'PASS TCP nodes cannot take a certificate renewal port; automatic validation avoids the new node port'

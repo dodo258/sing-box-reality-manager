@@ -2,7 +2,7 @@
 # node_add SELF [TYPE] [--name N] [--host H] [--port P|random] [--sni D] [--cert auto|webroot|import]
 #          [--webroot DIR] [--cert-file F] [--key-file F] [--email E] [--bbr enable|keep] [--yes]
 node_add() {
-    local self=$1 type='' name host port sni='' bbr=keep candidate node id tmp transport var assume_yes=0
+    local self=$1 type='' name host port sni='' bbr=keep candidate node id tmp transport var assume_yes=0 cert_avoid_port=''
     local opt_name='' opt_host='' opt_port='' opt_sni='' opt_cert='' opt_webroot='' opt_cert_file='' opt_key_file='' opt_email='' opt_bbr=''
     # Protocol prompt hooks fill these.
     local mode=none email='' webroot='' cert='' key=''
@@ -45,8 +45,13 @@ node_add() {
     [[ -f $SRM_ROOT/.srm-owned ]] || setup "$self" || return 1
     ensure_dependencies || return 1
     if [[ $port == random ]]; then port=$(choose_port) || return 1; else port_free "$port" || { err '端口被占用，原服务未改动。'; return 1; }; fi
+    transport=$(proto_call "$type" transport) || return 1
+    cert_port_ok "$port" "$transport" || return 1
+    [[ $transport != tcp ]] || cert_avoid_port=$port
     id=$(random_hex 8) || return 1
     proto_call "$type" create || return 1
+    # A reused certificate may validate on this node's port.
+    cert_port_ok "$port" "$transport" "$sni" || return 1
     node=$(jq -n --arg id "$id" --arg name "$name" --arg host "$host" --arg sni "$sni" --arg type "$type" --argjson port "$port" --argjson fields "$REPLY" \
         '{id:$id,name:$name,host:$host,sni:$sni,port:$port,type:$type,enabled:true} + $fields') || return 1
     if [[ $(sysctl -n net.ipv6.conf.all.disable_ipv6 2>/dev/null) == 1 ]]; then
@@ -60,7 +65,7 @@ node_add() {
         if [[ $bbr == enable ]]; then
             if [[ $(sysctl -n net.ipv4.tcp_congestion_control) == bbr ]]; then msg 'BBR 已开启。'; else bbr_enable || msg '节点已部署；BBR 未启用，原因见上方。'; fi
         fi
-        transport=$(proto_call "$type" transport | tr '[:lower:]' '[:upper:]')
+        transport=$(printf '%s' "$transport" | tr '[:lower:]' '[:upper:]')
         msg "节点 ID：$id"
         msg "节点端口：${port}/${transport}；如仍无法连接，请在服务商控制台的云安全组允许 ${transport} ${port}。"
         printf '%s' "$node" | share_uri
@@ -113,6 +118,7 @@ node_change() {
       toggle)
         if [[ $(printf '%s' "$node" | jq -r .enabled) == false ]]; then
             port_free "$(printf '%s' "$node" | jq -r .port)" "$id" || { rm -f "$tmp" "$candidate"; err '端口被占用，无法启用。'; return 1; }
+            cert_port_ok "$(printf '%s' "$node" | jq -r .port)" "$(proto_call "$type" transport)" || { rm -f "$tmp" "$candidate"; return 1; }
         fi
         jq --arg id "$id" '(.nodes[]|select(.id==$id)|.enabled) |= not' "$candidate" > "$tmp";;
       delete)
@@ -122,6 +128,7 @@ node_change() {
           .policies |= map(if .inbounds then .inbounds -= [$id] else . end | select(.inbounds != []))' "$candidate" > "$tmp";;
       port)
         port_free "$value" "$id" || { rm -f "$tmp" "$candidate"; err '端口无效或被占用。'; return 1; }
+        cert_port_ok "$value" "$(proto_call "$type" transport)" || { rm -f "$tmp" "$candidate"; return 1; }
         jq --arg id "$id" --argjson p "$value" '(.nodes[]|select(.id==$id)|.port)=$p' "$candidate" > "$tmp";;
       name)
         [[ -n $value ]] || { rm -f "$tmp" "$candidate"; err '名称不能为空。'; return 1; }

@@ -76,8 +76,9 @@ srm $SRM_VERSION：sing-box 节点管理（$(proto_labels)）
   srm routing [show]      流媒体分流菜单；show 只查看
   srm routing dns IP      设置解锁 DNS
   srm routing egress 地址 [端口] [用户名]   设置 SOCKS5 代理出口；有用户名时从标准输入读密码
-  srm routing add 名称 dns|proxy 域名… [--nodes ID,…]
-                          添加或替换平台规则（netflix.com 等域名后缀）；--nodes 只对这些节点生效
+  srm routing add 名称 dns|proxy 域名… [--nodes ID,…|all]
+                          添加或替换平台规则（netflix.com 等域名后缀）；--nodes 只对这些节点生效，
+                          all 对所有节点；不写时替换的规则保留原来的节点
   srm routing del 名称    删除平台规则
   srm certs [status]      证书管理；status 只查看
   srm renew               检查证书续期

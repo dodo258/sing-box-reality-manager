@@ -58,26 +58,31 @@ routing_menu() {
         domains=$(platform_domains "$name") || domains=''
         ask '匹配域名后缀，空格分隔（会显示完整范围）' "$domains" || return 0; domains=$REPLY
         ask '方式：dns 或 proxy' dns || return 0; mode=$REPLY
-        routing_scope_select || return 0; scope=$REPLY
+        routing_scope_select "$name" || return 0; scope=$REPLY
         routing_change add "$name" "$mode" "$domains" ${scope:+--nodes "$scope"};;
       5) ask '要删除的规则名称' || return 0; routing_change del "$REPLY";;
       *) err '无效选项。'; return 1;;
     esac
 }
-# Picks the nodes a rule applies to by menu number; REPLY = comma-separated
-# node IDs, or empty for every node (the default).
+# Picks the nodes rule NAME applies to by menu number. REPLY = comma-separated
+# node IDs, "all" for every node, or empty to keep an existing rule's scope
+# (every node for a new rule). Replacing a rule offers its current nodes first.
 routing_scope_select() {
-    local count index=0 name type port picks pick ids=''
+    local count index=0 name type port picks pick ids='' current default=全部
     count=$(jq '.nodes|length' "$STATE") || return 1
     REPLY=''
     (( count > 1 )) || return 0
+    current=$(jq -r --arg name "$1" '. as $s | .policies[]|select(.name==$name and .inbounds)|
+      [.inbounds[] as $i | $s.nodes|map(.id)|index($i)+1|tostring]|join(" ")' "$STATE") || return 1
+    [[ -z $current ]] || default=$current
     msg '作用范围（可以只让部分节点走这条规则）：'
     while IFS=$'\t' read -r name type port; do
         index=$((index+1))
         printf '  %s. %s | %s | 端口 %s\n' "$index" "$name" "$type" "$port"
     done < <(jq -r '.nodes[]|[.name,.type,(.port|tostring)]|@tsv' "$STATE")
-    ask '节点序号，多个用空格分隔（回车 = 全部节点）' 全部 || return 1
-    [[ $REPLY != 全部 ]] || { REPLY=''; return 0; }
+    ask "节点序号，多个用空格分隔（输入「全部」= 所有节点）" "$default" || return 1
+    [[ $REPLY != 全部 ]] || { REPLY=all; return 0; }
+    [[ $REPLY =~ ^[0-9\ ]+$ ]] || { err "请输入 1–$count 的序号。"; return 1; }
     picks=$REPLY
     for pick in $picks; do
         [[ $pick =~ ^[1-9][0-9]{0,5}$ ]] && (( pick <= count )) || { err "请输入 1–$count 的序号。"; return 1; }
@@ -96,7 +101,9 @@ routing_node_ids() {
 }
 # Non-interactive routing changes, shared with the menu:
 #   dns IP | egress HOST PORT [USER] (password read from stdin) | del NAME
-#   add NAME dns|proxy DOMAIN… [--nodes ID,ID…]  (--nodes limits the rule to those nodes)
+#   add NAME dns|proxy DOMAIN… [--nodes ID,ID…|all]
+#     --nodes limits the rule to those nodes, "all" makes it apply to every node;
+#     without it a replaced rule keeps its nodes and a new rule applies to every node.
 # Domain arguments may also hold several space-separated suffixes.
 routing_change() {
     local op=${1:-} candidate tmp host port user pass='' name mode domains nodes='' rc=1 max=0 arg suffixes=()
@@ -129,12 +136,14 @@ routing_change() {
             if [[ $arg == --nodes ]]; then nodes=${1:-,}; shift $(( $# ? 1 : 0 ))
             else suffixes+=("$arg"); fi
         done
-        if [[ -z $name ]] || (( ${#suffixes[@]} == 0 )); then err '用法：srm routing add 名称 dns|proxy 域名后缀… [--nodes 节点ID,…]'
+        if [[ -z $name ]] || (( ${#suffixes[@]} == 0 )); then err '用法：srm routing add 名称 dns|proxy 域名后缀… [--nodes 节点ID,…|all]'
         elif [[ $mode != dns && $mode != proxy ]]; then err '方式只能是 dns 或 proxy。'
-        elif [[ -n $nodes ]] && ! nodes=$(routing_node_ids "$candidate" "$nodes"); then :
+        elif [[ -n $nodes && $nodes != all ]] && ! nodes=$(routing_node_ids "$candidate" "$nodes"); then :
         else
+            [[ -n $nodes ]] || nodes=$(jq -c --arg name "$name" 'first(.policies[]|select(.name==$name)|.inbounds) // null' "$candidate") || nodes=null
+            [[ $nodes != all ]] || nodes=null
             domains=$(printf '%s\n' "${suffixes[@]}" | jq -Rsc 'split("\n")|map(split(" ")[])|map(select(length>0)|ascii_downcase)|unique') &&
-            jq --arg name "$name" --arg mode "$mode" --argjson domains "$domains" --argjson nodes "${nodes:-null}" '
+            jq --arg name "$name" --arg mode "$mode" --argjson domains "$domains" --argjson nodes "$nodes" '
               .policies=(.policies|map(select(.name!=$name)))+[{name:$name,mode:$mode,domains:$domains} + (if $nodes then {inbounds:$nodes} else {} end)]' "$candidate" > "$tmp" &&
             routing_check_conflicts "$tmp" "$name" && rc=0
         fi;;
