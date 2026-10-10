@@ -6,9 +6,9 @@
 
 从上往下做。正在做的条目后面标「（进行中：分支名 时间）」。
 
-- [ ] v4 iptables 规则开机自动补回（没有 netfilter-persistent 的系统）—— 来源：2026-10-10 iptables 后端审查（PR #13）。没装 netfilter-persistent 时，srm 加的 iptables 规则重启后就没了，而系统自己的 REJECT 可能由别的方式恢复，节点要等下次改节点或手动同步才通；现在只打印提示。要做：srm.service 启动前（如 ExecStartPre 或单独的 oneshot）按当前 state 同步一次防火墙端口规则，失败不阻止服务启动。验收：测试断言单元里有这一步、规则缺失时启动后补回；install-live 里真实 systemd 跑通；CI 全绿。提示：srm.service 已有 `ExecStartPre=-+/opt/srm/manager.sh hop-sync`（2392455，端口跳跃用，不占 srm 主锁、只读当前那一代的 state），可以把它扩展成同步全部防火墙规则，旧单元的补写机制见 `service_unit_write`。（进行中：agent/1011-fw-boot-sync 2026-10-11 01:54）
-
 - [ ] tests/traffic.sh 的 mihomo 流量测试偶发失败 —— 来源：2026-10-11 main 上 2392455 的 CI（run 38073278751）报「FAIL mihomo through vless-httpupgrade」，mihomo 启动后约 0.2 秒就被关掉、没取到页面；同样代码的 PR #16 三次 CI 和紧接着的 401da53 都通过，和端口跳跃无关。可能是 wait_port 只等端口监听、mihomo 还没准备好出站，或 fetch_via 超时太短。要做：查清原因，给 mihomo 那段加就绪等待或有限次重试（只针对启动竞态，不放松断言）。验收：本机或 CI 连跑 traffic.sh 多次不再出现；CI 全绿。
+
+- [ ] UFW / firewalld 临时停用时不清掉 srm 的规则记录 —— 来源：2026-10-11 PR #17 审查。`firewall_sync` 检测到没有活动防火墙（backend none）时，会把别的后端的记录和规则当作多余删掉；用户临时 `ufw disable` 后再开启，节点就被挡。以前只在改节点时发生，现在 srm.service 每次启动（含崩溃自动重启）都同步，更容易碰到。要做：backend 为 none 时保留 ufw / firewalld 的记录（只清 iptables 这类运行时规则的失效记录），重新启用后下一次同步照常。验收：测试覆盖 ufw 停用 → 同步 → 启用后规则仍在；CI 全绿。
 
 ## 等主人拍板
 
@@ -27,6 +27,11 @@
 - [ ] 证书支持 DNS API（Cloudflare / 阿里云）和通配符证书 —— 来源：对比 mack-a（M 2050 起，可选 CA 1998）。80 和 443 都被挡的用户现在只能手动导入证书。新手用得少，先不做。
 
 ## 已完成
+
+- [x] v4 iptables 规则开机自动补回 —— 2026-10-11 合并，提交 ec56f37（PR #17）。
+  - srm.service 每次启动前（含开机）运行 `firewall-restore`：主锁空闲时按当前节点完整同步防火墙端口规则和端口跳跃转发；正在应用配置等操作持锁时只补转发，端口规则由那个操作同步；失败不挡服务启动。`hop-sync` 留作旧名；已装好的服务器下次改节点时自动更新单元。
+  - 验收：在没有 netfilter-persistent、INPUT 末尾有 REJECT 的服务器（如 Oracle 镜像）上部署节点后重启服务器，`iptables -S INPUT` 里仍有注释 srm 的放行规则、节点能连；`systemctl show -p ExecStartPre srm.service` 里有 `firewall-restore`。
+  - 没验证：真机重启（CI 用真实 systemd 删规则后重启服务验证）。
 
 - [x] v4 Hysteria2 端口跳跃 —— 2026-10-11 合并，提交 2392455（PR #16）。
   - 部署 Hysteria2 时多一问「端口跳跃（运营商限制 UDP、单个端口被限速时用）」：回车 / 1 = 不开，2 = 20000 起第一段空闲的 1000 个端口，3 = 自己填；之后问端口，节点名用默认值。命令行 `srm add hysteria2 --hop off|auto|起-止`。
