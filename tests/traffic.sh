@@ -139,7 +139,7 @@ if [[ -n ${TEST_MIHOMO:-} ]]; then
     wait_mihomo_routing() {
         local i
         for ((i=0; i<50; i++)); do
-            [[ $(fetch_via 127.0.0.1:18296) == srm-traffic-ok ]] && return 0
+            [[ $(curl --noproxy '' --silent --max-time 2 --socks5-hostname 127.0.0.1:18296 http://127.0.0.1:18299/) == srm-traffic-ok ]] && return 0
             sleep 0.2
         done
         return 1
@@ -158,7 +158,8 @@ if [[ -n ${TEST_MIHOMO:-} ]]; then
             "$proxy" "$name" > "$work/mihomo/config.yaml"
         "$TEST_MIHOMO" -t -d "$work/mihomo" > "$work/mihomo-check.log" 2>&1 || { cat "$work/mihomo/config.yaml" "$work/mihomo-check.log"; fail "mihomo rejected the $name snippet"; }
         "$TEST_MIHOMO" -d "$work/mihomo" > "$work/mihomo.log" 2>&1 & mihomo_pid=$!; pids+=("$mihomo_pid")
-        wait_port 18297 && wait_mihomo_routing || { cat "$work/mihomo.log"; fail "mihomo did not start for $name"; }
+        wait_port 18297 || { cat "$work/mihomo.log"; fail "mihomo did not start for $name"; }
+        wait_mihomo_routing || { cat "$work/mihomo.log"; fail "mihomo never started routing for $name"; }
         page=$(fetch_via 127.0.0.1:18297) || true
         kill "$mihomo_pid"; wait "$mihomo_pid" 2>/dev/null || true
         [[ $page == srm-traffic-ok ]] || { cat "$work/mihomo/config.yaml" "$work/mihomo.log"; printf '%s\n' "$page"; fail "mihomo through $name"; }
