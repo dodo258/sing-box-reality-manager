@@ -235,7 +235,7 @@ issue_certificate() {
 }
 before=$(sha256 "$STATE")
 if node_add self anytls --host 192.0.2.1 --port 80 --sni new.example.com --yes > "$work/out" 2>&1; then fail 'node on its own renewal port accepted'; fi
-grep -q 'TCP 80 要留给证书 new.example.com' "$work/out" || fail 'post-issue message'
+grep -q 'TCP 80 要留给证书 new.example.com' "$work/out" && grep -q '换一个端口重新部署时会直接复用' "$work/out" || fail 'post-issue message'
 [[ $(sha256 "$STATE") == "$before" ]] || fail 'post-issue refusal modified state'
 # Automatic validation steers clear of the port the new node will use.
 cert_avoid_port=''; [[ $(cert_auto_mode) == http ]] || fail 'auto mode default'
@@ -244,4 +244,9 @@ cert_avoid_port=443; [[ $(cert_auto_mode) == http ]] || fail 'auto mode avoids 4
 ss() { [[ $* == *':80'* ]] && printf 'LISTEN 0 0 *:80 *:*\n'; return 0; }
 if cert_avoid_port=443 cert_auto_mode > /dev/null; then fail 'auto mode picked a busy or reserved port'; fi
 cert_avoid_port=''
+# A stopped TCP node on 443 still owns it; a UDP node on 443 does not.
+jq '.nodes[0].port=443 | .nodes[0].enabled=false' "$work/v2.json" > "$STATE"
+if cert_auto_mode > /dev/null; then fail 'auto mode took the port of a stopped TCP node'; fi
+jq '.nodes += [{id:"5555555555555555",name:"h",type:"hysteria2",enabled:true,host:"192.0.2.1",port:443,sni:"test.example.com",password:"pw",cert_dir:"/certs"}]' "$work/v2.json" > "$STATE"
+[[ $(cert_auto_mode) == alpn ]] || fail 'UDP node on 443 should not block alpn'
 echo 'PASS TCP nodes cannot take a certificate renewal port; automatic validation avoids the new node port'

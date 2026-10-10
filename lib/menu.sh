@@ -51,7 +51,9 @@ node_add() {
     id=$(random_hex 8) || return 1
     proto_call "$type" create || return 1
     # A reused certificate may validate on this node's port.
-    cert_port_ok "$port" "$transport" "$sni" || return 1
+    if [[ -n $(jq -r '.cert_dir // empty' <<< "$REPLY") ]] && ! cert_port_ok "$port" "$transport" "$sni"; then
+        msg '证书已经申请好，换一个端口重新部署时会直接复用。'; return 1
+    fi
     node=$(jq -n --arg id "$id" --arg name "$name" --arg host "$host" --arg sni "$sni" --arg type "$type" --argjson port "$port" --argjson fields "$REPLY" \
         '{id:$id,name:$name,host:$host,sni:$sni,port:$port,type:$type,enabled:true} + $fields') || return 1
     if [[ $(sysctl -n net.ipv6.conf.all.disable_ipv6 2>/dev/null) == 1 ]]; then

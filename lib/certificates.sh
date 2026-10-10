@@ -102,11 +102,17 @@ issue_certificate() (
     if [[ $rc != 0 && $rc != 2 ]]; then err "证书申请失败。日志：$SRM_ROOT/acme-accounts/$domain/issue.log（分享前请检查敏感信息）。"; exit 1; fi
     copy_acme_cert "$domain" && install_renew_timer
 )
-# Automatic validation listens on 80 (http) or 443 (alpn). node_add sets
-# cert_avoid_port when the node being deployed will itself listen on one of them.
+# Automatic validation listens on 80 (http) or 443 (alpn). A port is not free if
+# anything listens on it, a TCP node owns it (even a stopped one), or it is
+# cert_avoid_port, set by node_add for the TCP node being deployed.
 cert_auto_mode() {
-    if [[ ${cert_avoid_port:-} != 80 && -z $(ss -H -ltn 'sport = :80') ]]; then printf 'http\n'
-    elif [[ ${cert_avoid_port:-} != 443 && -z $(ss -H -ltn 'sport = :443') ]]; then printf 'alpn\n'
+    local taken=" ${cert_avoid_port:-} "
+    if [[ -f $STATE ]]; then
+        taken+=$(jq -r "[.nodes[]|select(($(proto_jq_transport)) == \"tcp\")|.port|tostring]|join(\" \")" "$STATE") || return 1
+        taken+=' '
+    fi
+    if [[ $taken != *' 80 '* && -z $(ss -H -ltn 'sport = :80') ]]; then printf 'http\n'
+    elif [[ $taken != *' 443 '* && -z $(ss -H -ltn 'sport = :443') ]]; then printf 'alpn\n'
     else return 1; fi
 }
 # TCP port that renewing DOMAIN needs: the recorded one, else what acme.sh saved.
