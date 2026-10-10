@@ -1,0 +1,33 @@
+{
+  "inbounds": [
+    {
+      "type": "vless",
+      "listen": "::",
+      "listen_port": 31449,
+      "tag": "VLESSRealityMulti31449",
+      "users": [
+        {
+          "uuid": "3d4e5f60-4444-4555-8666-777788889999",
+          "flow": "xtls-rprx-vision",
+          "name": "carol-VLESS_Reality_Vision"
+        }
+      ],
+      "tls": {
+        "enabled": true,
+        "server_name": "www.example.net",
+        "reality": {
+          "enabled": true,
+          "handshake": {
+            "server": "www.example.net",
+            "server_port": 443
+          },
+          "private_key": "UAaTaPchwzGAReB5KhR1E-OoG_iLe-xrfM5B2aiVz0c",
+          "short_id": [
+            "",
+            "6ba85179e30d4fc2"
+          ]
+        }
+      }
+    }
+  ]
+}

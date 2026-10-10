@@ -1,0 +1,38 @@
+{
+  "dns": {
+    "servers": [
+      {
+        "tag": "managedMultiDNS_jp1",
+        "type": "udp",
+        "server": "192.0.2.53"
+      }
+    ],
+    "rules": [
+      {
+        "inbound": [
+          "VLESSRealityMulti31444"
+        ],
+        "rule_set": [
+          "geosite-netflix"
+        ],
+        "server": "managedMultiDNS_jp1"
+      }
+    ]
+  },
+  "route": {
+    "default_domain_resolver": "local",
+    "rules": [
+      {
+        "inbound": [
+          "VLESSRealityMulti31444"
+        ],
+        "rule_set": [
+          "geosite-netflix"
+        ],
+        "action": "resolve",
+        "server": "managedMultiDNS_jp1",
+        "strategy": "prefer_ipv4"
+      }
+    ]
+  }
+}

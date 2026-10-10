@@ -134,3 +134,48 @@ AnyTLS 需要一个已经解析到本机（192.0.2.10）的域名，用来申请
   1. 用现有网站目录验证（网站保持运行）
   2. 导入已有证书
   0. 返回
+
+══ 服务器上有旧版 v3（/etc/v2ray-agent）：打开 srm 的第一屏 ══
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  sing-box-reality-manager (srm)  v4.0.0-dev
+  VLESS Reality · AnyTLS · Hysteria2 等 11 种协议
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  服务：未部署    节点：0 / 0（启用 / 总数）
+  分流：未启用    证书续期：未配置
+
+
+发现旧版节点（/etc/v2ray-agent），要迁移过来吗？
+  1. 是，先看看能迁移哪些
+  0. 否（以后在菜单「9. 迁移旧版节点」里也能迁移）
+请选择 [1]：                                          ← 回车
+发现旧版（v3）安装：/etc/v2ray-agent
+
+能迁移的节点（端口、密码和密钥都不变，正在用的客户端不用改）：
+  1. VLESS Reality（端口 443，07_VLESS_vision_reality_inbounds.json） · www.example.com
+  2. VLESS Reality（端口 31444，30_VLESS_vision_reality_multi_jp1.json） · www.example.org
+     说明：这个端口还有 1 个用户（bob-VLESS_Reality_Vision）不迁移，v4 每个节点只保留第一个用户。
+  3. AnyTLS（端口 8443，13_anytls_inbounds.json） · vpn.example.com
+  4. Snell v5 + ShadowTLS（端口 32443，20260101120000-32443.env） · www.example.com
+
+不能迁移：
+  - VLESS Reality（端口 31446，08_VLESS_vision_gRPC_inbounds.json）：v4 的 Reality 只支持 TCP Vision，不支持 grpc 传输
+  - 分流 / 出站设置 31_VLESS_vision_reality_multi_dns_jp1.json：v4 的分流按平台规则设置，不能自动迁移；迁移后在菜单「3. 流媒体分流」里重新设置
+  - Xray vless（端口 31448）：v4 只用 sing-box；旧 Xray 服务继续运行，迁移不会停掉它
+  - 网站：v4 不管理网站；nginx 和网站文件保持原样
+  - 订阅链接：v4 不提供订阅；已导入的节点照常可用，新设备请用菜单「2. 节点管理」里的分享链接
+
+迁移时会：
+  - 停止并停用旧服务：dodo258-sing-box.service、dodo258-shadowtls-20260101120000-32443.service、dodo258-snell-20260101120000-32443.service；上面不能迁移的旧 sing-box 节点随之停止
+  - 由 srm 在原端口启动这些节点；启动或健康检查失败就恢复旧服务
+  - 注释掉旧版定时任务（RenewTLS、UpdateGeo），行首加 #，不删除
+    注意：继续运行的旧版网站 / Xray 用的证书（/etc/v2ray-agent/tls）从此不再自动续期，Xray 的 geo 数据也不再更新，请在证书到期前自行处理
+  - 证书改由 srm 续期：到期前 30 天自动向 Let's Encrypt 重新申请（用 80 或 443 端口验证）
+  - /etc/v2ray-agent 里的文件一个字节都不改
+
+  1. 确认迁移（服务会重启，连接断开几秒）
+  0. 返回
+请选择 [0]：                                          ← 输入 1（直接回车 = 返回，什么都不改）
+
+（选「否」后主菜单多一项，迁移完成后这一项和第一屏的提示都不再出现）
+  9. 迁移旧版节点 · 发现 v3 安装

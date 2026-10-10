@@ -1,0 +1,21 @@
+{
+  "inbounds": [
+    {
+      "type": "vmess",
+      "listen": "127.0.0.1",
+      "listen_port": 31306,
+      "tag": "VMessHTTPUpgrade",
+      "users": [
+        {
+          "uuid": "0a1b2c3d-1111-4222-8333-444455556666",
+          "name": "0a1b2c3d-VMess_HTTPUpgrade",
+          "alterId": 0
+        }
+      ],
+      "transport": {
+        "type": "httpupgrade",
+        "path": "/abcd"
+      }
+    }
+  ]
+}

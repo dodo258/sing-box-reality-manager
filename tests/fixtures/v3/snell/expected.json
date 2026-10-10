@@ -1,0 +1,12 @@
+{
+  "nodes": [
+    {"name": "snell-32443", "type": "snell", "port": 32443, "enabled": true, "sni": "www.example.com", "snell_version": 5,
+     "psk": "Ab3dEf6hIj9kLm2nOp5qRs8tUv1w", "shadowtls_password": "Xy4zAb7cDe0fGh3iJk6lMn9o"},
+    {"name": "snell-32444", "type": "snell", "port": 32444, "enabled": true, "sni": "www.example.org", "snell_version": 5,
+     "psk": "Qr5sTu8vWx1yZa4bCd7eFg0hIj3k", "shadowtls_password": "Lm6nOp9qRs2tUv5wXy8zAb1c"}
+  ],
+  "notes": {"snell-32444": "Snell v4 节点改由 snell-server v5 运行（兼容 v4 客户端），Surge 里原来的配置行不用改。节点 DNS（1.1.1.1）不迁移，snell-server 改用系统 DNS。"},
+  "skipped": ["Snell v5 + ShadowTLS（端口 32445，20260103120000-32445.env）"],
+  "units": ["dodo258-shadowtls-20260101120000-32443.service", "dodo258-shadowtls-20260102120000-32444.service",
+            "dodo258-snell-20260101120000-32443.service", "dodo258-snell-20260102120000-32444.service"]
+}

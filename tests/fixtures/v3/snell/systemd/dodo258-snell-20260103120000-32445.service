@@ -1,0 +1,6 @@
+[Unit]
+Description=dodo258 Snell backend 20260103120000-32445
+[Service]
+ExecStart=/etc/v2ray-agent/snell-shadowtls/bin/snell-server-v5 -c /etc/v2ray-agent/snell-shadowtls/conf/20260103120000-32445.snell.conf
+[Install]
+WantedBy=multi-user.target

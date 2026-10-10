@@ -133,7 +133,7 @@ for bad in \
   '.nodes[0].sni="example.com"' '.nodes[0].password="c2hvcnQ="' '.nodes[0].method="aes-128-gcm"' \
   '.nodes[1].uuid="not-a-uuid"' '.nodes[1]|=del(.sni)' '.nodes[2].cert_sha256="ABC"' '.nodes[2].pubkey_sha256="x"' \
   '.nodes[3].transport="xhttp"' '.nodes[4]|=del(.path)' '.nodes[4].path="no-slash"' '.nodes[5].service_name="a/b"' \
-  '.nodes[8].path="/a b"' '.nodes[9].username="root"' '.nodes[13]|=del(.password)' '.nodes[14]|=del(.sni)'; do
+  '.nodes[8].path="/a b"' '.nodes[9].username="root:x"' '.nodes[13]|=del(.password)' '.nodes[14]|=del(.sni)'; do
     jq "$bad" "$work/state.json" > "$work/bad.json"
     if validate_state "$work/bad.json" 2>/dev/null; then fail "accepted $bad"; fi
 done

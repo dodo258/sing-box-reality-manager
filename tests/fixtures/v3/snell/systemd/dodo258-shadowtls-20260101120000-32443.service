@@ -1,0 +1,6 @@
+[Unit]
+Description=dodo258 Shadow-TLS v3 for Snell 20260101120000-32443
+[Service]
+ExecStart=/etc/v2ray-agent/snell-shadowtls/bin/shadow-tls --v3 server
+[Install]
+WantedBy=multi-user.target

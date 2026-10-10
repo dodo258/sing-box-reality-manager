@@ -189,6 +189,52 @@ echo 'PASS the real check service records versions without replacing or restarti
 if compgen -G '/etc/systemd/system/srm-update*' > /dev/null; then echo 'FAIL update unit installed'; exit 1; fi
 if crontab -l 2>/dev/null | grep -q srm; then echo 'FAIL update cron job installed'; exit 1; fi
 echo 'PASS no automatic update job is installed'
+# Moving v3 with real systemd: a stand-in for v3's dodo258-sing-box runs the single
+# Reality sample on its port. When the takeover fails after srm started on the port,
+# the old unit runs and is enabled again; then srm takes the port over, the old unit
+# ends stopped and disabled, the v3 cron job is commented out and the v3 files stay
+# byte for byte the same.
+(
+    source ./srm.sh
+    logs() { systemctl status srm.service dodo258-sing-box.service --no-pager || true; journalctl -u srm.service -n 40 --no-pager; ss -ltnp; exit 1; }
+    v3=$(mktemp -d) run=$(mktemp -d) port=30443
+    cp -R tests/fixtures/v3/reality/etc-v2ray-agent/. "$v3/"
+    find "$v3" -name '*.json' -exec sed -i "s#/etc/v2ray-agent#$v3#g" {} +
+    cp "$v3"/sing-box/conf/config/07_VLESS_vision_reality_inbounds.json "$run/config.json"
+    [[ -z $(ss -H -ltn "sport = :$port") ]] || { echo "FAIL port $port already in use on the runner"; exit 1; }
+    printf '[Unit]\nDescription=v3 stand-in\n[Service]\nExecStart=%s run -c %s/config.json\n[Install]\nWantedBy=multi-user.target\n' "$CORE" "$run" \
+        > /etc/systemd/system/dodo258-sing-box.service
+    systemctl daemon-reload && systemctl enable --now dodo258-sing-box.service
+    for i in 1 2 3 4 5 6 7 8 9 10; do [[ -z $(ss -H -ltn "sport = :$port") ]] || break; sleep 1; done
+    [[ -n $(ss -H -ltn "sport = :$port") ]] || logs
+    printf '30 1 * * * /bin/bash %s/install.sh RenewTLS >> /dev/null 2>&1\n' "$v3" | crontab -
+    hash() { (cd "$v3" && find . -type f -exec sha256sum {} + | sort; find . | sort) | sha256sum; }
+    before=$(hash) state=$(sha256sum < "$STATE")
+    V3_ROOT=$v3 opt_host=127.0.0.1 assume_yes=1
+    # srm has the port already when this step fails, so the old service must come back after it.
+    if (firewall_sync() { ! jq -e --argjson p "$port" 'any(.nodes[]; .port == $p)' "$1" >/dev/null; }; migrate_apply "$PWD/dist/srm") > "$v3.out" 2>&1; then
+        cat "$v3.out"; echo 'FAIL takeover reported success although applying failed'; exit 1
+    fi
+    # The failure came after the old unit stopped and srm took over, not before.
+    grep -q '停止旧服务 dodo258-sing-box.service' "$v3.out" && grep -q '恢复旧服务 dodo258-sing-box.service' "$v3.out" &&
+        grep -q '迁移失败，已恢复旧服务' "$v3.out" || { cat "$v3.out"; exit 1; }
+    [[ ! -e $DATA/pending.json ]] || exit 1
+    systemctl is-active --quiet dodo258-sing-box.service && systemctl is-enabled --quiet dodo258-sing-box.service || logs
+    # The restarted core needs a moment to bind its port.
+    for i in 1 2 3 4 5 6 7 8 9 10; do [[ -z $(ss -H -ltn "sport = :$port") ]] || break; sleep 1; done
+    [[ -n $(ss -H -ltn "sport = :$port") && $(sha256sum < "$STATE") == "$state" ]] || logs
+    crontab -l | grep -q '^30 1 \* \* \* /bin/bash' || exit 1
+    echo 'PASS a failed takeover with real systemd starts and enables the old v3 service again'
+    migrate_apply "$PWD/dist/srm" > "$v3.out" 2>&1 || { cat "$v3.out"; logs; }
+    ! systemctl is-active --quiet dodo258-sing-box.service && ! systemctl is-enabled --quiet dodo258-sing-box.service || logs
+    systemctl is-active --quiet srm.service && [[ -n $(ss -H -ltnp "sport = :$port" | grep sing-box) ]] || logs
+    id=$(jq -r --argjson p "$port" '.nodes[]|select(.port == $p)|.id' "$STATE")
+    [[ -n $id && $(hash) == "$before" ]] || exit 1
+    crontab -l | grep -q '^# srm 迁移后停用：30 1 ' || exit 1
+    node_change "$id" delete
+    crontab -r; rm -f /etc/systemd/system/dodo258-sing-box.service "$v3.out"; systemctl daemon-reload
+    echo 'PASS srm takes over the port of the v3 service with real systemd; the old unit is stopped and disabled, /etc/v2ray-agent unchanged'
+)
 # Uninstall with sing-box and a snell-server still running stops and removes both.
 systemctl is-active --quiet srm.service || exit 1
 cleanup

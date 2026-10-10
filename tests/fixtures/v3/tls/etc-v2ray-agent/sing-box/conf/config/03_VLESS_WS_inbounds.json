@@ -1,0 +1,28 @@
+{
+  "inbounds": [
+    {
+      "type": "vless",
+      "listen": "::",
+      "listen_port": 33444,
+      "tag": "VLESSWS",
+      "users": [
+        {
+          "uuid": "5e6f7081-6666-4777-8888-9999aaaabbbb",
+          "name": "5e6f7081-VLESS_WS"
+        }
+      ],
+      "tls": {
+        "server_name": "vpn.example.com",
+        "enabled": true,
+        "certificate_path": "/etc/v2ray-agent/tls/vpn.example.com.crt",
+        "key_path": "/etc/v2ray-agent/tls/vpn.example.com.key"
+      },
+      "transport": {
+        "type": "ws",
+        "path": "/qwerws",
+        "max_early_data": 2048,
+        "early_data_header_name": "Sec-WebSocket-Protocol"
+      }
+    }
+  ]
+}

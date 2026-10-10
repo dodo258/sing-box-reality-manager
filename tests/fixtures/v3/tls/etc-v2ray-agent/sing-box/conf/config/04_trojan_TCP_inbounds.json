@@ -1,0 +1,21 @@
+{
+  "inbounds": [
+    {
+      "type": "trojan",
+      "listen": "::",
+      "listen_port": 33445,
+      "users": [
+        {
+          "password": "5e6f7081-6666-4777-8888-9999aaaabbbb",
+          "name": "5e6f7081-Trojan_TCP"
+        }
+      ],
+      "tls": {
+        "server_name": "vpn.example.com",
+        "enabled": true,
+        "certificate_path": "/etc/v2ray-agent/tls/vpn.example.com.crt",
+        "key_path": "/etc/v2ray-agent/tls/vpn.example.com.key"
+      }
+    }
+  ]
+}
