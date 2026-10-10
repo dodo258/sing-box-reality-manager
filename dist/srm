@@ -1894,8 +1894,20 @@ firewall_clear() {
     firewall_ipt_save
     return "$failures"
 }
+# A UFW / firewalld record kept while that firewall is not the active one (stopped,
+# e.g. a temporary `ufw disable`, or not running yet at boot): turned on again, it
+# lets the nodes through. UFW edits its rules while stopped, so only the ports still
+# in use (PORTS) stay; firewalld answers nothing until it runs, so all of its records
+# wait for it. Records of the active backend and iptables follow the sync as usual.
+firewall_kept() {
+    local backend=$1 file=$2 ports=$3 owner zone scope port proto
+    IFS=$'\t' read -r owner zone scope port proto < "$file" || return 1
+    [[ $owner != "$backend" && ( $owner == ufw || $owner == firewalld ) ]] || return 1
+    [[ $owner == ufw ]] && command -v ufw >/dev/null || return 0
+    grep -Fxq "$port"$'\t'"$proto" "$ports"
+}
 firewall_sync() {
-    local state=${1:-} backend ports zones='' families='' family port proto zone scope file key desired failures=0
+    local state=${1:-} backend ports zones='' families='' family port proto zone scope file key desired kept='' failures=0
     owned_root || return 1
     backend=$(firewall_detect) || return 1
     install -d -m 700 "$DATA/firewall" || return 1
@@ -1946,7 +1958,9 @@ firewall_sync() {
         for file in "$DATA"/firewall/*; do
             [[ -f $file ]] || continue
             key=${file##*/}
-            grep -Fxq "$key" "$desired" || firewall_remove "$file" || failures=1
+            if grep -Fxq "$key" "$desired"; then continue; fi
+            if firewall_kept "$backend" "$file" "$ports"; then [[ $kept == *"${key%%-*}"* ]] || kept+=${kept:+ / }${key%%-*}; continue; fi
+            firewall_remove "$file" || failures=1
         done
         hop_sync "$state" || failures=1
     fi
@@ -1955,6 +1969,7 @@ firewall_sync() {
         if [[ $backend == none ]]; then msg '未检测到活动的 UFW/firewalld，也没有拦截入站的 iptables 规则，未更改防火墙。若使用自定义 nftables 规则，仍需检查。'
         elif [[ $backend == iptables ]] && (( failures == 0 )); then msg '已在 iptables 拦截规则之前放行节点端口（规则注释 srm）；云安全组和外部连通仍需检查。'
         elif (( failures == 0 )); then msg "已自动配置 $backend 节点端口；云安全组和外部连通仍需检查。"; fi
+        [[ -z $kept ]] || msg "${kept/ufw/UFW} 当前没有运行，srm 之前加的放行规则都保留着，重新启用后照常生效；这期间新加或改了端口的节点，启用后在菜单「4. 运行状态」里选「重新同步防火墙端口规则」。"
     fi
     rm -f "$ports" "$desired"
     return "$failures"
