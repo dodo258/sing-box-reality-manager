@@ -75,7 +75,7 @@ for port in 18301 18302 18303 18399 18443; do wait_port "$port" || { cat "$work/
 # completes TLS 1.3 and sees the site's certificate.
 openssl s_client -connect 127.0.0.1:18301 -servername www.ctrip.com -tls1_3 -verify_return_error -CAfile "$work/cert.pem" < /dev/null > "$work/probe.log" 2>&1 ||
     { cat "$work/probe.log"; fail 'TLS handshake on the ShadowTLS port'; }
-grep -q 'CN=www.ctrip.com' "$work/probe.log" && grep -q 'TLSv1.3' "$work/probe.log" || { cat "$work/probe.log"; fail 'handshake site certificate'; }
+grep -qE '^subject= ?CN ?= ?www.ctrip.com' "$work/probe.log" && grep -q 'TLSv1.3' "$work/probe.log" || { cat "$work/probe.log"; fail 'handshake site certificate'; }
 echo 'PASS a TLS 1.3 handshake on the ShadowTLS port completes with the handshake site certificate'
 
 fetch_via() { curl --noproxy '' --silent --show-error --fail --max-time 10 --socks5-hostname "$1" http://127.0.0.1:18399/ 2>&1; }
