@@ -42,7 +42,8 @@ jq -n --arg uuid "$uuid" --arg pin "$pin" '
    node("100000000000000c"; "hy1-self"; "hysteria"; 20012) + self + {password:"pw"},
    node("100000000000000d"; "hy2-self"; "hysteria2"; 20013) + self + {password:"pw"},
    node("100000000000000e"; "anytls"; "anytls"; 20014) + cert + {password:"pw"},
-   node("100000000000000f"; "reality"; "vless"; 20015) + {sni:"www.ctrip.com",uuid:$uuid,private_key:"priv",public_key:"pub",short_id:"0123456789abcdef"}
+   node("100000000000000f"; "reality"; "vless"; 20015) + {sni:"www.ctrip.com",uuid:$uuid,private_key:"priv",public_key:"pub",short_id:"0123456789abcdef"},
+   node("1000000000000010"; "hy2"; "hysteria2"; 20016) + cert + {password:"pw/1"}
   ]}' > "$work/state.json"
 validate_state "$work/state.json" || fail 'fixture state rejected'
 node() { node_json "$work/state.json" "$1"; }
@@ -65,8 +66,12 @@ expect 1000000000000008 uri 'trojan://pw@192.0.2.1:20008?security=tls&sni=test.e
 expect 100000000000000a uri 'naive+https://0123456789ab:pw@test.example.com:20010#naive'
 expect 100000000000000b uri 'hysteria://192.0.2.1:20011?protocol=udp&auth=pw&peer=test.example.com&upmbps=30&downmbps=100&alpn=hysteria#hy1'
 expect 100000000000000c uri 'hysteria://192.0.2.1:20012?protocol=udp&auth=pw&peer=www.bing.com&upmbps=30&downmbps=100&alpn=hysteria&insecure=1#hy1-self'
-expect 100000000000000d uri "hysteria2://pw@192.0.2.1:20013?sni=www.bing.com&alpn=h3&insecure=1&pinSHA256=$pin#hy2-self"
-expect 100000000000000e uri 'anytls://pw@192.0.2.1:20014?sni=test.example.com#anytls'
+# Hysteria2 (v2.hysteria.network/docs/developers/URI-Scheme/) and AnyTLS (anytls-go
+# docs/uri_scheme.md): "/" before "?", and Hysteria2 has no alpn parameter.
+expect 100000000000000d uri "hysteria2://pw@192.0.2.1:20013/?sni=www.bing.com&insecure=1&pinSHA256=$pin#hy2-self"
+expect 1000000000000010 uri 'hysteria2://pw%2F1@192.0.2.1:20016/?sni=test.example.com#hy2'
+expect 100000000000000e uri 'anytls://pw@192.0.2.1:20014/?sni=test.example.com#anytls'
+expect 100000000000000f uri "vless://$uuid@192.0.2.1:20015?encryption=none&security=reality&type=tcp&flow=xtls-rprx-vision&fp=chrome&sni=www.ctrip.com&pbk=pub&sid=0123456789abcdef#reality"
 # VMess: v2rayN's base64 JSON with string values.
 link=$(node 1000000000000009 | share_uri)
 [[ $link == vmess://* ]] || fail 'vmess scheme'
@@ -75,7 +80,59 @@ printf '%s' "${link#vmess://}" | openssl base64 -d -A | jq -e --arg uuid "$uuid"
 # IPv6 hosts are bracketed; names and passwords are escaped.
 node 1000000000000008 | jq '.host="2001:db8::1"|.password="a:@ /?#&"|.name="中文 & x"' | share_uri > "$work/uri"
 [[ $(cat "$work/uri") == 'trojan://a%3A%40%20%2F%3F%23%26@[2001:db8::1]:20008?security=tls&sni=test.example.com&type=tcp#%E4%B8%AD%E6%96%87%20%26%20x' ]] || fail "escaping: $(cat "$work/uri")"
-echo 'PASS share links: SS2022 (SIP002), TUIC, VLESS TLS ×4, Trojan, VMess, Naive, Hysteria v1/v2 incl. self-signed pins'
+echo 'PASS share links: SS2022 (SIP002), TUIC, VLESS Reality, VLESS TLS ×4, Trojan, VMess, Naive, AnyTLS, Hysteria v1/v2 incl. self-signed pins'
+
+# Every link against its standard (the links are above each share_uri in lib/protocols.sh):
+# the shape before the query, and only parameters the standard defines.
+spec_check() {
+    local link=$1 shape params required='' query key
+    case $link in
+      vless://*|trojan://*)  # Xray-core discussion #716 (trojan: trojan-gfw base + the same query)
+        shape='^(vless|trojan)://[^@/?#]+@[^/?#]+:[0-9]+\?[^/]*#[^#]+$'
+        params='type encryption flow security path host serviceName mode authority extra fp sni alpn ech pbk sid pqv spx pcs vcn';;
+      hysteria2://*)  # v2.hysteria.network/docs/developers/URI-Scheme/
+        shape='^hysteria2://[^@/?#]+@[^/?#]+:[0-9]+/\?[^/]*#[^#]+$'; params='obfs obfs-password sni insecure pinSHA256 ech';;
+      anytls://*)  # anytls-go docs/uri_scheme.md
+        shape='^anytls://[^@/?#]+@[^/?#]+:[0-9]+/\?[^/]*#[^#]+$'; params='sni insecure';;
+      tuic://*)  # daeuniverse/dae discussion #182
+        shape='^tuic://[0-9a-f-]{36}:[^@/?#]+@[^/?#]+:[0-9]+\?[^/]*#[^#]+$'; params='congestion_control udp_relay_mode alpn sni allow_insecure disable_sni';;
+      hysteria://*)  # v1.hysteria.network/docs/uri-scheme/
+        shape='^hysteria://[^@/?#]+:[0-9]+\?[^/]*#[^#]+$'; params='protocol auth peer insecure upmbps downmbps alpn obfs obfsParam'; required='upmbps downmbps';;
+      ss://*)  # SIP002, AEAD-2022: method and password percent-encoded, not base64
+        shape='^ss://2022-[a-z0-9-]+:[A-Za-z0-9%._~-]+@[^/?#]+:[0-9]+#[^#]+$'; params='';;
+      naive+https://*)  # DuckSoft gist (de facto Naive link)
+        shape='^naive\+https://[^@/?#:]+:[^@/?#]+@[^/?#]+:[0-9]+#[^#]+$'; params='padding extra-headers';;
+      vmess://*)  # v2rayN share link ver 2: base64 JSON, all values strings
+        printf '%s' "${link#vmess://}" | openssl base64 -d -A | jq -e '
+          (keys - ["v","ps","add","port","id","aid","scy","net","type","host","path","tls","sni","alpn","fp","insecure","vcn","pcs"]) == []
+          and all(.[]; type == "string") and .v == "2"' >/dev/null || fail "vmess link off the ver 2 format: $link"
+        return 0;;
+      *) fail "no standard for $link";;
+    esac
+    [[ $link =~ $shape ]] || fail "link shape: $link"
+    query=${link#*\?}; query=${query%%#*}
+    [[ $link == *\?* ]] || query=''
+    for key in $(tr '&' '\n' <<< "$query" | sed 's/=.*//'); do
+        [[ " $params " == *" $key "* ]] || fail "parameter $key is not in the standard: $link"
+        [[ $(tr '&' '\n' <<< "$query" | grep -c "^$key=") == 1 ]] || fail "parameter $key repeated: $link"
+    done
+    for key in $required; do [[ "&$query" == *"&$key="* ]] || fail "required parameter $key missing: $link"; done
+}
+checked=' '
+while IFS= read -r id; do
+    n=$(node "$id")
+    [[ -n $(proto_call "$(jq -r .type <<< "$n")" link_clients) ]] || continue
+    spec_check "$(share_uri <<< "$n")"
+    checked+="$(jq -r .type <<< "$n") "
+done < <(jq -r '.nodes[].id' "$work/state.json")
+for type in $PROTOCOLS; do
+    [[ -z $(proto_call "$type" link_clients) || $checked == *" $type "* ]] || fail "no share link of $type checked against its standard"
+done
+for id in 100000000000000d 1000000000000010; do
+    link=$(node "$id" | share_uri)
+    [[ $link == *:2001[36]/\?* && $link != *alpn* ]] || fail "Hysteria2 link needs /? and no alpn: $link"
+done
+echo 'PASS every protocol with a share link follows its standard: shape, only defined parameters, none repeated; Hysteria2 has /? and no alpn'
 
 # Clash Meta (mihomo) proxies, one flow mapping per line.
 expect 1000000000000001 clash '- {"name":"ss 节点","server":"192.0.2.1","port":20001,"type":"ss","cipher":"2022-blake3-aes-128-gcm","password":"YctPZ6U7xPPcU+gp3u+0tw==","udp":true}'
@@ -124,7 +181,7 @@ echo 'PASS server inbounds for every protocol and VLESS transport'
 # Transports: Shadowsocks opens TCP and UDP on one port; firewall and health
 # checks expand them per port.
 [[ $(jq -r ".nodes[]|.port as \$p|($(proto_jq_transports))[]|\"\(\$p)/\(.)\"" "$work/state.json" | tr '\n' ' ') == \
-   '20001/tcp 20001/udp 20002/udp 20003/udp 20004/tcp 20005/tcp 20006/tcp 20007/tcp 20008/tcp 20009/tcp 20010/tcp 20011/udp 20012/udp 20013/udp 20014/tcp 20015/tcp ' ]] || fail 'transports'
+   '20001/tcp 20001/udp 20002/udp 20003/udp 20004/tcp 20005/tcp 20006/tcp 20007/tcp 20008/tcp 20009/tcp 20010/tcp 20011/udp 20012/udp 20013/udp 20014/tcp 20015/tcp 20016/udp ' ]] || fail 'transports'
 [[ $(bash srm.sh protocols | cut -f1,3 | tr '\t\n' ': ') == 'vless:tcp anytls:tcp hysteria2:udp snell:tcp shadowsocks:tcp udp tuic:udp vlesstls:tcp trojan:tcp vmess:tcp naive:tcp hysteria:udp ' ]] || fail 'protocol list'
 echo 'PASS transports per protocol; Shadowsocks needs both TCP and UDP'
 
@@ -158,6 +215,37 @@ grep -q "\"cert_sha256\": \"$pin\"" "$work/details" || fail 'pin shown in detail
 export_node 1000000000000002 details > "$work/details" 2>&1 || true
 if grep -q 'pw/1' "$work/details"; then fail 'details show the TUIC password'; fi
 echo 'PASS the client page has one section per supported client (Surge, Clash Meta, sing-box, Shadowrocket, v2rayN) and leaves out the rest'
+
+# Surge for iOS cannot paste a whole line: the page lists the form's fields, then the
+# line for Surge for Mac and text editing.
+export_node 1000000000000003 clients > "$work/clients" || fail 'clients page'
+want="── Surge：手机版新建代理后按下面逐项填写 ──
+  名称：tuic-self
+  类型：tuic-v5
+  服务器：192.0.2.1
+  端口：20003
+  密码（password）：pw
+  UUID：$uuid
+  ALPN：h3
+  SNI：www.bing.com
+  证书 SHA-256 指纹（server-cert-fingerprint-sha256）：$pin
+Mac 版或在配置文本里编辑：把下面整行放进配置的 [Proxy] 段
+tuic-self = tuic-v5, 192.0.2.1, 20003, password=\"pw\", uuid=$uuid, alpn=h3, sni=www.bing.com, server-cert-fingerprint-sha256=$pin"
+[[ $(grep -A 11 '── Surge' "$work/clients") == "$want" ]] || { cat "$work/clients"; fail 'Surge fields'; }
+[[ $(node 1000000000000001 | surge_proxy | surge_form | tr '\n' '|') == '  名称：ss 节点|  类型：ss|  服务器：192.0.2.1|  端口：20001|  加密方式（encrypt-method）：2022-blake3-aes-128-gcm|  密码（password）：YctPZ6U7xPPcU+gp3u+0tw==|  UDP 转发（udp-relay）：开|' ]] ||
+    fail "Shadowsocks Surge fields: $(node 1000000000000001 | surge_proxy | surge_form)"
+node 1000000000000009 | surge_proxy | surge_form | grep -qxF '  WebSocket 请求头（ws-headers）：Host:test.example.com' || fail 'VMess Surge fields'
+# Passwords kept from v3 may hold commas and equals signs inside their quotes.
+[[ $(node 100000000000000e | jq '.password="a, b=c"' | surge_proxy | surge_form | tail -n 2 | tr '\n' '|') == '  密码（password）：a, b=c|  SNI：test.example.com|' ]] ||
+    fail "Surge fields of a password with a comma: $(node 100000000000000e | jq '.password="a, b=c"' | surge_proxy | surge_form)"
+# UDP-only nodes explain the empty TCP latency test and the UDP-blocking networks.
+for id in 1000000000000002 100000000000000b 1000000000000010; do
+    export_node "$id" clients | grep -q '^只走 UDP：Shadowrocket 等客户端的 TCP 延迟测试对这个节点显示不出延迟，属于正常；连不上多半是本地网络限制了 UDP' || fail "UDP note for $id"
+done
+for id in 1000000000000001 1000000000000008 100000000000000f; do
+    if export_node "$id" clients | grep -q '只走 UDP'; then fail "UDP note for the TCP node $id"; fi
+done
+echo 'PASS Surge is listed field by field for Surge for iOS plus the whole line; UDP-only nodes (Hysteria v1/v2, TUIC) carry the latency and UDP note'
 
 # Non-interactive deployment with stubs for the system parts.
 printf '#!/usr/bin/env bash\ncase $2 in uuid) printf "%%s\\n" 0f2a6c1e-3b4d-4e5f-8a9b-$(openssl rand -hex 6);; esac\n' > "$work/core"

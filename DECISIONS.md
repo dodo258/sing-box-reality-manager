@@ -175,3 +175,20 @@
 - 备选/被否决的方案：`systemctl mask`（见上，对 /etc 里的单元文件无效）；挪走 v3 单元文件再 mask（改了 v3 的文件，卸载 srm 后还要用户自己恢复）；给旧单元换成空配置的 ExecStart 让 v3 重启「成功」、nginx 能正常启动（太绕，还要常驻一个空跑的旧 sing-box）；一律注释定时任务（Xray / 网站证书 90 天内过期）。
 - 没验证：没在真实 v3 服务器上跑 v3 自己的 RenewTLS（CI 用真实 systemd 模拟它的 stop + start 两步）；mask 失败的说法来自 systemd 行为和公开报错帖，没有单独在 CI 里跑。
 - 拍板人：Claude
+
+## 2026-10-10 客户端导入修正：分享链接按规范、Surge 逐项列出、只走 UDP 的提示
+- 决定：
+  - 分享链接逐个对照规范（规范链接写在 `lib/protocols.sh` 每个 `share_uri` 上方），规范里没有的参数不加：
+    - Hysteria2 按官方 https://v2.hysteria.network/docs/developers/URI-Scheme/ 改成 `hysteria2://密码@主机:端口/?sni=…[&insecure=1&pinSHA256=…]`：加上 `?` 前的 `/`，去掉规范没有的 `alpn`（主人实测这个格式能导入 Shadowrocket，带不带 pinSHA256 都行）。pinSHA256 用小写无冒号的 hex（规范没规定格式，官方客户端读取时会统一成小写并去掉冒号和连字符）。自签证书仍带 `insecure=1`（官方客户端先做正常校验再比对 pin）。
+    - AnyTLS 按 anytls-go `docs/uri_scheme.md`（https://github.com/anytls/anytls-go/blob/main/docs/uri_scheme.md）同样加 `/`，参数只有 `sni`。
+    - 其余格式已经符合规范，没有改动，只补了依据：VLESS Reality / VLESS TLS 按 Xray-core discussion #716（`alpn` 是其中的字段）；Trojan 用 trojan-gfw 的 `trojan://密码@主机:端口`（官方没有定义查询参数），查询参数沿用 v2rayN / mihomo 实际使用的 #716 字段 `security`、`sni`、`type`；VMess 按 v2rayN 分享链接 ver 2（JSON 的值全部是字符串）；SS2022 按 SIP002（AEAD-2022 不做 base64，method 和密码做百分号编码）；TUIC 没有官方格式，按事实标准 https://github.com/daeuniverse/dae/discussions/182（NekoBox、v2rayN、mihomo 都引用它）；Hysteria v1 按 https://v1.hysteria.network/docs/uri-scheme/；Naive 按 DuckSoft 的提案 https://gist.github.com/DuckSoft/ca03913b0a26fc77a1da4d01cc6ab2f1 。
+    - `tests/clients.sh` 对每种有分享链接的协议做两类检查：一是精确比对整条链接；二是检查链接的整体形状、只用规范定义的参数、参数不重复、必填参数都在（Hysteria v1 的带宽是必填）。注册表新增协议却没有被这项检查覆盖时，测试会失败。
+  - Surge：官方文档（https://manual.nssurge.com/tools/url-scheme.html ）的 URL scheme 只有 start / stop / toggle、`install-config?url=`（装一整份配置）、`install-module` 和授权相关的几个，**没有导入单个代理的方式**。manual 和 kb 里也找不到剪贴板、扫码或分享链接导入代理的说明。所以 Surge 段改成两部分：先逐项列出手机版新建代理要填的内容（名称、类型、服务器、端口，再加整行里的每个参数，true 显示为「开」），再给 Mac 版和文本编辑用的整行。手册没有写 iOS 新建代理界面上的字段名，所以每项写「中文名（Surge 配置参数名）」；中文名和参数名一样（PSK、SNI、UUID、ALPN、TLS）时只写一个。逐项列表是解析整行生成的（`SURGE_FORM_JQ`，引号里的逗号不拆开，v3 迁移来的密码可能带逗号），各协议不用另写。
+  - 只走 UDP 的节点（Hysteria2、TUIC、Hysteria v1，按注册表的 transport 判断）在客户端配置最后加一句：TCP 延迟测试显示不出延迟属于正常；连不上多半是本地网络限制了 UDP，可以换 TCP 类协议（VLESS Reality、AnyTLS）。部署完成页和「节点管理 → 4. 客户端配置」都会显示。
+- 理由：待办原文和验收标准；规范是各家客户端解析时的公约数，主人实测 Shadowrocket 认的也是规范格式。
+- 备选/被否决的方案：
+  - 用 `surge:///install-config?url=` 一键安装。要在 VPS 上开 HTTP 下载服务、把 PSK 放在 URL 后面，而且装进去的是整份新配置，会替换用户现有的配置，不符合「打开菜单和查看节点时不联网」的约定。
+  - Shadowrocket 专用写法，比如第三方面板 Xboard 生成的 `peer=`、`obfs=none`。没有官方依据，规范格式主人已实测可用。
+  - Hysteria2 链接继续带 `alpn=h3`。规范里没有这个参数，v2rayN 和 mihomo 的 alpn 本来就默认 h3。
+- 没验证：Surge iOS 界面上字段的实际叫法（没有官方文档，也没有设备）；AnyTLS 和 TUIC 链接没有在 Shadowrocket 里实测；TUIC 规范要求 `udp_relay_mode`，但 v2rayN 导入时会忽略这个参数。
+- 拍板人：Claude

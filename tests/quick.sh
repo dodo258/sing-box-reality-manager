@@ -134,6 +134,12 @@ last | jq -e '.type=="vless"' >/dev/null || fail 'switched to Reality'
 # Enter at the domain question = no domain: back to the list.
 node_add self <<< $'4\n\n2\n\n\n\n' > "$work/out" 2>&1 || fail 'no domain'
 last | jq -e '.type=="hysteria2" and .cert_sha256' >/dev/null || { cat "$work/out"; fail 'no domain → Hysteria2 self-signed'; }
+# The summary of a UDP-only node explains the latency test and UDP-blocking networks,
+# and Surge comes field by field before the whole line (docs/menu-preview.txt shows both).
+for line in "$(grep -m 1 '^只走 UDP：' "$work/out")" '── Surge：手机版新建代理后按下面逐项填写 ──' 'Mac 版或在配置文本里编辑：把下面整行放进配置的 [Proxy] 段'; do
+    [[ -n ${line#只走 UDP：} ]] && grep -qxF -- "$line" "$work/out" && grep -qxF -- "$line" docs/menu-preview.txt || { cat "$work/out"; fail "summary or docs/menu-preview.txt lacks: $line"; }
+done
+grep -q '^hysteria2://[^?]*:[0-9]*/?sni=' "$work/out" || { cat "$work/out"; fail 'Hysteria2 link in the summary'; }
 [[ ! -e $work/issued ]] || fail 'certificate requested without a domain'
 # Fixing the record and checking again: the certificate is requested after the check.
 printf '0\n' > "$work/dns-tries"

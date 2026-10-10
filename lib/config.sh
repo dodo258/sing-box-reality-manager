@@ -118,4 +118,6 @@ share_uri() { jq -r "$PROTO_JQ_DEFS $(proto_jq share_uri 'error("不支持的协
 # Client snippets; empty output when the client has no support for the protocol.
 clash_proxy() { jq -r "$PROTO_JQ_DEFS $(proto_jq clash empty)|\"- \(tojson)\""; }
 surge_proxy() { jq -r "$PROTO_JQ_DEFS $(proto_jq surge empty)"; }
+# The Surge line on stdin as the fields of Surge's new-proxy form, one per line.
+surge_form() { jq -Rr "$SURGE_FORM_JQ"; }
 client_note() { jq -r "$PROTO_JQ_DEFS $(proto_jq note empty)"; }
