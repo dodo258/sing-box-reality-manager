@@ -45,7 +45,20 @@ node() { node_json "$work/state.json" "$1"; }
 node 5000000000000003 | surge_proxy | grep -q 'mode=' && fail 'v5 line carries mode'
 # Without a share link format, the "link" is the Surge line.
 [[ $(node 5000000000000001 | share_uri) == "$(node 5000000000000001 | surge_proxy)" ]] || fail 'share link is not the Surge line'
-echo 'PASS Surge lines for Snell v6 (default / unshaped) and v5 with ShadowTLS v3'
+# Surge for iOS takes no pasted line: its new-proxy form is filled field by field.
+[[ $(node 5000000000000001 | surge_proxy | surge_form) == "  名称：snell v6
+  类型：snell
+  服务器：192.0.2.1
+  端口：20001
+  PSK：$psk
+  版本（version）：6
+  模式（mode）：default
+  连接复用（reuse）：开
+  Shadow TLS 密码（shadow-tls-password）：$pw
+  Shadow TLS SNI（shadow-tls-sni）：www.ctrip.com
+  Shadow TLS 版本（shadow-tls-version）：3" ]] || fail "surge v6 fields: $(node 5000000000000001 | surge_proxy | surge_form)"
+if node 5000000000000003 | surge_proxy | surge_form | grep -q '模式'; then fail 'v5 fields carry mode'; fi
+echo 'PASS Surge lines for Snell v6 (default / unshaped) and v5 with ShadowTLS v3, and the same as form fields for Surge for iOS'
 
 # mihomo: v5 with ShadowTLS in obfs-opts; no Snell v6 client.
 [[ $(node 5000000000000003 | clash_proxy) == "- {\"name\":\"snell-5\",\"server\":\"192.0.2.1\",\"port\":20003,\"type\":\"snell\",\"psk\":\"$psk\",\"version\":5,\"udp\":true,\"obfs-opts\":{\"mode\":\"shadow-tls\",\"host\":\"www.ctrip.com\",\"password\":\"$pw\",\"version\":3}}" ]] ||
@@ -188,7 +201,9 @@ last | jq -e '.snell_version==6 and .snell_mode=="default" and .sni=="www.ctrip.
   (.psk|test("^[a-f0-9]{32}$")) and (.shadowtls_password|test("^[a-f0-9]{32}$")) and .psk != .shadowtls_password and
   .local_port >= 10000 and .local_port < 32768 and .local_port != 20010' >/dev/null || { last; fail 'default fields'; }
 grep -q '= snell, 192.0.2.1, 20010, psk=' "$work/out" && grep -q 'Clash Meta (mihomo) 不支持 Snell v6' "$work/out" &&
-    grep -q '端口：20010/TCP ' "$work/out" && grep -q '── Surge：' "$work/out" || { cat "$work/out"; fail 'deploy output'; }
+    grep -q '端口：20010/TCP ' "$work/out" && grep -q '── Surge：手机版新建代理后按下面逐项填写' "$work/out" &&
+    grep -q '^  Shadow TLS SNI（shadow-tls-sni）：www.ctrip.com$' "$work/out" || { cat "$work/out"; fail 'deploy output'; }
+if grep -q '只走 UDP' "$work/out"; then fail 'UDP note for Snell'; fi
 # Shadowrocket and v2rayN cannot import the Surge line: no link, QR code or their sections.
 if grep -qE '── (分享链接|Shadowrocket|v2rayN)' "$work/out"; then cat "$work/out"; fail 'link clients for Snell'; fi
 [[ $(cat "$work/installed") == 6 && $(cat "$work/checked") == www.ctrip.com ]] || fail 'install / target check'

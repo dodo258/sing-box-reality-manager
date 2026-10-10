@@ -305,7 +305,12 @@ client_snippets() {
         fi
     fi
     out=$(surge_proxy <<< "$node") || return 1
-    [[ -z $out ]] || { msg $'\n── Surge：放进配置的 [Proxy] 段 ──'; msg "$out"; }
+    if [[ -n $out ]]; then
+        msg $'\n── Surge：手机版新建代理后按下面逐项填写 ──'
+        surge_form <<< "$out" || return 1
+        msg 'Mac 版或在配置文本里编辑：把下面整行放进配置的 [Proxy] 段'
+        msg "$out"
+    fi
     out=$(clash_proxy <<< "$node") || return 1
     [[ -z $out ]] || { msg $'\n── Clash Meta (mihomo)：放进 proxies: 列表 ──'; msg "$out"; }
     msg $'\n── sing-box：放进 outbounds 列表 ──'
@@ -318,6 +323,9 @@ client_snippets() {
     [[ -z $out ]] || msg $'\n'"自签证书：以上 Surge、Clash Meta、sing-box 配置已带证书指纹；只导入链接的客户端会跳过证书校验，客户端能填证书 SHA-256 指纹时填：$out"
     out=$(client_note <<< "$node") || return 1
     [[ -z $out ]] || msg $'\n'"说明：$out"
+    if [[ $(proto_call "$type" transport) == udp ]]; then
+        msg $'\n'"只走 UDP：Shadowrocket 等客户端的 TCP 延迟测试对这个节点显示不出延迟，属于正常；连不上多半是本地网络限制了 UDP，可以在菜单里选「1. 添加节点」换 TCP 类协议（VLESS Reality、AnyTLS）。"
+    fi
 }
 client_import_hint() {
     case $1 in

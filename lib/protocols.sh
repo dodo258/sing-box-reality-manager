@@ -4,7 +4,9 @@
 #   transport        "tcp", "udp" or "tcp udp", used by firewall rules and health checks
 #   validate         jq boolean for the protocol's own node fields (def text available)
 #   render_inbound   jq array of sing-box server inbounds for one node
-#   share_uri        jq string: raw share link (Shadowrocket, v2rayN and others import it)
+#   share_uri        jq string: raw share link (Shadowrocket, v2rayN and others import it),
+#                    in the format of the protocol's official or de facto standard (linked
+#                    above each one) and with only the parameters that standard defines
 #   client_outbound  jq object: sing-box client outbound
 #   secrets          jq paths hidden from node details
 #   domain           none | optional | required: whether the protocol needs a domain for a
@@ -52,6 +54,22 @@ PROTO_JQ_DEFS='
   # ws early data in the Sec-WebSocket-Protocol header, kept for nodes moved from v3
   # whose sing-box clients send it; clients without early data still connect.
   def early_data_server: if .early_data then {max_early_data:2048,early_data_header_name:"Sec-WebSocket-Protocol"} else {} end;
+'
+# Surge for iOS documents no way to import one proxy (manual.nssurge.com/tools/url-scheme.html
+# lists install-config and install-module only; a whole profile from a URL), so phone
+# users fill in the new-proxy form. The manual does not name that form's fields: each
+# line gives a Chinese name and, unless they match, the parameter name of the Surge line.
+# Input: the line; quoted values (passwords) may contain commas.
+SURGE_FORM_JQ='
+  {psk:"PSK",version:"版本",mode:"模式",reuse:"连接复用",password:"密码",username:"用户名（UUID）",uuid:"UUID",
+   sni:"SNI",alpn:"ALPN","encrypt-method":"加密方式","udp-relay":"UDP 转发",tls:"TLS",ws:"WebSocket",
+   "ws-path":"WebSocket 路径","ws-headers":"WebSocket 请求头","vmess-aead":"VMess AEAD",
+   "server-cert-fingerprint-sha256":"证书 SHA-256 指纹","shadow-tls-password":"Shadow TLS 密码",
+   "shadow-tls-sni":"Shadow TLS SNI","shadow-tls-version":"Shadow TLS 版本"} as $names |
+  index(" = ") as $i | [.[$i+3:]|scan("(?:\"[^\"]*\"|[^,])+")|ltrimstr(" ")] as $f |
+  "  名称：\(.[:$i])", "  类型：\($f[0])", "  服务器：\($f[1])", "  端口：\($f[2])",
+  ($f[3:][]|index("=") as $j|.[:$j] as $k|(.[$j+1:]|ltrimstr("\"")|rtrimstr("\"")) as $v|
+   "  \(($names[$k] // $k) as $n|if ($n|ascii_downcase) == $k then $n else "\($n)（\($k)）" end)：\(if $v == "true" then "开" elif $v == "false" then "关" else $v end)")
 '
 proto_register() {
     local type=$1 hook
@@ -133,6 +151,8 @@ proto_vless_validate() {
 proto_vless_render_inbound() {
     printf '%s' '[base_inbound + {type:"vless",users:[{uuid:.uuid,flow:"xtls-rprx-vision"}],tls:{enabled:true,server_name:.sni,reality:{enabled:true,handshake:{server:.sni,server_port:443},private_key:.private_key,short_id:[.short_id]}}}]'
 }
+# VLESS links: XTLS/Xray-core discussion #716 (github.com/XTLS/Xray-core/discussions/716),
+# no "/" before "?"; REALITY needs fp and pbk, sid and flow are its own fields.
 proto_vless_share_uri() {
     printf '%s' '"vless://\(.uuid)@\(uri_host):\(.port)?encryption=none&security=reality&type=tcp&flow=xtls-rprx-vision&fp=chrome&sni=\(.sni|@uri)&pbk=\(.public_key|@uri)&sid=\(.short_id)#\(.name|@uri)"'
 }
@@ -348,7 +368,9 @@ proto_anytls_validate() { printf '%s and (.password|text)' "$(tls_validate)"; }
 proto_anytls_render_inbound() {
     printf '%s' '[base_inbound + {type:"anytls",users:[{name:.id,password:.password}],tls:({enabled:true,server_name:.sni} + tls_files)}]'
 }
-proto_anytls_share_uri() { printf '%s' '"anytls://\(.password|@uri)@\(uri_host):\(.port)?sni=\(.sni|@uri)#\(.name|@uri)"'; }
+# anytls-go docs/uri_scheme.md (github.com/anytls/anytls-go): anytls://auth@host:port/?sni=…&insecure=…,
+# with the "/" before "?"; domain certificates only, so never insecure.
+proto_anytls_share_uri() { printf '%s' '"anytls://\(.password|@uri)@\(uri_host):\(.port)/?sni=\(.sni|@uri)#\(.name|@uri)"'; }
 proto_anytls_client_outbound() { printf '%s' 'base_outbound + {type:"anytls",password:.password,tls:tls_client}'; }
 proto_anytls_clash() { printf '%s' 'clash_base + {type:"anytls",password:.password,sni:.sni,udp:true}'; }
 proto_anytls_surge() { printf '%s' '"\(surge_head("anytls")), password=\"\(.password)\", sni=\(.sni)"'; }
@@ -368,10 +390,13 @@ proto_hysteria2_validate() { proto_anytls_validate; }
 proto_hysteria2_render_inbound() {
     printf '%s' '[base_inbound + {type:"hysteria2",users:[{name:.id,password:.password}],tls:({enabled:true,server_name:.sni,alpn:["h3"]} + tls_files)}]'
 }
+# v2.hysteria.network/docs/developers/URI-Scheme/: hysteria2://auth@host:port/?… with the
+# "/" before "?" and only obfs, obfs-password, sni, insecure, pinSHA256 and ech; no alpn
+# (Shadowrocket silently ignored a pasted link with alpn and without the "/").
 # The official client checks pinSHA256 only after normal verification, so a
 # self-signed link also needs insecure=1 (v2.hysteria.network, client docs).
 proto_hysteria2_share_uri() {
-    printf '%s' '"hysteria2://\(.password|@uri)@\(uri_host):\(.port)?sni=\(.sni|@uri)&alpn=h3\(if pinned then "&insecure=1&pinSHA256=\(.cert_sha256)" else "" end)#\(.name|@uri)"'
+    printf '%s' '"hysteria2://\(.password|@uri)@\(uri_host):\(.port)/?sni=\(.sni|@uri)\(if pinned then "&insecure=1&pinSHA256=\(.cert_sha256)" else "" end)#\(.name|@uri)"'
 }
 proto_hysteria2_client_outbound() { printf '%s' 'base_outbound + {type:"hysteria2",password:.password,tls:(tls_client + {alpn:["h3"]})}'; }
 proto_hysteria2_clash() { printf '%s' 'clash_base + {type:"hysteria2",password:.password,sni:.sni,alpn:["h3"]} + clash_pin'; }
@@ -657,7 +682,8 @@ proto_shadowsocks_validate() {
     printf '%s' '.sni == null and .method == "'"$SS_METHOD"'" and (.password|test("^[A-Za-z0-9+/]{22}==$"))'
 }
 proto_shadowsocks_render_inbound() { printf '%s' '[base_inbound + {type:"shadowsocks",method:.method,password:.password}]'; }
-# SIP002: AEAD-2022 userinfo is not base64, method and password are percent-encoded.
+# SIP002 (shadowsocks.org/doc/sip002.html): AEAD-2022 userinfo is not base64, method and
+# password are percent-encoded; no plugin, so no "/" before the tag.
 proto_shadowsocks_share_uri() { printf '%s' '"ss://\(.method):\(.password|@uri)@\(uri_host):\(.port)#\(.name|@uri)"'; }
 proto_shadowsocks_client_outbound() { printf '%s' 'base_outbound + {type:"shadowsocks",method:.method,password:.password}'; }
 proto_shadowsocks_clash() { printf '%s' 'clash_base + {type:"ss",cipher:.method,password:.password,udp:true}'; }
@@ -682,7 +708,10 @@ proto_tuic_validate() { printf '%s and %s and (.password|text)' "$(tls_validate)
 proto_tuic_render_inbound() {
     printf '%s' '[base_inbound + {type:"tuic",users:[{name:.id,uuid:.uuid,password:.password}],congestion_control:"bbr",tls:({enabled:true,server_name:.sni,alpn:["h3"]} + tls_files)}]'
 }
-# tuic:// has no pin parameter; clients that cannot pin need allow_insecure=1.
+# TUIC has no official link format; the de facto one (github.com/daeuniverse/dae/discussions/182,
+# used by NekoBox, v2rayN and mihomo): tuic://uuid:password@host:port?congestion_control=…
+# &udp_relay_mode=…&alpn=…&sni=…&allow_insecure=…&disable_sni=…, no "/" before "?".
+# It has no pin parameter; clients that cannot pin need allow_insecure=1.
 proto_tuic_share_uri() {
     printf '%s' '"tuic://\(.uuid):\(.password|@uri)@\(uri_host):\(.port)?congestion_control=bbr&alpn=h3&sni=\(.sni|@uri)&udp_relay_mode=native\(if pinned then "&allow_insecure=1" else "" end)#\(.name|@uri)"'
 }
@@ -733,6 +762,7 @@ proto_vlesstls_render_inbound() {
     printf '%s' '[base_inbound + {type:"vless",users:[{name:.id,uuid:.uuid} + (if .transport == "tcp" then {flow:"xtls-rprx-vision"} else {} end)],
       tls:({enabled:true,server_name:.sni} + (if stream_alpn then {alpn:stream_alpn} else {} end) + tls_files)} + stream_server]'
 }
+# Same standard as VLESS Reality (Xray-core discussion #716); alpn is one of its fields.
 proto_vlesstls_share_uri() {
     printf '%s' '"vless://\(.uuid)@\(uri_host):\(.port)?encryption=none&security=tls&sni=\(.sni|@uri)&fp=chrome&\(stream_query)#\(.name|@uri)"'
 }
@@ -791,6 +821,9 @@ proto_trojan_validate() { proto_anytls_validate; }
 proto_trojan_render_inbound() {
     printf '%s' '[base_inbound + {type:"trojan",users:[{name:.id,password:.password}],tls:({enabled:true,server_name:.sni} + tls_files)}]'
 }
+# trojan-gfw (github.com/trojan-gfw/trojan-url) defines trojan://password@host:port only;
+# the query is the de facto one of v2rayN and mihomo, with the fields of Xray-core
+# discussion #716 (security, sni, type).
 proto_trojan_share_uri() { printf '%s' '"trojan://\(.password|@uri)@\(uri_host):\(.port)?security=tls&sni=\(.sni|@uri)&type=tcp#\(.name|@uri)"'; }
 proto_trojan_client_outbound() { printf '%s' 'base_outbound + {type:"trojan",password:.password,tls:tls_client}'; }
 proto_trojan_clash() { printf '%s' 'clash_base + {type:"trojan",password:.password,sni:.sni,udp:true}'; }
@@ -812,7 +845,8 @@ proto_vmess_render_inbound() {
     printf '%s' '[base_inbound + {type:"vmess",users:[{name:.id,uuid:.uuid,alterId:0}],
       tls:({enabled:true,server_name:.sni,alpn:["http/1.1"]} + tls_files),transport:({type:"ws",path:.path} + early_data_server)}]'
 }
-# v2rayN format: vmess:// + base64 of a JSON object with string values.
+# v2rayN format ver 2 (github.com/2dust/v2rayN/wiki, Description-of-VMess-share-link):
+# vmess:// + base64 of a JSON object with string values.
 proto_vmess_share_uri() {
     printf '%s' '"vmess://" + ({v:"2",ps:.name,add:.host,port:(.port|tostring),id:.uuid,aid:"0",scy:"auto",net:"ws",type:"none",
       host:.sni,path:.path,tls:"tls",sni:.sni,alpn:"http/1.1",fp:"chrome"}|tojson|@base64)'
@@ -856,6 +890,8 @@ proto_naive_validate() { printf '%s and (.username|test("^[A-Za-z0-9._-]{1,64}$"
 proto_naive_render_inbound() {
     printf '%s' '[base_inbound + {type:"naive",network:"tcp",users:[{username:.username,password:.password}],tls:({enabled:true,server_name:.sni} + tls_files)}]'
 }
+# De facto Naive link (gist.github.com/DuckSoft/ca03913b0a26fc77a1da4d01cc6ab2f1):
+# naive+https://user:pass@host:port?padding=…#name; no query needed here.
 proto_naive_share_uri() { printf '%s' '"naive+https://\(.username|@uri):\(.password|@uri)@\(.sni):\(.port)#\(.name|@uri)"'; }
 proto_naive_client_outbound() { printf '%s' 'base_outbound + {type:"naive",username:.username,password:.password,tls:tls_client}'; }
 proto_naive_secrets() { printf '%s' '.username,.password'; }
@@ -881,6 +917,9 @@ proto_hysteria_render_inbound() {
     printf '%s' '[base_inbound + {type:"hysteria",up_mbps:1000,down_mbps:1000,users:[{name:.id,auth_str:.password}],
       tls:({enabled:true,server_name:.sni,alpn:["hysteria"]} + tls_files)}]'
 }
+# v1.hysteria.network/docs/uri-scheme/ (from Shadowrocket): hysteria://host:port?protocol=…
+# &auth=…&peer=…&insecure=…&upmbps=…&downmbps=…&alpn=…, no userinfo or "/"; the
+# bandwidths are required.
 proto_hysteria_share_uri() {
     printf '%s' '"hysteria://\(uri_host):\(.port)?protocol=udp&auth=\(.password|@uri)&peer=\(.sni|@uri)&upmbps=30&downmbps=100&alpn=hysteria\(if pinned then "&insecure=1" else "" end)#\(.name|@uri)"'
 }

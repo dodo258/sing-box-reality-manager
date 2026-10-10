@@ -56,8 +56,27 @@ vless://<UUID>@192.0.2.10:44279?encryption=none&security=reality&type=tcp&flow=x
 以后在菜单里选「2. 节点管理」可以再次查看链接、二维码和这些配置。
 按回车继续                                            ← 回车
 
-（Surge 不支持 VLESS，所以没有 Surge 段；支持的协议会多一段「── Surge：放进配置的 [Proxy] 段 ──」。
- Snell 没有分享链接，只给 Surge 和 sing-box 两段；v5 节点另有 Clash Meta。）
+（Surge 不支持 VLESS，所以没有 Surge 段；支持的协议会多一段 Surge。Surge 手机版不能粘贴整行，
+ 先逐项列出新建代理要填的内容，再给 Mac 版和文本编辑用的整行。Snell 没有分享链接，只给 Surge 和
+ sing-box 两段；v5 节点另有 Clash Meta。Snell v6 的 Surge 段：）
+
+── Surge：手机版新建代理后按下面逐项填写 ──
+  名称：snell-JP
+  类型：snell
+  服务器：192.0.2.10
+  端口：36256
+  PSK：<PSK>
+  版本（version）：6
+  模式（mode）：default
+  连接复用（reuse）：开
+  Shadow TLS 密码（shadow-tls-password）：<密码>
+  Shadow TLS SNI（shadow-tls-sni）：www.ctrip.com
+  Shadow TLS 版本（shadow-tls-version）：3
+Mac 版或在配置文本里编辑：把下面整行放进配置的 [Proxy] 段
+snell-JP = snell, 192.0.2.10, 36256, psk=<PSK>, version=6, mode=default, reuse=true, shadow-tls-password=<密码>, shadow-tls-sni=www.ctrip.com, shadow-tls-version=3
+
+（Hysteria2、TUIC、Hysteria v1 只走 UDP，客户端配置的最后多一句：）
+只走 UDP：Shadowrocket 等客户端的 TCP 延迟测试对这个节点显示不出延迟，属于正常；连不上多半是本地网络限制了 UDP，可以在菜单里选「1. 添加节点」换 TCP 类协议（VLESS Reality、AnyTLS）。
 
 ══ 已有节点时的主菜单 ══
 
