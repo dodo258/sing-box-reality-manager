@@ -90,6 +90,13 @@ service_healthy() {
     done
     return 1
 }
+# Deliberate restarts are not crash loops: systemd refuses a sixth start within ten
+# seconds (StartLimitBurst), which a few quick node changes reach; reset-failed
+# flushes that counter (systemd.unit, StartLimitIntervalSec=).
+restart_unit() {
+    : # fix removed to prove the regression test
+    systemctl restart "$1"
+}
 # Helper services (registry hook "sidecar"): unit names of STATE's enabled nodes,
 # or of all its nodes with "true".
 sidecar_units() {
@@ -125,7 +132,7 @@ sidecars_sync() {
         grep -Fxq "$unit" <<< "$want" || systemctl disable --now "$unit" >/dev/null 2>&1 || failures=1
     done
     for unit in $want; do
-        { systemctl restart "$unit" && systemctl enable "$unit" >/dev/null 2>&1; } || failures=1
+        { restart_unit "$unit" && systemctl enable "$unit" >/dev/null 2>&1; } || failures=1
     done
     return "$failures"
 }
@@ -143,7 +150,7 @@ recover_pending() {
         [[ $old == "$DATA/generations/"* && -f $old/state.json ]] || { err '回滚记录异常，需要人工检查。'; return 1; }
         switch_generation "$old" || return 1
         if [[ $active == 1 ]]; then
-            sidecars_sync "$STATE" && systemctl restart "$SERVICE" && service_healthy "$STATE" || { err '恢复原配置后服务启动失败。'; return 1; }
+            sidecars_sync "$STATE" && restart_unit "$SERVICE" && service_healthy "$STATE" || { err '恢复原配置后服务启动失败。'; return 1; }
         else systemctl stop "$SERVICE" && sidecars_sync || return 1; fi
     else
         systemctl stop "$SERVICE" && sidecars_sync || return 1
@@ -179,7 +186,7 @@ apply_state() (
     if [[ $count == 0 ]]; then
         systemctl stop "$SERVICE" && sidecars_sync || exit 1
     else
-        if ! sidecars_sync "$candidate" || ! systemctl restart "$SERVICE" || ! service_healthy "$candidate"; then err '新配置启动失败，恢复上一份配置。'; exit 1; fi
+        if ! sidecars_sync "$candidate" || ! restart_unit "$SERVICE" || ! service_healthy "$candidate"; then err '新配置启动失败，恢复上一份配置。'; exit 1; fi
         systemctl enable "$SERVICE" >/dev/null || exit 1
     fi
     if ! firewall_sync "$candidate"; then err '端口规则应用失败，恢复上一份节点配置和端口规则。'; exit 1; fi
@@ -203,9 +210,9 @@ update_core() {
     systemctl is-active --quiet "$SERVICE" && old_active=1
     cp -p "$CORE" "$CORE.previous" && mv -f "$tmp" "$CORE" || return 1
     if [[ $old_active == 0 ]]; then msg '核心已更新；服务保持停止状态。'; return 0; fi
-    if systemctl restart "$SERVICE" && service_healthy "$STATE"; then msg "核心已更新到 $CORE_VERSION。"; return 0; fi
+    if restart_unit "$SERVICE" && service_healthy "$STATE"; then msg "核心已更新到 $CORE_VERSION。"; return 0; fi
     mv -f "$CORE.previous" "$CORE"
-    systemctl restart "$SERVICE"
+    restart_unit "$SERVICE"
     err '新核心启动失败，已恢复原核心。'; return 1
 }
 update_script() {
