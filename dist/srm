@@ -1011,7 +1011,7 @@ service_healthy() {
 # seconds (StartLimitBurst), which a few quick node changes reach; reset-failed
 # flushes that counter (systemd.unit, StartLimitIntervalSec=).
 restart_unit() {
-    : # fix removed to prove the regression test
+    systemctl reset-failed "$1" 2>/dev/null || true
     systemctl restart "$1"
 }
 # Helper services (registry hook "sidecar"): unit names of STATE's enabled nodes,
