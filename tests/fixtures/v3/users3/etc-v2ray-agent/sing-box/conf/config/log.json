@@ -1,0 +1,8 @@
+{
+  "log": {
+    "disabled": false,
+    "level": "warn",
+    "output": "/etc/v2ray-agent/sing-box/conf/box.log",
+    "timestamp": true
+  }
+}

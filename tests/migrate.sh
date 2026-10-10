@@ -41,7 +41,15 @@ install_renew_timer() { touch "$work/renew-timer"; }
 apply_state() { validate_state "$1" && mkdir -p "$DATA/current" && cp "$1" "$STATE"; }
 # Certificates land where srm keeps them; the real activation runs in tests/install-live.sh.
 activate_cert() { printf '%s %s\n' "$1" "$3" >> "$work/activated"; mkdir -p "$DATA/certs/$1/active"; cp "$2/fullchain.pem" "$2/key.pem" "$DATA/certs/$1/active/"; }
-# Units live as files: $work/units/<unit>.active and .enabled.
+# Units live as files: $work/units/<unit>.active and .enabled. A unit with srm's
+# drop-in does not start while its asserted path is missing (`!path`: while it exists),
+# as systemd's AssertPathExists=; tests/install-live.sh checks it with real systemd.
+blocked() {
+    local file=$V3_UNIT_DIR/$1.d/srm-migrated.conf path
+    [[ -f $file ]] || return 1
+    path=$(sed -n 's/^AssertPathExists=//p' "$file")
+    if [[ $path == '!'* ]]; then [[ -e ${path#!} ]]; else [[ ! -e $path ]]; fi
+}
 systemctl() {
     printf '%s\n' "$*" >> "$work/systemctl.log"
     local verb=$1 now=0
@@ -51,7 +59,7 @@ systemctl() {
     case $verb in
       is-active) [[ -f $work/units/$1.active ]];;
       is-enabled) [[ -f $work/units/$1.enabled ]];;
-      start) [[ ! -f $work/units/broken-$1 ]] && touch "$work/units/$1.active";;
+      start) [[ ! -f $work/units/broken-$1 ]] && ! blocked "$1" && touch "$work/units/$1.active";;
       stop) rm -f "$work/units/$1.active";;
       enable) touch "$work/units/$1.enabled"; [[ $now == 0 ]] || touch "$work/units/$1.active";;
       disable) rm -f "$work/units/$1.enabled"; [[ $now == 0 ]] || rm -f "$work/units/$1.active";;
@@ -105,17 +113,18 @@ normalized() {
     jq '{nodes:[.nodes[].node|del(.id,.local_port,.cert_sha256,.pubkey_sha256)
           |if .cert_dir then .cert_dir |= (if test("/selfsigned/") then "selfsigned" else sub("^.*/certs/";"certs/") end) else . end],
          notes:([.nodes[]|select(.note)|{(.node.name):.note}]|add // {}),
+         lost_users:([.nodes[]|select(.lost_users)|{(.node.name):.lost_users}]|add // {}),
          skipped:[.skipped[].label],units}' "$1"
 }
 
 # Every fixture gives exactly the expected nodes, skipped items and services.
-for case in reality trio multi snell tls; do
+for case in reality trio multi snell tls xray-site users3; do
     load_fixture "$case"
     migrate_scan "$work/plan" || fail "$case scan"
-    jq --slurpfile want "tests/fixtures/v3/$case/expected.json" -e '. == ($want[0] + {notes:($want[0].notes // {})})' <(normalized "$work/plan") >/dev/null ||
+    jq --slurpfile want "tests/fixtures/v3/$case/expected.json" -e '. == ($want[0] + {notes:($want[0].notes // {}),lost_users:($want[0].lost_users // {})})' <(normalized "$work/plan") >/dev/null ||
         { normalized "$work/plan"; fail "$case: plan differs from expected.json"; }
 done
-echo 'PASS the 5 v3 samples (single Reality; Reality + AnyTLS + Hysteria2; multi-instance 30_–33_; Snell + ShadowTLS; TLS protocols) give the expected nodes'
+echo 'PASS the 7 v3 samples (single Reality; Reality + AnyTLS + Hysteria2; multi-instance 30_–33_; Snell + ShadowTLS; TLS protocols; Reality + Xray + website; one node with 3 users) give the expected nodes'
 
 # Details the expected files cannot show: local ports, self-signed pins, reasons.
 load_fixture snell
@@ -147,19 +156,20 @@ echo 'PASS nodes on ports srm already uses and nodes with an expired certificate
 load_fixture multi
 before=$(tree_hash)
 main migrate > "$work/out" 2>&1 || { cat "$work/out"; fail 'preview exit code'; }
-for want in '能迁移的节点' '1. VLESS Reality（端口 31443，07_VLESS_vision_reality_inbounds.json） · www.example.com' '说明：这个端口还有 1 个用户' \
+for want in '能迁移的节点' '1. VLESS Reality（端口 31443，07_VLESS_vision_reality_inbounds.json） · www.example.com' '下面这些用户迁移后将无法连接：' \
             '不能迁移：' 'Xray vless（端口 31448）' '网站：' '订阅链接：' '停止并停用旧服务：dodo258-sing-box.service' '没有改动'; do
     grep -qF -- "$want" "$work/out" || { cat "$work/out"; fail "preview lacks: $want"; }
 done
 [[ ! -e $STATE && ! -e $work/systemctl.log && $(tree_hash) == "$before" && ! -e $DATA/certs ]] || fail 'preview changed something'
 [[ ! -e $work/network-calls ]] || fail 'preview reached the network'
-grep -q '注意：继续运行的旧版网站 / Xray 用的证书' "$work/out" && grep -q '到期前 30 天自动向 Let'"'"'s Encrypt 重新申请（用 80 或 443' "$work/out" || fail 'certificate notes'
-# Nothing of v3 keeps running on its certificates: no such note. 80 and 443 both taken
-# after moving (nginx here): no promise of automatic renewal.
+grep -q '保留旧版定时任务（RenewTLS、UpdateGeo）：继续运行的 Xray vless（端口 31448）、网站 还要靠它续期证书' "$work/out" && grep -q '到期前 30 天自动向 Let'"'"'s Encrypt 重新申请（用 80 或 443' "$work/out" || fail 'certificate notes'
+# Nothing of v3 keeps running on its cron jobs: they are commented out. 80 and 443 both
+# taken after moving (nginx here): no promise of automatic renewal.
 load_fixture tls
 ss() { case "$*" in *':80'|*':443') printf 'LISTEN 0 511 *:%s *:*\n' "${*##*:}";; esac; }
 main migrate > "$work/out" 2>&1
-if grep -q '注意：继续运行的旧版网站' "$work/out"; then fail 'website note without a website'; fi
+grep -q '注释掉旧版定时任务（RenewTLS、UpdateGeo），行首加 #' "$work/out" || { cat "$work/out"; fail 'cron jobs kept without anything of v3 left'; }
+if grep -q '保留旧版定时任务' "$work/out"; then fail 'cron jobs kept without anything of v3 left'; fi
 grep -q '迁移后 80 和 443 端口都被占用，srm 没法自动给迁移过来的证书重新申请' "$work/out" || { cat "$work/out"; fail 'renewal warning'; }
 ss() { return 0; }
 (V3_ROOT=$work/none; if main migrate > "$work/out" 2>&1; then fail 'preview without v3 exited 0'; fi) || exit 1
@@ -178,6 +188,8 @@ grep -q '发现旧版节点' "$work/out" && grep -q '1. 确认迁移' "$work/out
 jq -e '(.nodes|length) == 3 and all(.nodes[]; .host == "192.0.2.10" and .enabled) and ([.nodes[].port]|sort) == [30443,30444,30445]' "$STATE" >/dev/null ||
     { cat "$work/out"; fail 'migrated state'; }
 [[ ! -e $work/units/dodo258-sing-box.service.active && ! -e $work/units/dodo258-sing-box.service.enabled ]] || fail 'old service still running or enabled'
+if systemctl start dodo258-sing-box.service; then fail 'the old service can still be started'; fi
+grep -qx "AssertPathExists=!$DATA/migrated-v3.json" "$work/systemd/dodo258-sing-box.service.d/srm-migrated.conf" || fail 'old service not blocked'
 grep -q "^# srm 迁移后停用：30 1 \* \* \* /bin/bash $work/v3/install.sh RenewTLS" "$work/crontab" &&
     grep -q "^# srm 迁移后停用：35 1 .* UpdateGeo" "$work/crontab" && grep -q '^0 3 \* \* \* /usr/local/bin/backup.sh$' "$work/crontab" || { cat "$work/crontab"; fail 'crontab'; }
 [[ $(cat "$work/activated") == 'vpn.example.com v3' && -e $work/renew-timer ]] || fail 'certificate handed to srm renewal'
@@ -223,6 +235,10 @@ for unit in dodo258-snell-20260101120000-32443 dodo258-shadowtls-20260101120000-
     [[ -e $work/units/$unit.service.active && -e $work/units/$unit.service.enabled ]] || fail "$unit not restored"
     grep -q "^disable --now $unit.service$" "$work/systemctl.log" && grep -q "^start $unit.service$" "$work/systemctl.log" || fail "$unit not stopped and started"
 done
+for unit in dodo258-snell-20260101120000-32443 dodo258-shadowtls-20260101120000-32443; do
+    [[ ! -e $work/systemd/$unit.service.d ]] || fail "$unit still blocked after restoring"
+done
+grep -q '^daemon-reload$' "$work/systemctl.log" || fail 'no daemon-reload after unblocking'
 cmp -s "$work/crontab" "$work/crontab.before" && [[ ! -e $STATE && ! -e $DATA/migrated-v3.json && $(tree_hash) == "$before" ]] || fail 'failed apply left changes'
 # A unit that cannot start again is reported.
 touch "$work/units/broken-dodo258-snell-20260101120000-32443.service"
@@ -234,7 +250,7 @@ echo 1 > "$work/core-check"
 if main migrate --apply --yes > "$work/out" 2>&1; then fail 'apply despite sing-box check failure'; fi
 grep -q '没有通过校验（节点数据或 sing-box check），旧服务没有停止' "$work/out" && [[ ! -e $STATE && -e $work/units/dodo258-sing-box.service.active ]] || { cat "$work/out"; fail 'check failure'; }
 if grep -qs 'disable' "$work/systemctl.log"; then fail 'units touched before the check passed'; fi
-echo 'PASS --apply that fails restores the old services (running and enabled), crontab and state; a failed sing-box check stops nothing'
+echo 'PASS --apply that fails restores the old services (running, enabled, no longer blocked), crontab and state; a failed sing-box check stops nothing'
 
 # --apply without --yes asks; at the end of input nothing happens. With --yes Snell nodes
 # get their server program and the v4 services of the old nodes stop.
@@ -246,6 +262,65 @@ main migrate --apply --yes > "$work/out" 2>&1 || { cat "$work/out"; fail 'snell 
 jq -e '[.nodes[]|.type == "snell" and .snell_version == 5]|all and length == 2' "$STATE" >/dev/null || fail 'snell nodes'
 [[ -e $work/units/dodo258-snell-20260103120000-32445.service.active ]] || fail 'the node that did not move must keep running'
 echo 'PASS --apply asks unless --yes; Snell nodes move to snell-server v5; nodes that do not move keep their services'
+
+# Xray and the website of v3 keep running: its cron jobs stay, since they renew their
+# certificates; the old sing-box service is blocked, so when v3's renewal restarts it
+# (stop, start) the start fails and srm keeps the port.
+load_fixture xray-site
+cp "$work/crontab" "$work/crontab.before"
+main migrate > "$work/out" 2>&1
+grep -q '保留旧版定时任务（RenewTLS、UpdateGeo）：继续运行的 Xray vless（端口 443）、网站 还要靠它续期证书' "$work/out" &&
+    grep -q '禁止这些旧服务再启动：旧版脚本重启它们会失败，不会和 srm 抢端口' "$work/out" || { cat "$work/out"; fail 'xray-site preview'; }
+# v3 here restarts only Xray when renewing (sing-box serves no Hysteria2 / TUIC / socks5): no nginx note.
+if grep -q 'nginx 会停着' "$work/out"; then fail 'nginx note although v3 does not restart its sing-box'; fi
+main migrate --apply --yes > "$work/out" 2>&1 || { cat "$work/out"; fail 'xray-site apply'; }
+cmp -s "$work/crontab" "$work/crontab.before" || { cat "$work/crontab"; fail 'cron jobs commented out although Xray and the website still need them'; }
+[[ -e $work/units/dodo258-xray.service.active && -e $work/units/dodo258-xray.service.enabled ]] || fail 'Xray touched'
+if grep -q 'xray' "$work/systemctl.log"; then fail 'systemctl called for Xray'; fi
+systemctl stop dodo258-sing-box.service
+if systemctl start dodo258-sing-box.service; then fail 'v3 renewal could start the old sing-box again'; fi
+[[ ! -e $work/units/dodo258-sing-box.service.active ]] && jq -e '.nodes[0].port == 34443' "$STATE" >/dev/null || fail 'port not kept by srm'
+# Uninstalling srm removes the block (the unit stays disabled); without srm's record the
+# old unit starts again in any case.
+cp "$DATA/migrated-v3.json" "$work/record"
+migrate_unblock_recorded > "$work/out" 2>&1
+[[ ! -e $work/systemd/dodo258-sing-box.service.d ]] && grep -q 'systemctl enable --now dodo258-sing-box.service' "$work/out" || fail 'uninstall left the block'
+mkdir -p "$work/systemd/dodo258-sing-box.service.d"
+printf '[Unit]\nAssertPathExists=!%s\n' "$DATA/migrated-v3.json" > "$work/systemd/dodo258-sing-box.service.d/srm-migrated.conf"
+rm "$DATA/migrated-v3.json"
+systemctl start dodo258-sing-box.service || fail 'old unit still blocked without srm'
+# A v3 whose renewal restarts sing-box (it serves socks5 too) leaves nginx stopped: the preview says so.
+load_fixture xray-site
+cp tests/fixtures/v3/multi/etc-v2ray-agent/sing-box/conf/config/20_socks5_inbounds.json "$work/v3/sing-box/conf/config/"
+main migrate > "$work/out" 2>&1
+grep -q '这一步会失败（提示「sing-box重启失败」）并提前结束，nginx 会停着（网站、经 nginx 转发的 Xray 节点和伪装页都打不开）' "$work/out" || { cat "$work/out"; fail 'nginx note'; }
+# Only Snell nodes move: v3's sing-box keeps running, so its cron jobs stay.
+load_fixture snell
+cp "$work/crontab" "$work/crontab.before"
+mkdir -p "$work/v3/sing-box/conf/config"
+cp tests/fixtures/v3/multi/etc-v2ray-agent/sing-box/conf/config/20_socks5_inbounds.json "$work/v3/sing-box/conf/config/"
+cp tests/fixtures/v3/reality/systemd/dodo258-sing-box.service "$work/systemd/"; touch "$work/units/dodo258-sing-box.service.active"
+main migrate --apply --yes > "$work/out" 2>&1 || { cat "$work/out"; fail 'snell apply next to v3 sing-box'; }
+cmp -s "$work/crontab" "$work/crontab.before" && [[ -e $work/units/dodo258-sing-box.service.active ]] || fail 'v3 sing-box keeps running and its cron jobs stay'
+echo 'PASS with Xray, the website or v3 sing-box still running the cron jobs stay; the old sing-box is blocked (a restart by v3 fails, srm keeps the port) until srm is removed; nginx note when v3 renewal restarts sing-box'
+
+# One node with 3 users: the first one moves, the other two are listed as unable to
+# connect; Enter at 「确认 / 返回」 goes back.
+load_fixture users3
+main <<< $'\n\n0' > "$work/out" 2>&1 || fail 'users3 menu'
+for want in '这个端口有 3 个用户，v4 每个节点只能有一个用户，只迁移「alice-VLESS_Reality_Vision」。' '下面这些用户迁移后将无法连接：' \
+            '       - bob-VLESS_Reality_Vision' '       - carol-VLESS_Reality_Vision' '注意：上面列出的 2 个用户迁移后将无法连接。' '请选择 [0]'; do
+    grep -qF -- "$want" "$work/out" || { cat "$work/out"; fail "users3 preview lacks: $want"; }
+done
+[[ ! -e $STATE ]] && ! grep -qE '^(disable|stop)' "$work/systemctl.log" || fail 'Enter after the user warning changed something'
+grep -qxF '注意：上面列出的 1 个用户迁移后将无法连接。' docs/menu-preview.txt || fail 'docs/menu-preview.txt lacks the user warning'
+main <<< $'\n1\n0' > "$work/out" 2>&1 || fail 'users3 migrate'
+jq -e '.nodes[0].uuid == "9fa0b1c2-3333-4444-8555-2a2b2c2d2e2f"' "$STATE" >/dev/null || fail 'first user not moved'
+# --yes skips the preview; the users that stay behind are still named.
+load_fixture users3
+main migrate --apply --yes > "$work/out" 2>&1 || fail 'users3 --yes'
+grep -qF '这些用户迁移后将无法连接（v4 每个节点只有一个用户）：bob-VLESS_Reality_Vision、carol-VLESS_Reality_Vision' "$work/out" || { cat "$work/out"; fail 'users3 --yes warning'; }
+echo 'PASS a node with 3 users: the preview lists the 2 users that cannot connect afterwards, Enter goes back, 1 moves the first user; --yes names them too'
 
 # A certificate moved from v3 is renewed by a new Let's Encrypt request within 30 days of expiry.
 issue_certificate() { printf '%s\n' "$*" >> "$work/issued"; }
@@ -274,7 +349,7 @@ if [[ -n ${TEST_CORE:-} ]]; then
     CORE=$TEST_CORE
     pair=$("$CORE" generate reality-keypair)
     [[ $(reality_public_key "$(awk '/PrivateKey:/{print $2}' <<< "$pair")") == "$(awk '/PublicKey:/{print $2}' <<< "$pair")" ]] || fail 'public key derivation'
-    for case in reality trio multi snell tls; do
+    for case in reality trio multi snell tls xray-site users3; do
         load_fixture "$case"
         main migrate --apply --yes > "$work/out" 2>&1 || { cat "$work/out"; fail "$case with the real core"; }
         render_config "$STATE" > "$work/config.json" && "$CORE" check -c "$work/config.json" || fail "$case config"

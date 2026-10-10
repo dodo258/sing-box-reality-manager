@@ -162,3 +162,16 @@
 - 备选/被否决的方案：读 `reality_key` 取公钥（文件可能过期或缺失）；把多用户拆成多个节点（同一端口只能有一个节点）；把 v3 的 DNS 分流转换成平台规则（geosite 规则集离线没法展开成域名列表）；迁移时立即重新申请证书（80/443 可能被 nginx 或节点占着，失败会卡住迁移）；导入证书按 `import` 处理（v3 续期停了以后没人续，最多 90 天后节点全断）。
 - 没验证：没有在真实的 v3 服务器上跑过（用 5 份按 v3 源码写出的脱敏样本，加 CI 里真实 systemd 的替身服务）；Reality 的真实流量（握手要访问外网目标，只做了 `sing-box check` 和公钥核对）；v3 证书到期前的真实 Let's Encrypt 重新申请（只有单元测试）。
 - 拍板人：Claude
+
+## 2026-10-10 迁移安全修正：旧版定时任务保留与否、旧服务禁止启动、多用户
+- 决定：
+  - 读了 v3 `install.sh`：`RenewTLS` 只在证书剩 1 天时续期，续期时停 nginx 和核心、`acme.sh` 续期、`reloadCore`（Xray 在就重启 Xray；没有 Xray，或 sing-box 带 Hysteria2 / TUIC / socks5 时重启 `dodo258-sing-box`），最后才启动 nginx；`UpdateGeo` 下载 geo 后同样 `reloadCore`。重启 sing-box 用的是 `systemctl start dodo258-sing-box.service`，启动后 `pgrep` 不到进程就打印「sing-box重启失败」并 `exit 0`。
+  - 有剩余 v3 服务（Xray 节点、网站，或 sing-box 节点一个都没迁走时的旧 sing-box）就**保留** `RenewTLS` / `UpdateGeo`，预览写明还有谁要靠它；没有剩余服务才注释。
+  - 迁走节点的旧单元除了 stop + disable，再加一个 drop-in `/etc/systemd/system/<单元>.d/srm-migrated.conf`：`[Unit] AssertPathExists=!/var/lib/srm/migrated-v3.json`，`daemon-reload` 后 `systemctl start` 报 Assertion failed，v3 续期重启它会失败，不会和 srm 抢端口。迁移失败或中断时先删掉 drop-in 再恢复运行 / 自启。
+  - **和待办推荐不同：没用 `systemctl mask`**。v3 的单元文件就在 `/etc/systemd/system`，`systemctl mask` 在那里已有同名文件时直接报「File … already exists」失败（mask 是在同一路径放指向 /dev/null 的链接）；要 mask 只能先挪走或删掉 v3 的单元文件。drop-in 不动 v3 的文件，效果一样（启动失败），而且条件挂在 srm 的迁移记录上：卸载 srm 时按迁移记录删掉这些 drop-in（旧单元仍是停用状态，卸载时提示怎么重新启用），就算 drop-in 留下，迁移记录随 /var/lib/srm 删除后它也不再起作用，不会把用户困住。独立审查后补充：nginx 提示不只看网站，装了 nginx 就提示（v3 续期总是先停 nginx，经 nginx 转发的 Xray 节点和伪装页也受影响）；`--apply --yes` 跳过预览时也列出连不上的用户；迁移记录写入失败会报错。
+  - 已知后果，预览里写明：网站还在、且 v3 续期时会重启 sing-box（按 v3 `readInstallType` 判断：没有 Xray，或 sing-box 带 06 / 09 / 20 配置）时，续期那天 v3 会在重启 sing-box 失败后提前退出，nginx 停着，要用户手动 `systemctl start nginx`。不封住旧单元也一样会失败（srm 占着端口，旧 sing-box 起不来），还会每 10 秒重试，所以封住仍是更好的选择；v3 脚本冻结不改。
+  - 多用户：v4 每个节点一个凭据，改成多用户要动 state、全部协议的配置生成、分享链接和客户端片段，不在这条里做。预览逐个列出不迁移的用户（name，没有就 username / email / 第 N 个用户），写「下面这些用户迁移后将无法连接」，确认前再提示一次总数，回车 = 返回。
+- 理由：待办验收标准；续证书和不抢端口两个都要，旧版续期失败的影响比证书全部过期小。
+- 备选/被否决的方案：`systemctl mask`（见上，对 /etc 里的单元文件无效）；挪走 v3 单元文件再 mask（改了 v3 的文件，卸载 srm 后还要用户自己恢复）；给旧单元换成空配置的 ExecStart 让 v3 重启「成功」、nginx 能正常启动（太绕，还要常驻一个空跑的旧 sing-box）；一律注释定时任务（Xray / 网站证书 90 天内过期）。
+- 没验证：没在真实 v3 服务器上跑 v3 自己的 RenewTLS（CI 用真实 systemd 模拟它的 stop + start 两步）；mask 失败的说法来自 systemd 行为和公开报错帖，没有单独在 CI 里跑。
+- 拍板人：Claude
