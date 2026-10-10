@@ -285,7 +285,7 @@ deploy_summary() {
     msg "服务器：$(jq -r .host <<< "$node")    端口：$port/$transport    节点 ID：$(jq -r .id <<< "$node")"
     msg "云服务器安全组：连不上时，到服务商控制台的安全组（云防火墙）放行入站 $transport $port；本机的 UFW / firewalld / iptables 已自动放行。"
     client_snippets qr <<< "$node"
-    msg '以后在菜单里选「2. 节点管理」可以再次查看链接、二维码和这些配置。'
+    msg '以后在菜单里选「2. 节点管理」可以再次查看链接、二维码和这些配置，也能用「临时导入链接」把整份配置一键导入 Clash Verge、sing-box App 或 Surge。'
 }
 # Client configurations of the node on stdin, one section per supported client;
 # with "qr" the share link is also drawn as a QR code (locally, no network).
@@ -454,7 +454,13 @@ node_menu() {
         index=$((index+1))
         printf '  %s. %s | %s | 端口 %s | %s\n' "$index" "$name" "$type" "$port" "$status"
     done < <(jq -r '.nodes[]|[.name,.type,(.port|tostring),(if .enabled then "启用" else "停用" end)]|@tsv' "$STATE")
-    ask '节点序号（也可输入完整 ID；0 返回）' || return 0
+    msg "  $((count+1)). 导出完整配置 · 可直接导入 Clash Verge / sing-box App / Surge"
+    msg "  $((count+2)). 临时导入链接 · 扫码一键导入，用完自动关闭"
+    ask '请选择（序号，也可输入节点完整 ID；0 返回）' || return 0
+    case $REPLY in
+      "$((count+1))") profile_menu export; return;;
+      "$((count+2))") profile_menu link; return;;
+    esac
     id=$REPLY
     if [[ $REPLY =~ ^[1-9][0-9]{0,5}$ ]] && (( REPLY <= count )); then
         id=$(jq -r --argjson i "$((REPLY-1))" '.nodes[$i].id' "$STATE") || return 1

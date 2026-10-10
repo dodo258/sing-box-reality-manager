@@ -121,6 +121,23 @@ if curl -s --max-time 3 -o /dev/null http://127.0.0.1:24010/; then echo 'FAIL de
 ! grep -q -- '--dport 24010 ' "$work/saved.v4" || exit 1
 ip6tables -S INPUT | grep -q -- '--dport 24011 -m comment --comment srm -j ACCEPT'
 echo 'PASS real iptables: deleting a node closes only its port'
+# The temporary import link opens its port before the REJECT only while it serves.
+jq -n '{schema:2,policies:[],unlock_dns:null,egress:null,nodes:[{id:"1000000000000001",name:"ss",type:"shadowsocks",enabled:true,
+  host:"127.0.0.1",port:24011,method:"2022-blake3-aes-128-gcm",password:"YctPZ6U7xPPcU+gp3u+0tw=="}]}' > "$STATE"
+firewall_sync "$STATE"
+profile_link clash '' 24030 30 > "$work/link.out" 2>&1 &
+link=$!
+for _ in $(seq 100); do grep -q '^http://' "$work/link.out" && break; sleep 0.1; done
+url=$(grep -m 1 '^http://' "$work/link.out")
+iptables -S INPUT | grep -q -- '--dport 24030 -m comment --comment srm -j ACCEPT'
+curl -s --max-time 3 -o "$work/profile.yaml" "$url"
+grep -q '^proxies:$' "$work/profile.yaml"
+wait "$link"
+! iptables -S INPUT | grep -q -- '--dport 24030 ' || exit 1
+! ip6tables -S INPUT | grep -q -- '--dport 24030 ' || exit 1
+iptables -S INPUT | grep -q -- '--dport 24011 -m comment --comment srm -j ACCEPT'
+if curl -s --max-time 3 -o /dev/null "$url"; then echo 'FAIL temporary link still served'; exit 1; fi
+echo 'PASS real iptables: the temporary import link opens its port before the REJECT while serving and removes the rule after one download; node rules stay'
 firewall_clear
 iptables -S | cmp - "$work/ipt-original.v4"
 ip6tables -S | cmp - "$work/ipt-original.v6"

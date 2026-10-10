@@ -226,3 +226,21 @@
   - 只在装了 netfilter-persistent 时才用 iptables（mack-a 的判断）：规则来自别的方式（开机脚本 `iptables-restore`）的机器照样连不上；按待办「没有就提示」做。
 - 没验证：没在真实甲骨文镜像上跑；CI 在隔离网络命名空间里用真实 iptables / ip6tables 加模拟的 netfilter-persistent（真包会把 runner 上的 ufw 卸掉）验证了放行、删节点、卸载复原和保存内容。原生 nftables 规则（不经 iptables-nft）仍不接管，照旧提示。
 - 拍板人：Claude
+
+## 2026-10-11 完整客户端配置与临时导入链接（替代旧订阅）
+- 决定（方案 `docs/specs/2026-10-11-full-client-config.md`）：
+  - 新模块 `lib/profiles.sh` 生成三种完整配置：mihomo（Clash Verge / Clash Meta for Android）、sing-box 官方 App、Surge。节点写法全部来自注册表已有的 `client_outbound` / `clash` / `surge`，App 不支持的协议跳过并列出。可选全部启用的节点或单个节点；重名节点（或和「节点选择」「DIRECT」撞名）自动加「 (2)」。
+  - 基本分流统一为：局域网 / 私有地址直连，国内域名和国内 IP 直连，其余走「节点选择」策略组。mihomo 用 fake-ip + 阿里 / 腾讯 DoH、`GEOSITE,cn`、`GEOIP,CN`（两个 App 自带 geo 数据）；sing-box 用 tun 入站（官方 App 必须有）、国内域名走 223.5.5.5 DoH、其余走经代理的 1.1.1.1 DoH，官方 geosite-cn / geoip-cn 规则集经「节点选择」下载并用 cache_file 缓存；Surge 用 `RULE-SET,LAN`、`DOMAIN-SUFFIX,cn`、`GEOIP,CN`、`FINAL,节点选择,dns-failed`。
+  - 「临时导入链接」：python3 起一个只服务随机路径（32 位十六进制）的临时端口，下载成功一次或 10 分钟后退出；python 自己按截止时间退出，bash 被杀也不会常驻。端口用 `firewall_sync "$STATE" 端口` 临时放行（第二个参数从「只能 80 / 443」放宽为任意端口），退出、Ctrl+C、SSH 断开时撤掉；被强杀留下的规则下次同步会删掉。服务器上有正式证书且域名解析到节点地址时用 HTTPS + 域名，否则 HTTP + IP 并提示「链接里带节点密码，用完即关」。前台等待并持有 srm 锁（最长 10 分钟）。
+  - 一键导入链接只放有官方出处的：sing-box `sing-box://import-remote-profile?url=…#名称`（sing-box.sagernet.org/clients/general/，libbox remote_profile.go）；Surge `surge:///install-config?url=…`（manual.nssurge.com/tools/url-scheme.html）；Clash `clash://install-config?name=…&url=…`——查不到文档页，依据官方客户端源码：Clash Verge Rev `src-tauri/src/utils/resolve/scheme.rs`（2026-10-10 提交 63ee674）把第一个 `url=` 之后整段当地址，所以 name 必须在 url 前面；Clash Meta for Android `AndroidManifest.xml`（scheme clash / clashmeta、host install-config）和 `ExternalControlActivity.kt`（参数 url、name；提交 94ebfd6）。
+  - 菜单「2. 节点管理」在节点列表后加「导出完整配置」「临时导入链接」（序号接在节点后面），先选节点（回车 = 全部）再选 App（回车 = Clash），临时链接再问端口（回车随机）。主菜单第 2 项改为「节点管理 · 链接 / 二维码 / 完整配置」，部署完成页和迁移预览里的「订阅」说明同步改了。命令行 `srm profile`、`srm profile-link`。
+- 理由：待办原文；新手用 Clash Verge、sing-box App、手机版 Surge 时只能整份导入。和 2026-10-10「客户端导入修正」当时否决 install-config 的理由（要开下载服务、会替换整份配置）不冲突：这次下载服务只在用户主动选择时开、下载一次就关；Surge 的 install-config 装进去的是一份新配置。
+- 备选/被否决的方案：
+  - 常驻订阅服务（v3 / mack-a 的做法）：一直开端口、URL 带密码，违反「打开菜单不联网」，也要常驻 nginx 或别的服务。
+  - 用 nc / socat / Bash 做下载服务：做不了 TLS、精确路径、超时和「只服务一次」；python3 在 Debian / Ubuntu 云镜像基本都有，缺了就 apt 装（和 Snell 装 unzip 一样）。
+  - 一次同时提供三个 App 的文件：第一个下载就会把别的关掉，所以一次只服务一个 App。
+  - mihomo 用远程 rule-providers（mack-a 的做法）：要从 GitHub 拉规则，国内常常拉不下来；两个 App 都自带 geo 数据。
+  - sing-box 加 mixed 入站给电脑用：官方 App 在电脑上也用 tun，不需要。
+- 没验证：三个 App 实际扫码导入（没有设备）；Surge 配置只做了格式断言（没有 Linux 版 Surge）；云安全组拦住临时端口时只能靠提示；sing-box App 里 Naive 节点要 App 自带 naive 支持。
+- 拍板人：Claude
+- 已知影响（审查提出）：临时链接等待下载时持有 srm 锁（最长 10 分钟），这期间每日证书续期 `srm renew` 会因「另一项操作尚未结束」退出，第二天再续（证书提前 30 天续期，影响小）。

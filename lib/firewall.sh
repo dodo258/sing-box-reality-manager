@@ -165,8 +165,9 @@ firewall_sync() {
     if [[ -n $state && -f $state ]]; then
         jq -r ".nodes[]|select(.enabled)|.port as \$p|($(proto_jq_transports))[]|[\$p,.]|@tsv" "$state" > "$ports" || { rm -f "$ports" "$desired"; return 1; }
     fi
+    # A temporary TCP port: certificate validation (80 / 443) or a profile download link.
     if [[ -n ${2:-} ]]; then
-        [[ $2 == 80 || $2 == 443 ]] || { rm -f "$ports" "$desired"; return 1; }
+        valid_port "$2" || { rm -f "$ports" "$desired"; return 1; }
         printf '%s\ttcp\n' "$2" >> "$ports"
     fi
     # A node may itself use the certificate challenge port.
