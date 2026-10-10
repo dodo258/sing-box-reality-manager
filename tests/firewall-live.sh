@@ -156,6 +156,8 @@ ip netns exec srm-hop-client ip addr add 10.77.0.2/24 dev srm-hop1
 ip netns exec srm-hop-client ip addr add fd77::2/64 dev srm-hop1 nodad
 ip netns exec srm-hop-client ip link set srm-hop1 up
 ip netns exec srm-hop-client ip link set lo up
+# The IPv6 REJECT above also drops neighbour discovery; a server allows ICMPv6 anyway.
+ip6tables -I INPUT -p ipv6-icmp -j ACCEPT
 cat > "$work/udp.py" <<'PY'
 import socket, sys
 if sys.argv[1] == "serve":
@@ -214,6 +216,8 @@ answers fd77::1 20321 || { echo 'FAIL nft IPv6 hop port'; exit 1; }
 firewall_clear
 if nft list table inet srm_hop >/dev/null 2>&1; then echo 'FAIL nft table left after uninstall'; exit 1; fi
 if answers 10.77.0.1 20500; then echo 'FAIL hop port answers after uninstall'; exit 1; fi
+ip6tables -D INPUT -p ipv6-icmp -j ACCEPT
 iptables -S | cmp - "$work/ipt-original.v4"
+ip6tables -S | cmp - "$work/ipt-original.v6"
 [[ ! -e $DATA/port-hopping ]] || exit 1
 echo 'PASS real nftables: the table inet srm_hop redirects the range (IPv4 and IPv6); uninstall deletes it and the original rules are back'

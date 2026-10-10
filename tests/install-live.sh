@@ -255,33 +255,35 @@ echo 'PASS no automatic update job is installed'
 # comes back when the service starts again (as after a reboot) and goes with the node.
 (
     source ./srm.sh
-    hop_rule() { iptables -t nat -S PREROUTING | grep -F -- "--dport $1 -m comment --comment srm-hop -j REDIRECT --to-ports $2"; }
+    # The rule of the node hy2-hop as its state says.
+    hop_rule() { jq -r '.nodes[]|select(.name=="hy2-hop")|"\(.hop.start):\(.hop.end) \(.port)"' "$STATE" | { read -r range port
+        iptables -t nat -S PREROUTING | grep -F -- "--dport $range -m comment --comment srm-hop -j REDIRECT --to-ports $port"; }; }
     sed -i '/hop-sync/d' "/etc/systemd/system/$SERVICE"; systemctl daemon-reload
-    node_add "$PWD/dist/srm" hysteria2 --name hy2-hop --host 127.0.0.1 --hop 20000-20999 --yes
+    node_add "$PWD/dist/srm" hysteria2 --name hy2-hop --host 127.0.0.1 --hop auto --yes
     n=$(jq -c '.nodes[]|select(.name=="hy2-hop")' "$STATE"); id=$(jq -r .id <<< "$n"); port=$(jq -r .port <<< "$n")
-    jq -e '.hop == {start:20000,end:20999}' <<< "$n" >/dev/null || exit 1
+    jq -e '.hop.start >= 20000 and .hop.end == .hop.start + 999' <<< "$n" >/dev/null || exit 1
     [[ $(systemctl show -p ExecStartPre --value "$SERVICE") == *'argv[]=/opt/srm/manager.sh hop-sync'*'ignore_errors=yes'* ]] || { systemctl show -p ExecStartPre "$SERVICE"; exit 1; }
     systemd-analyze verify "/etc/systemd/system/$SERVICE"
     systemctl is-active --quiet "$SERVICE" && [[ -n $(ss -H -lun "sport = :$port") ]] || exit 1
-    hop_rule 20000:20999 "$port" || exit 1
+    hop_rule || exit 1
     # As after a reboot: the runtime rule is gone until the service starts.
-    read -ra spec <<< "$(hop_rule 20000:20999 "$port" | sed 's/^-A PREROUTING //')"
+    read -ra spec <<< "$(hop_rule | sed 's/^-A PREROUTING //')"
     iptables -t nat -D PREROUTING "${spec[@]}"
-    ! hop_rule 20000:20999 "$port" >/dev/null || exit 1
+    ! hop_rule >/dev/null || exit 1
     systemctl restart "$SERVICE"
-    hop_rule 20000:20999 "$port" || exit 1
+    hop_rule || exit 1
     node_change "$id" hop off
     ! iptables -t nat -S PREROUTING | grep -q srm-hop && [[ ! -e $DATA/port-hopping ]] || exit 1
     node_change "$id" hop auto
-    hop_rule 20000:20999 "$port" || exit 1
+    hop_rule || exit 1
     node_change "$id" toggle
     ! iptables -t nat -S PREROUTING | grep -q srm-hop || exit 1
     node_change "$id" toggle
-    hop_rule 20000:20999 "$port" || exit 1
+    hop_rule || exit 1
     node_change "$id" delete
     ! iptables -t nat -S PREROUTING | grep -q srm-hop && [[ ! -e $DATA/port-hopping ]] || exit 1
     node_add "$PWD/dist/srm" hysteria2 --name hy2-hop --host 127.0.0.1 --hop auto --yes
-    hop_rule 20000:20999 "$(jq -r '.nodes[]|select(.name=="hy2-hop")|.port' "$STATE")" || exit 1
+    hop_rule || exit 1
 )
 echo 'PASS port hopping with real systemd: an old unit gets the hop-sync line, the redirect comes back when the service starts, and goes when hopping is off, the node stops or is deleted'
 # Uninstall with sing-box and a snell-server still running stops and removes both.

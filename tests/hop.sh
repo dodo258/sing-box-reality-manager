@@ -80,6 +80,8 @@ nft() {
 nat_backend=iptables
 hop_backend() { printf '%s\n' "$nat_backend"; }
 
+# Random node ports would now and then land in the ranges this test types in.
+choose_port() { local p=30100; while ! port_free "$p"; do p=$((p+1)); done; printf '%s\n' "$p"; }
 pin=$(printf 'a%.0s' $(seq 64))
 pubkey=$(printf 'A%.0s' $(seq 43))=
 cert='{sni:"hy.example.com",cert_dir:"/certs"}'
@@ -272,6 +274,10 @@ jq -e '.nodes[-1]|has("hop")|not' "$STATE" >/dev/null || fail '1 turned hopping 
 while IFS= read -r line; do
     grep -qxF -- "$line" docs/menu-preview.txt || fail "docs/menu-preview.txt is out of date: $line"
 done < <(grep -E '^端口跳跃（|^  [123]\. ' "$work/out" | sed -E 's/[0-9]{5}–[0-9]{5}/20000–20999/')
+# A port typed into the range picked just before is refused with the reason, then asked again.
+node_add self hysteria2 <<< $'2\n23500\n\n' > "$work/out" 2>&1 || { cat "$work/out"; fail 'port inside the picked range'; }
+grep -qF '端口 23500 在端口跳跃范围 23000–23999 里，换一个（或回车随机）。' "$work/out" || { cat "$work/out"; fail 'port in range message'; }
+jq -e '.nodes[-1]|.hop == {start:23000,end:23999} and .port != 23500' "$STATE" >/dev/null || fail 'port in range deployed'
 echo 'PASS deploying asks one question (Enter or 1 = off, 2 = the default range, 3 = typed and checked); --hop off|auto|range; the summary and JSON show the range; docs/menu-preview.txt shows it'
 
 # Node management menu: the node line shows the range, and the extra item turns it off.
@@ -284,9 +290,17 @@ node_menu <<< "$index"$'\n10\n2' > "$work/out" 2>&1 || fail 'node menu on'
 node "$id" | jq -e '.hop == {start:22000,end:22999}' >/dev/null && grep -q '云服务器安全组也要放行入站 UDP 22000-22999' "$work/out" && grep -q 'mport=22000-22999' "$work/out" || { cat "$work/out"; fail 'menu on'; }
 node_menu <<< "$(jq '[.nodes[].type]|index("tuic") + 1' "$STATE")"$'\n10' > "$work/out" 2>&1 || true
 grep -q '^10\.' "$work/out" && fail 'a TUIC node shows item 10'
+# On: the default range is the current one, so only off and a typed range are offered.
 node_menu <<< "$index"$'\n10\n0' > "$work/out" 2>&1 || true
+grep -qx '  3. 改为自己填的端口范围' "$work/out" && ! grep -Eq '^  2\. (开启|改为)' "$work/out" || { cat "$work/out"; fail 'menu of a node with hopping'; }
+node_menu <<< "$index"$'\n10\n3\n22000-22999' > "$work/out" 2>&1 || true
+grep -q '已经是这个范围，无需修改。' "$work/out" || fail 'same range applied again'
+# Off: docs/menu-preview.txt shows this screen.
+plain=$(jq '[.nodes[].id]|index("1000000000000003") + 1' "$STATE")
+node_menu <<< "$plain"$'\n10\n0' > "$work/out" 2>&1 || true
 while IFS= read -r line; do
     grep -qxF -- "$line" docs/menu-preview.txt || fail "docs/menu-preview.txt is out of date: $line"
-done < <(grep -E '^10\.|^端口跳跃：|^  [0-3]\. (关闭|开启|返回)' "$work/out" | sed -E -e 's/[0-9]{5}–[0-9]{5}/20000–20999/' -e 's/^端口跳跃：已开启.*/端口跳跃：未开启（运营商限制 UDP、单个端口被限速时开启）。/')
+done < <(grep -E '^10\.|^端口跳跃：|^  [0-3]\. (关闭|开启|返回)' "$work/out" | sed -E 's/[0-9]{5}–[0-9]{5}/20000–20999/')
+grep -q '^  2\. 开启，范围' "$work/out" || fail 'off menu offers the default range'
 [[ ! -e $work/network-calls ]] || { cat "$work/network-calls"; fail 'network access'; }
 echo 'PASS node management lists the range and turns hopping off and on from item 10, showing the new client configuration'

@@ -487,7 +487,7 @@ proto_hysteria2_surge() {
     printf '%s' '"\(surge_head("hysteria2")), password=\"\(.password)\", sni=\(.sni)\(surge_pin)\(if .hop then ", port-hopping=\(.port);\(.hop.start)-\(.hop.end)" else "" end)"'
 }
 proto_hysteria2_note() {
-    printf '%s' "$HY2_URI_JQ"' if .hop then "端口跳跃：服务器把 UDP \(.hop.start)–\(.hop.end) 转到节点端口 \(.port)，客户端默认每 30 秒换一个端口。上面的 Surge、Clash Meta、sing-box（1.11 及以上）配置已带端口范围；分享链接用 v2rayN、Shadowrocket 认的 mport 参数带范围，不认这个参数的客户端只连 \(.port)、不换端口。Hysteria 官方客户端等按官方多端口写法填的，用这条：\(hy2_uri("\(.port),\(.hop.start)-\(.hop.end)"; ""))" else empty end'
+    printf '%s' "$HY2_URI_JQ"' if .hop then "端口跳跃：服务器把 UDP \(.hop.start)–\(.hop.end) 转到节点端口 \(.port)，客户端默认每 30 秒换一个端口。上面的 Surge、Clash Meta、sing-box（1.11 及以上）配置已带端口范围；分享链接用 mport 参数带范围（v2rayN 支持，Shadowrocket 没有官方说明），不认这个参数的客户端只连 \(.port)、不换端口。Hysteria 官方客户端等按官方多端口写法填的，用这条：\(hy2_uri("\(.port),\(.hop.start)-\(.hop.end)"; ""))" else empty end'
 }
 proto_hysteria2_port_hopping() { :; }
 proto_hysteria2_secrets() { printf '%s' '.password'; }

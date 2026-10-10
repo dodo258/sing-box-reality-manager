@@ -338,7 +338,21 @@ hop_backend() {
 # Redirect rules for STATE's enabled nodes; without STATE every srm-hop rule goes.
 # Systems that never had port hopping are not touched (no record). IPv6 is best
 # effort: a failure there is reported and does not fail the sync.
+# The service start (hop-sync) runs without srm's lock, maybe inside a locked
+# transaction restarting the service, so the rules have a lock of their own, taken
+# only around the change (no subshell: FIREWALL_IPT_CHANGED must reach the caller).
 hop_sync() {
+    local rc=0
+    if [[ -d /run/lock ]] && command -v flock >/dev/null; then
+        exec 8>/run/lock/srm-hop.lock || return 1
+        flock -w 30 8 || { exec 8>&-; err '端口跳跃规则正被另一个操作修改，稍后重试。'; return 1; }
+        hop_sync_locked "$@" || rc=$?
+        exec 8>&-
+        return "$rc"
+    fi
+    hop_sync_locked "$@"
+}
+hop_sync_locked() {
     local state=${1:-} desired='' backend='' previous=''
     if [[ -n $state && -f $state ]]; then
         desired=$(jq -r '.nodes[]|select(.enabled and .hop != null)|"\(.hop.start) \(.hop.end) \(.port)"' "$state") || return 1
@@ -349,9 +363,10 @@ hop_sync() {
     [[ ! -f $DATA/port-hopping ]] || previous=$(head -n 1 "$DATA/port-hopping")
     # Rules left by the other backend (iptables installed or removed since) go first.
     if [[ -n $previous && $previous != "$backend" ]]; then
+        # A backend that is gone took its runtime rules with it.
         case $previous in
           iptables)
-            hop_ipt_apply iptables '' || return 1
+            if command -v iptables >/dev/null; then hop_ipt_apply iptables '' || return 1; fi
             if command -v ip6tables >/dev/null; then hop_ipt_apply ip6tables '' 2>/dev/null || true; fi;;
           nft) hop_nft_apply '' || return 1;;
         esac

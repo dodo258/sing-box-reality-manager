@@ -181,11 +181,15 @@ node_deploy() {
     fi
     port=${opt_port:-random}
     if [[ -z $opt_port && $assume_yes != 1 ]]; then
+        # A port hopping range picked above is taken too (port_free reads hop_range).
+        hop_range=$(hop_parse "$opt_hop" 2>/dev/null) || hop_range=''
         while :; do
             ask '端口（1–65535，回车随机选一个空闲端口）' 随机 || return 3
             if [[ $REPLY == 随机 ]]; then port=random; break; fi
             if valid_port "$REPLY" && port_free "$REPLY"; then port=$REPLY; break; fi
-            err '端口要在 1–65535 之间，并且没有被占用。'
+            if [[ -n $hop_range ]] && valid_port "$REPLY" && (( REPLY >= ${hop_range% *} && REPLY <= ${hop_range#* } )); then
+                err "端口 $REPLY 在端口跳跃范围 ${hop_range/ /–} 里，换一个（或回车随机）。"
+            else err '端口要在 1–65535 之间，并且没有被占用。'; fi
         done
         questions=$((questions+1))
     fi
@@ -322,17 +326,26 @@ hop_menu() {
     port=$(jq -r .port <<< "$node")
     current=$(jq -r 'if .hop then "\(.hop.start)–\(.hop.end)" else "" end' <<< "$node")
     range=$(hop_default "$id" "$port" 2>/dev/null) || range=''
-    if [[ -n $current ]]; then msg "端口跳跃：已开启，UDP $current 转到节点端口 $port。"
-    else msg '端口跳跃：未开启（运营商限制 UDP、单个端口被限速时开启）。'; fi
-    msg '  1. 关闭端口跳跃'
-    [[ -z $range ]] || msg "  2. 开启，范围 ${range/ /–}"
-    msg $'  3. 开启，自己填端口范围
-  0. 返回'
+    # The default range is the current one: nothing to offer.
+    [[ ${range/ /–} != "$current" ]] || range=''
+    if [[ -n $current ]]; then
+        msg "端口跳跃：已开启，UDP $current 转到节点端口 $port。"
+        msg '  1. 关闭端口跳跃'
+        [[ -z $range ]] || msg "  2. 改为范围 ${range/ /–}"
+        msg $'  3. 改为自己填的端口范围\n  0. 返回'
+    else
+        msg '端口跳跃：未开启（运营商限制 UDP、单个端口被限速时开启）。'
+        msg '  1. 关闭端口跳跃'
+        [[ -z $range ]] || msg "  2. 开启，范围 ${range/ /–}"
+        msg $'  3. 开启，自己填端口范围\n  0. 返回'
+    fi
     ask '请选择' || return 0
     case $REPLY in
       1) [[ -n $current ]] || { msg '端口跳跃本来就没有开启。'; return 0; }; range=off;;
-      2) [[ -n $range ]] || { err '没有找到空闲的默认范围，请选 3 自己填。'; return 1; }; range=${range/ /-};;
-      3) ask '端口范围（1024–65535，例如 40000-40999）' || return 0; range=$REPLY;;
+      2) [[ -n $range ]] || { err '没有可选的默认范围，请选 3 自己填。'; return 1; }; range=${range/ /-};;
+      3)
+        ask '端口范围（1024–65535，例如 40000-40999）' || return 0; range=$REPLY
+        [[ $(hop_parse "$range" 2>/dev/null) != "${current/–/ }" ]] || { msg '已经是这个范围，无需修改。'; return 0; };;
       *) err '无效选项。'; return 1;;
     esac
     with_lock node_change "$id" hop "$range" || return 1
