@@ -8,6 +8,7 @@ v4 重写，方案 `docs/specs/2026-10-10-v4-rewrite.md`，2026-10-10 按主人�
 - UFW / firewalld 停用期间保留 srm 的放行规则：2026-10-11 合并 a169bd5（PR #19），重新启用后节点照常放行；停用期间删掉的节点 UFW 规则照常删。
 - firewalld 停着时卸载：2026-10-11 合并 e560303（PR #20），用 firewall-offline-cmd 清 srm 的永久端口、丢运行时记录；没有离线工具时提示先启动 firewalld。
 - 测试稳定性：2026-10-11 合并 a1321a9，traffic.sh / snell-traffic.sh 的 mihomo 段先等直连探测通过再测节点（mihomo 开端口早于开始转发，曾偶发 CI 失败）。
+- 公开仓库去掉 Lisa 的 IP：2026-10-11 合并 3597fee（PR #21），新增 `tests/no-real-ip.sh` 扫已跟踪文件里的真实 IPv4，CI 单独一步跑；git 历史里的旧提交等主人拍板。
 
 ## 待用户决定
 - 前 7 条验收后，是否正式发布 v4.0.0
