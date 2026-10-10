@@ -339,12 +339,15 @@ snell_download() {
       5.0.1-amd64) hash=9bea1c2b9e35b73b31634856c04d18c393072b9e5dcde6a32781d8b8f908c539;;
       5.0.1-aarch64) hash=2f178bf5ac468ce1a130454efa40a0603fbbe4e47ecc4880a989f4abc7f824cf;;
     esac
-    tmp=$(mktemp -d) || return 1
     # `snell-server -v` prints "snell-server v6.0.0 (…)" for 6.0.0rc2, so the
     # version without its beta/RC suffix is compared; running it also proves the
-    # binary loads here. As root it runs as the service user, like the service does.
+    # binary loads here. As root it runs as the service user, like the service does,
+    # from a directory under /tmp that user can enter.
     local run=()
-    if [[ $EUID == 0 ]] && id srm >/dev/null 2>&1 && command -v runuser >/dev/null; then chmod 755 "$tmp"; run=(runuser -u srm --); fi
+    if [[ $EUID == 0 ]] && id srm >/dev/null 2>&1 && command -v runuser >/dev/null; then
+        tmp=$(mktemp -d /tmp/srm-snell.XXXXXXXX) && chmod 755 "$tmp" || return 1
+        run=(runuser -u srm --)
+    else tmp=$(mktemp -d) || return 1; fi
     if fetch "https://dl.nssurge.com/snell/snell-server-v$version-linux-$arch.zip" "$tmp/snell.zip" &&
        [[ -z $hash || $(sha256 "$tmp/snell.zip") == "$hash" ]] &&
        unzip -p "$tmp/snell.zip" snell-server > "$tmp/snell-server" && chmod 755 "$tmp/snell-server" &&

@@ -177,7 +177,7 @@ update_program() {
             printf '%s\n' "$latest" > "${path%/*}/version"
             update_cache_mark "$label $key" "$latest"
             msg "$label $key 已从 $current 更新到 $latest。"
-            [[ -n $units ]] || msg '没有正在运行的节点用它，不需要重启。'
+            [[ -n $units ]] || msg '没有正在运行的节点用它，不需要重启；节点下次启动时用新版本。'
             continue
         fi
         mv -f "$path.previous" "$path"
