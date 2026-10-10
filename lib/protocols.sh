@@ -18,7 +18,8 @@
 #   rotate           new credentials; REPLY = JSON fields to merge into the node
 # Optional: clash (jq object: Clash Meta / mihomo proxy), surge (jq string: Surge proxy line),
 # note (jq string shown with the client snippets), hint (text in the quick-deploy list),
-# variant (the protocol's one menu question; sets node_add's opt_* variables), retarget_label / retarget_select /
+# variant (the protocol's one menu question; sets node_add's opt_* variables), port_hopping (no
+# output: nodes may carry hop {start, end}, see lib/firewall.sh), retarget_label / retarget_select /
 # retarget (change a TLS handshake target), and the sidecar pair for a protocol served
 # by its own program next to sing-box: sidecar (jq string: systemd unit of the node,
 # which listens on 127.0.0.1:.local_port) and sidecar_render NODE DIR (writes the
@@ -66,7 +67,7 @@ SURGE_FORM_JQ='
    sni:"SNI",alpn:"ALPN","encrypt-method":"加密方式","udp-relay":"UDP 转发",tls:"TLS",ws:"WebSocket",
    "ws-path":"WebSocket 路径","ws-headers":"WebSocket 请求头","vmess-aead":"VMess AEAD",
    "server-cert-fingerprint-sha256":"证书 SHA-256 指纹","shadow-tls-password":"Shadow TLS 密码",
-   "shadow-tls-sni":"Shadow TLS SNI","shadow-tls-version":"Shadow TLS 版本"} as $names |
+   "shadow-tls-sni":"Shadow TLS SNI","shadow-tls-version":"Shadow TLS 版本","port-hopping":"端口跳跃"} as $names |
   capture("^(?<name>.*?) = (?<rest>.*)$") as $l | [$l.rest|scan("(?:\"[^\"]*\"|[^,])+")|ltrimstr(" ")] as $f |
   "  名称：\($l.name)", "  类型：\($f[0])", "  服务器：\($f[1])", "  端口：\($f[2])",
   ($f[3:][]|capture("^(?<k>[^=]*)=(?<v>.*)$") as $p|$p.k as $k|($p.v|ltrimstr("\"")|rtrimstr("\"")) as $v|
@@ -99,6 +100,12 @@ proto_call() {
     "proto_${type}_$hook" "$@"
 }
 proto_has() { proto_known "$1" && declare -F "proto_$1_$2" >/dev/null; }
+# Registered types that have the optional HOOK, one per line.
+proto_types_with() {
+    local type
+    for type in $PROTOCOLS; do declare -F "proto_${type}_$1" >/dev/null && printf '%s\n' "$type"; done
+    return 0
+}
 # Builds `if .type=="a" then (<a hook>) elif … else <fallback> end` for jq;
 # protocols without an optional hook fall through to the fallback.
 proto_jq() {
@@ -456,15 +463,43 @@ proto_hysteria2_render_inbound() {
 # (Shadowrocket silently ignored a pasted link with alpn and without the "/").
 # The official client checks pinSHA256 only after normal verification, so a
 # self-signed link also needs insecure=1 (v2.hysteria.network, client docs).
+# hy2_uri(PORTS; EXTRA): PORTS is the port part, EXTRA more query parameters.
+HY2_URI_JQ='def hy2_uri($ports; $extra): "hysteria2://\(.password|@uri)@\(uri_host):\($ports)/?sni=\(.sni|@uri)\(if pinned then "&insecure=1&pinSHA256=\(.cert_sha256)" else "" end)\($extra)#\(.name|@uri)";'
+# Port hopping: the official multi-port form "port,start-end" (URI scheme; v2.hysteria.network/docs/advanced/Port-Hopping/
+# page) is rejected by v2rayN, whose System.Uri needs a numeric port (Hysteria2Fmt.cs
+# reads the range from mport). The link keeps the port and carries the range in mport
+# like v2rayN, mack-a and Xboard's Shadowrocket subscriptions; clients that do not
+# know mport still connect to the node port. The official form is in the note.
 proto_hysteria2_share_uri() {
-    printf '%s' '"hysteria2://\(.password|@uri)@\(uri_host):\(.port)/?sni=\(.sni|@uri)\(if pinned then "&insecure=1&pinSHA256=\(.cert_sha256)" else "" end)#\(.name|@uri)"'
+    printf '%s' "$HY2_URI_JQ"' hy2_uri("\(.port)"; if .hop then "&mport=\(.hop.start)-\(.hop.end)" else "" end)'
 }
-proto_hysteria2_client_outbound() { printf '%s' 'base_outbound + {type:"hysteria2",password:.password,tls:(tls_client + {alpn:["h3"]})}'; }
-proto_hysteria2_clash() { printf '%s' 'clash_base + {type:"hysteria2",password:.password,sni:.sni,alpn:["h3"]} + clash_pin'; }
-proto_hysteria2_surge() { printf '%s' '"\(surge_head("hysteria2")), password=\"\(.password)\", sni=\(.sni)\(surge_pin)"'; }
+# With port hopping the clients rotate among the node port and the range, as in the
+# official form (sing-box 1.11+ server_ports "a:b", mihomo ports "a,b-c", Surge
+# port-hopping "a;b-c" — manual.nssurge.com/policies/hysteria2.html); every 30 s by default.
+proto_hysteria2_client_outbound() {
+    printf '%s' 'base_outbound + (if .hop then {server_ports:["\(.port):\(.port)","\(.hop.start):\(.hop.end)"]} else {} end)
+      + {type:"hysteria2",password:.password,tls:(tls_client + {alpn:["h3"]})}'
+}
+proto_hysteria2_clash() {
+    printf '%s' 'clash_base + (if .hop then {ports:"\(.port),\(.hop.start)-\(.hop.end)"} else {} end) + {type:"hysteria2",password:.password,sni:.sni,alpn:["h3"]} + clash_pin'
+}
+proto_hysteria2_surge() {
+    printf '%s' '"\(surge_head("hysteria2")), password=\"\(.password)\", sni=\(.sni)\(surge_pin)\(if .hop then ", port-hopping=\(.port);\(.hop.start)-\(.hop.end)" else "" end)"'
+}
+proto_hysteria2_note() {
+    printf '%s' "$HY2_URI_JQ"' if .hop then "端口跳跃：服务器把 UDP \(.hop.start)–\(.hop.end) 转到节点端口 \(.port)，客户端默认每 30 秒换一个端口。上面的 Surge、Clash Meta、sing-box（1.11 及以上）配置已带端口范围；分享链接用 mport 参数带范围（v2rayN 支持，Shadowrocket 没有官方说明），不认这个参数的客户端只连 \(.port)、不换端口。Hysteria 官方客户端等按官方多端口写法填的，用这条：\(hy2_uri("\(.port),\(.hop.start)-\(.hop.end)"; ""))" else empty end'
+}
+proto_hysteria2_port_hopping() { :; }
 proto_hysteria2_secrets() { printf '%s' '.password'; }
-proto_hysteria2_prompt() { tls_prompt selfsigned; }
-proto_hysteria2_create() { tls_create && with_password; }
+# Sets hop_range (a local of node_deploy, "START END" or empty) from --hop off|auto|START-END.
+proto_hysteria2_prompt() { tls_prompt selfsigned && hop_prompt; }
+proto_hysteria2_variant() { hop_variant; }
+proto_hysteria2_create() {
+    tls_create && with_password || return 1
+    [[ -n ${hop_range:-} ]] || return 0
+    hop_tools_ready || return 1
+    REPLY=$(jq -c --argjson s "${hop_range% *}" --argjson e "${hop_range#* }" '. + {hop:{start:$s,end:$e}}' <<< "$REPLY")
+}
 proto_hysteria2_rotate() { REPLY=''; with_password; }
 proto_hysteria2_v3_import() {
     if jq -e '.type == "hysteria2" and .obfs != null' <<< "$1" >/dev/null; then REPLY='带 obfs 混淆的 Hysteria2，v4 不支持'; return 2; fi

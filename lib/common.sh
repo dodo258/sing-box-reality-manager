@@ -188,7 +188,14 @@ port_free() {
     local port=$1 exclude=${2:-} output
     valid_port "$port" || return 1
     if [[ -f $STATE ]]; then
-        jq -e --arg id "$exclude" --argjson port "$port" 'any(.nodes[]; (.id!=$id and .port==$port) or .local_port==$port)' "$STATE" >/dev/null && return 1
+        jq -e --arg id "$exclude" --argjson port "$port" 'any(.nodes[]; (.id!=$id and .port==$port) or .local_port==$port or
+          (.hop != null and .hop.start <= $port and $port <= .hop.end))' "$STATE" >/dev/null && return 1
+    fi
+    # The port hopping range of the node being deployed ("START END", a local of node_deploy).
+    if [[ -n ${hop_range:-} ]]; then
+        local start end
+        read -r start end <<< "$hop_range"
+        (( port < start || port > end )) || return 1
     fi
     output=$(ss -H -lntu "sport = :$port") || return 1
     [[ -z $output ]]
