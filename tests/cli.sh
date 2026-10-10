@@ -44,6 +44,18 @@ echo 'PASS version and protocol list'
     if main update vless --yes > /dev/null 2>&1 || main update-check never > /dev/null 2>&1; then fail 'bad update target accepted'; fi
 ) || exit 1
 echo 'PASS subcommands pass their arguments to the right handler'
+# Every function the command line and the menus call exists in the bundle. Words
+# with an underscore are functions unless assigned, expanded or a registry hook name.
+(
+    source ./dist/srm
+    body=$(declare -f main main_menu status_menu node_menu update_menu routing_menu certificate_menu update_run)
+    hooks=$(compgen -A function | sed -nE 's/^proto_[a-z0-9]+_//p' | sort -u)
+    for word in $(grep -oE '[a-z][a-z0-9]*_[a-z0-9_]+' <<< "$body" | sort -u); do
+        grep -qE "(^|[^a-z0-9_])$word=|\\\$\{?$word" <<< "$body" || grep -qx "$word" <<< "$hooks" || declare -F "$word" >/dev/null ||
+            fail "called but not defined: $word"
+    done
+) || exit 1
+echo 'PASS every handler the command line and the menus call is defined'
 # Beginners use the menu: user-facing text never tells them to run a command.
 if grep -nE '(运行|执行|输入) *srm [a-z-]' lib/*.sh; then fail 'UI text asks the user to run an srm subcommand'; fi
 if grep -nE 'auto_update|srm-update' lib/*.sh; then fail 'automatic update code present'; fi

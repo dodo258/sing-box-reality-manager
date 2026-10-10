@@ -57,7 +57,7 @@ fetch() {
 systemctl() {
     printf '%s\n' "$*" >> "$work/systemctl"
     case $1 in
-      is-active) return 0;;
+      is-active) [[ ! -e $work/stopped ]];;
       is-enabled) [[ -e $work/timer-enabled ]];;
       enable) touch "$work/timer-enabled";;
       disable) rm -f "$work/timer-enabled";;
@@ -209,8 +209,36 @@ main update snell --yes > "$work/out" 2>&1 || fail 'up-to-date snell'
 [[ ! -e $work/systemctl ]] && grep -q 'Snell v6 已是最新版本 6.0.0' "$work/out" || fail 'up-to-date snell restarted'
 echo 'PASS a snell-server that reports another version is not installed; up to date means no restart'
 
+# With sing-box stopped the nodes are down: the build is swapped, nothing restarts.
+make_notes 5.0.1 6.0.1
+make_snell_zip 6.0.1 6.0.1
+reset_logs; touch "$work/stopped"
+update_programs > "$work/out" 2>&1 || { cat "$work/out"; fail 'snell update with the service stopped'; }
+[[ $(cat "$SRM_ROOT/snell/v6/version") == 6.0.1 ]] && grep -q '不需要重启' "$work/out" || fail 'stopped: swapped'
+if grep -q '^restart ' "$work/systemctl"; then fail 'stopped service restarted by the update'; fi
+rm -f "$work/stopped"
+echo 'PASS updating Snell while the service is stopped replaces it without starting anything'
+
+# A major version missing from the notes fails alone: v6 is still checked and updated.
+make_notes 6.0.2
+make_snell_zip 6.0.2 6.0.2
+reset_logs
+if main update-check run > "$work/out" 2>&1; then fail 'check without v5 succeeded'; fi
+jq -e '(.items[]|select(.name == "Snell v6")|.latest == "6.0.2") and (.errors == ["Snell v5：没有查到最新版本"])' "$DATA/update-check.json" >/dev/null || fail 'v6 checked without v5'
+if update_programs > "$work/out" 2>&1; then fail 'update without v5 succeeded'; fi
+[[ $(cat "$SRM_ROOT/snell/v6/version") == 6.0.2 ]] || fail 'v6 updated without v5'
+echo 'PASS a major version missing from the release notes does not block the others'
+
+# A damaged cache: the header shows nothing, the update page says so.
+printf '{"items":[{"name":' > "$DATA/update-check.json"
+[[ -z $(update_hint) ]] || fail 'hint from a damaged cache'
+main update-check status > "$work/out" 2>&1 || fail 'status with a damaged cache'
+grep -q '检查记录无法读取' "$work/out" && ! grep -q 'jq:' "$work/out" || fail 'damaged cache message'
+echo 'PASS a damaged cache shows no hint and no jq error'
+
 # Daily check off and on again, from the menu (5 → 6).
 update_check_install() { touch "$work/units-written"; }
+make_notes 5.0.1 6.0.2
 main update-check run > /dev/null 2>&1 || fail 'check before toggling'
 reset_logs
 main menu <<< $'5\n6\n0' > "$work/out" 2>&1 || fail 'menu check off'
@@ -224,10 +252,14 @@ echo 'PASS the daily check turns off and on from the update menu'
 
 # --- script and "all" -------------------------------------------------------------
 printf 'original-manager\n' > "$SRM_ROOT/manager.sh"
+update_latest() { printf 'update_core() { return 0; }\n' > "$SRM_ROOT/manager.sh"; }
+if update_all 2> "$work/err"; then fail 'a new manager that does not load accepted'; fi
+[[ $(cat "$SRM_ROOT/manager.sh") == original-manager ]] && grep -q '新脚本无法加载' "$work/err" || fail 'manager restored'
 update_latest() { printf 'update_core() { return 1; }\nupdate_programs() { return 0; }\n' > "$SRM_ROOT/manager.sh"; }
-if update_all; then fail 'failed combined update accepted'; fi
-[[ $(cat "$SRM_ROOT/manager.sh") == original-manager ]] || fail 'manager restored'
-echo 'PASS combined update restores the manager when the new one cannot update sing-box'
+if update_all 2> "$work/err"; then fail 'failed sing-box update reported as success'; fi
+grep -q 'update_core() { return 1; }' "$SRM_ROOT/manager.sh" && grep -q '没更新的部分保持原版本' "$work/err" || fail 'new manager kept'
+if compgen -G "$SRM_ROOT/.update-before.*" > /dev/null; then fail 'manager backup left behind'; fi
+echo 'PASS update all reverts only a new script that does not load; a failed sing-box update keeps the new script and fails'
 update_latest() { printf 'update_core() { echo core-ran; }\nupdate_programs() { echo programs-ran; }\n' > "$SRM_ROOT/manager.sh"; }
 reset_logs
 main menu <<< $'5\n1\n1\n0' > "$work/out" 2>&1 || { cat "$work/out"; fail 'menu update all'; }

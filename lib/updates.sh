@@ -54,9 +54,10 @@ update_check_run() {
         [[ -n $keys ]] || continue
         label=$(proto_call "$type" program_label)
         # shellcheck disable=SC2086 # one key per word
-        lines=$(proto_call "$type" program_latest $keys) || { lines=''; errors+=("$label：没有查到最新版本"); }
+        lines=$(proto_call "$type" program_latest $keys) || true
         for key in $keys; do
             version=$(awk -F '\t' -v k="$key" '$1 == k {print $2}' <<< "$lines")
+            [[ -n $version ]] || errors+=("$label $key：没有查到最新版本")
             items=$(update_item "$items" "$label $key" "$(proto_call "$type" program_current "$key")" "$version") || return 1
         done
     done
@@ -75,11 +76,12 @@ update_summary() {
     if systemctl is-enabled --quiet "$CHECK_UNIT.timer" 2>/dev/null; then
         msg '每日检查：已开启（每天凌晨只查一次版本号，不下载、不重启）'
     else msg '每日检查：已关闭'; fi
-    if [[ -f $file ]]; then
-        jq -r '"上次检查：\(.checked_at)",
+    if [[ ! -f $file ]]; then msg '还没有检查过新版本。'
+    elif ! jq -r '"上次检查：\(.checked_at)",
           (.items[]|"  \(.name)：当前 \(.current // "未知")，最新 \(.latest // "未查到")\(if .newer then "（可更新）" else "" end)"),
-          (.errors[]|"  \(.)")' "$file"
-    else msg '还没有检查过新版本。'; fi
+          (.errors[]?|"  \(.)")' "$file" 2>/dev/null; then
+        msg '检查记录无法读取，下次检查会重写。'
+    fi
 }
 update_check_install() {
     cat > "/etc/systemd/system/$CHECK_UNIT.service" <<UNIT
@@ -148,7 +150,9 @@ update_program() {
     local type=$1 label lines key latest current path tmp units unit failures=0
     shift
     label=$(proto_call "$type" program_label)
-    lines=$(proto_call "$type" program_latest "$@") || { err "$label 没有更新。"; return 1; }
+    # A variant missing from the lookup fails alone; the others still update.
+    lines=$(proto_call "$type" program_latest "$@") || failures=1
+    [[ -n $lines ]] || { err "$label 没有更新。"; return 1; }
     # fd 3: downloads and restarts must not read the remaining lines.
     while IFS=$'\t' read -r key latest <&3; do
         current=$(proto_call "$type" program_current "$key")
@@ -161,14 +165,20 @@ update_program() {
             rm -f "$tmp"; err "$label $key 保持 $current，没有替换。"; failures=1; continue
         fi
         cp -p "$path" "$path.previous" && mv -f "$tmp" "$path" || { rm -f "$tmp"; failures=1; continue; }
-        # Services of the enabled nodes running this variant; none means nothing to restart.
-        units=$(jq -r --arg t "$type" --arg k "$key" "$PROTO_JQ_DEFS .nodes[]|select(.enabled and .type == \$t)|select(($(proto_jq program_key empty)) == \$k)|$(proto_jq sidecar empty)" "$STATE") || units=''
+        # Services of the enabled nodes running this variant; none, or nodes stopped
+        # with sing-box, means nothing to restart: they start the new build later.
+        units=''
+        if systemctl is-active --quiet "$SERVICE"; then
+            units=$(jq -r --arg t "$type" --arg k "$key" "$PROTO_JQ_DEFS .nodes[]|select(.enabled and .type == \$t)|select(($(proto_jq program_key empty)) == \$k)|$(proto_jq sidecar empty)" "$STATE") || units=''
+        fi
         local good=1
         for unit in $units; do restart_unit "$unit" || good=0; done
         if [[ $good == 1 ]] && { [[ -z $units ]] || service_healthy "$STATE"; }; then
             printf '%s\n' "$latest" > "${path%/*}/version"
             update_cache_mark "$label $key" "$latest"
-            msg "$label $key 已从 $current 更新到 $latest。"; continue
+            msg "$label $key 已从 $current 更新到 $latest。"
+            [[ -n $units ]] || msg '没有正在运行的节点用它，不需要重启。'
+            continue
         fi
         mv -f "$path.previous" "$path"
         for unit in $units; do restart_unit "$unit" || true; done
@@ -177,7 +187,7 @@ update_program() {
     return "$failures"
 }
 # Called under the same flock as node/configuration changes. The new script's own
-# updaters replace sing-box and the programs, so an update never mixes versions.
+# updaters replace sing-box and the programs.
 update_all() {
     owned_root || return 1
     local before after backup
@@ -186,15 +196,17 @@ update_all() {
     before=$(sha256 "$backup")
     if ! update_latest; then rm -f "$backup"; return 1; fi
     after=$(sha256 "$SRM_ROOT/manager.sh")
-    if bash -c 'source "$1" || exit 1; rc=0; update_core || rc=1; update_programs || rc=1; exit "$rc"' bash "$SRM_ROOT/manager.sh"; then
-        rm -f "$backup"
-        return 0
-    fi
-    if [[ $before != "$after" ]]; then
+    local rc=0
+    bash -c 'source "$1" && declare -F update_core update_programs >/dev/null || exit 3
+             rc=0; update_core || rc=1; update_programs || rc=1; exit "$rc"' bash "$SRM_ROOT/manager.sh" || rc=$?
+    # sing-box and the programs no longer follow the script's version: their own
+    # failure (a lookup or a download) keeps the new script, only a script that does
+    # not load is reverted.
+    if [[ $rc == 3 && $before != "$after" ]]; then
         mv -f "$backup" "$SRM_ROOT/manager.sh" || return 1
-        err '更新没有全部完成，管理脚本已恢复为更新前版本。'
+        err '新脚本无法加载，管理脚本已恢复为更新前版本。'
     else rm -f "$backup"; fi
-    return 1
+    [[ $rc == 0 ]] || { err '更新没有全部完成，原因见上方；没更新的部分保持原版本。'; return 1; }
 }
 # Restarting drops every connection: the menu asks "confirm / back" (back by default).
 update_confirm() {
@@ -246,4 +258,10 @@ update_menu() {
       8) with_lock rollback_script;;
       *) err '无效选项。';;
     esac
+}
+restart_nodes() {
+    owned_root || return 1
+    [[ -f $STATE ]] || { err '请先部署节点。'; return 1; }
+    if [[ $(jq '[.nodes[]|select(.enabled)]|length' "$STATE") == 0 ]]; then msg '没有启用的节点。'; return 0; fi
+    "$CORE" check -c "$DATA/current/config.json" && sidecars_sync "$STATE" && restart_unit "$SERVICE" && service_healthy "$STATE"
 }

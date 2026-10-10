@@ -342,11 +342,13 @@ snell_download() {
     tmp=$(mktemp -d) || return 1
     # `snell-server -v` prints "snell-server v6.0.0 (…)" for 6.0.0rc2, so the
     # version without its beta/RC suffix is compared; running it also proves the
-    # binary loads here.
+    # binary loads here. As root it runs as the service user, like the service does.
+    local run=()
+    if [[ $EUID == 0 ]] && id srm >/dev/null 2>&1 && command -v runuser >/dev/null; then chmod 755 "$tmp"; run=(runuser -u srm --); fi
     if fetch "https://dl.nssurge.com/snell/snell-server-v$version-linux-$arch.zip" "$tmp/snell.zip" &&
        [[ -z $hash || $(sha256 "$tmp/snell.zip") == "$hash" ]] &&
        unzip -p "$tmp/snell.zip" snell-server > "$tmp/snell-server" && chmod 755 "$tmp/snell-server" &&
-       "$tmp/snell-server" -v 2>&1 | grep -qF "snell-server v${version%%[a-z]*}" &&
+       ${run[@]+"${run[@]}"} "$tmp/snell-server" -v 2>&1 | grep -qF "snell-server v${version%%[a-z]*}" &&
        install -m 755 "$tmp/snell-server" "$target"; then
         rm -rf "$tmp"; return 0
     fi
@@ -497,14 +499,15 @@ proto_snell_program_current() {
     elif [[ $1 == v6 ]]; then printf '%s\n' "$SNELL_V6"; else printf '%s\n' "$SNELL_V5"; fi
 }
 proto_snell_program_latest() {
-    local tmp key version
+    local tmp key version rc=0
     tmp=$(mktemp) || return 1
     if ! fetch "$SNELL_NOTES" "$tmp"; then rm -f "$tmp"; err '无法读取 Snell 官方发布说明。'; return 1; fi
     for key in "$@"; do
-        version=$(snell_pick "${key#v}" < "$tmp") || { rm -f "$tmp"; err "Snell 发布说明里没有找到 $key 的版本。"; return 1; }
-        printf '%s\t%s\n' "$key" "$version"
+        if version=$(snell_pick "${key#v}" < "$tmp"); then printf '%s\t%s\n' "$key" "$version"
+        else err "Snell 发布说明里没有找到 $key 的版本。"; rc=1; fi
     done
     rm -f "$tmp"
+    return "$rc"
 }
 proto_snell_program_fetch() { snell_download "${1#v}" "$3" "$2"; }
 # Server configuration as written by `snell-server --wizard` of each version, with
