@@ -244,3 +244,13 @@
 - 没验证：三个 App 实际扫码导入（没有设备）；Surge 配置只做了格式断言（没有 Linux 版 Surge）；云安全组拦住临时端口时只能靠提示；sing-box App 里 Naive 节点要 App 自带 naive 支持。
 - 拍板人：Claude
 - 已知影响（审查提出）：临时链接等待下载时持有 srm 锁（最长 10 分钟），这期间每日证书续期 `srm renew` 会因「另一项操作尚未结束」退出，第二天再续（证书提前 30 天续期，影响小）。
+
+## 2026-10-11 部署结果提示与客户端细节（对比 mack-a 后的四件小事）
+- 决定：
+  - **Shadowrocket 走 Vision 节点没有 UDP**：Reality 节点的部署结果、「客户端配置」页和 `srm add --json` 的 note 都写「Shadowrocket 走这个节点时 UDP 不可用，需要 UDP 请用 Hysteria2 / TUIC / AnyTLS」并说明原因。同类一起改：VLESS TLS 的 tcp（同样是 Vision 流控）也加；ws / grpc / httpupgrade 没有流控，不加。没在服务端放宽（sing-box 按 UUID 认用户，一个 UUID 只能有一种 flow；去掉 flow 又会让 Vision 失效）。
+  - **没有 IPv6 时只解析 IPv4**：每次生成配置时看本机有没有到公网的 IPv6 路由（`ip -6 route get 2606:4700:4700::1111`，只查路由表、不发包；审查指出只看 main 表的 default 会把 WARP / wg-quick 这类策略路由补的 IPv6 当成没有）；没有就把 `route.default_domain_resolver` 写成 `{server:"local",strategy:"ipv4_only"}`，流媒体分流的 socks 出站 `domain_resolver` 同样处理（同一个问题）；有 IPv6 或没有 ip 命令时保持 `"local"`。mack-a 用 `curl -6` 访问 Cloudflare 判断，srm 生成配置时不联网所以没照抄。配置只在每次应用时生成，之后机器新增或失去 IPv6，要等下次修改节点、重新生成配置时才跟着变。
+  - **AnyTLS 的 Clash Meta 片段**加 `client-fingerprint: chrome` 和 `alpn: [h2, http/1.1]`（mihomo 文档 Meta-Docs `config/proxies/anytls.md` 的示例，mack-a 输出相同）。同类：Trojan 的 Clash Meta 片段也加 `client-fingerprint: chrome`（mack-a 同样有）；服务端没设 ALPN，客户端发什么都能连，CI 的 mihomo 真实流量测试覆盖这两个协议。
+  - **Naive 链接不加 `padding=true`**：NaiveProxy 现在自动协商 padding（USAGE.txt：「The last PROXY-URI is negotiated automatically for Naive padding」，已没有 `--padding` 参数）；sing-box 的 naive 入站要求请求带 Padding 头（protocol/naive/inbound.go「missing naive padding」），能连上的客户端本来就会发；v2rayN 解析 naive 链接只读通用参数和 `insecure-concurrency`，不读 padding（ServiceLib/Handler/Fmt/NaiveFmt.cs）。DuckSoft 的链接规范里 padding 默认 false、只对老版本客户端有意义，加了没用，链接保持原样。
+- 备选/被否决的方案：用 `dns.strategy` 全局设置（会影响解锁 DNS 等已有的 resolve 规则，且待办点名 default_domain_resolver）；按「有没有全局 IPv6 地址」判断（有地址没路由时照样 unreachable）。
+- 没验证：Shadowrocket 里看到这句提示的实际效果；提示里推荐的 AnyTLS 的 UDP 是 UDP over TCP，Shadowrocket 里实际能否用没测；没有 IPv6 的真机上 network unreachable 是否减少（只验证了生成的配置和 `sing-box check`）。
+- 拍板人：Claude

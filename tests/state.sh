@@ -105,6 +105,19 @@ jq -e '
   .route.final=="direct" and .dns.final=="local"' "$work/config.json" >/dev/null || { cat "$work/config.json"; fail 'scoped render'; }
 echo 'PASS scoped rules match only their inbounds; global rules stay global; proxy rules still come first'
 
+# Without an IPv6 route to the internet, domains are resolved to IPv4 only (no "network
+# unreachable" from AAAA answers); with one, and where the ip command is missing, nothing changes.
+ip() { [[ $* == '-6 route get 2606:4700:4700::1111' && -n ${ipv6_route:-} ]] || return 2; printf '%s' "$ipv6_route"; }
+ipv6_route='' render_config "$work/r.json" > "$work/v4only.json" || fail 'render without IPv6'
+jq -e '.route.default_domain_resolver=={server:"local",strategy:"ipv4_only"} and
+  ([.outbounds[]|select(.tag=="media-proxy")|.domain_resolver]==[{server:"local",strategy:"ipv4_only"}])' "$work/v4only.json" >/dev/null ||
+    { jq .route "$work/v4only.json"; fail 'no IPv6: ipv4_only resolver'; }
+ipv6_route=$'2606:4700:4700::1111 from :: via fe80::1 dev eth0 proto ra src 2001:db8::2 metric 1024 pref medium\n' render_config "$work/r.json" > "$work/dual.json" || fail 'render with IPv6'
+jq -e '.route.default_domain_resolver=="local" and ([.outbounds[]|select(.tag=="media-proxy")|.domain_resolver]==["local"])' "$work/dual.json" >/dev/null ||
+    { jq .route "$work/dual.json"; fail 'IPv6: plain local resolver'; }
+unset -f ip
+echo 'PASS without an IPv6 route the config resolves domains ipv4_only; with one it does not'
+
 # Overlapping domains in opposite modes conflict only when the node sets meet.
 jq '.unlock_dns="192.0.2.53"|.egress={type:"socks",version:"5",server:"192.0.2.80",server_port:1080}|
     .policies=[{name:"A",mode:"dns",domains:["example.com"],inbounds:["1111111111111111"]},{name:"B",mode:"proxy",domains:["video.example.com"],inbounds:["2222222222222222"]}]' "$work/s.json" > "$work/c.json"

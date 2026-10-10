@@ -66,10 +66,13 @@ for want in '━━ 部署完成：vless-JP（VLESS Reality）' '服务器：192
     grep -q -- "$want" "$work/out" || { cat "$work/out"; fail "summary lacks: $want"; }
 done
 if grep -q '── Surge' "$work/out"; then fail 'Surge section for VLESS (Surge has no VLESS)'; fi
+# Shadowrocket sends UDP without the Vision flow: the summary says so (and docs/menu-preview.txt shows it).
+line=$(grep -m 1 '^说明：Shadowrocket 走这个节点时 UDP 不可用，需要 UDP 请用 Hysteria2 / TUIC / AnyTLS' "$work/out") || { cat "$work/out"; fail 'Reality summary lacks the Shadowrocket UDP note'; }
+grep -qxF -- "$line" docs/menu-preview.txt || fail "docs/menu-preview.txt is out of date: $line"
 if grep -q '已有节点的连接会断开几秒' "$work/out"; then fail 'restart notice without running nodes'; fi
 # Summary first, menu after it: the deploy output is not scrolled into the menu loop.
 [[ $(grep -n '部署完成' "$work/out" | cut -d: -f1) -lt $(grep -n '1. 添加节点 · 快速部署' "$work/out" | head -n 1 | cut -d: -f1) ]] || fail 'summary order'
-echo 'PASS the summary shows address, cloud firewall ports, link, local QR code and Clash Meta / sing-box / Shadowrocket / v2rayN, without Surge'
+echo 'PASS the summary shows address, cloud firewall ports, link, local QR code and Clash Meta / sing-box / Shadowrocket / v2rayN, without Surge, and that Shadowrocket has no UDP through Reality'
 
 # Node management item 10: the checked targets, Enter takes the fastest; the node
 # switches and its link, QR code and client configurations come again.
@@ -183,7 +186,8 @@ dns_answer=192.0.2.10
 main add vless --yes --json > "$work/json" 2> "$work/err" || { cat "$work/err"; fail 'add --json'; }
 jq -e '.type=="vless" and .protocol=="VLESS Reality" and .host=="192.0.2.10" and .firewall==[{port:.port,protocol:"tcp"}] and
   (.share_link|startswith("vless://")) and .clients.shadowrocket==.share_link and .clients.v2rayn==.share_link and
-  .clients.clash_meta.type=="vless" and .clients.sing_box.type=="vless" and (.clients|has("surge")|not)' "$work/json" >/dev/null || { cat "$work/json"; fail 'Reality JSON'; }
+  .clients.clash_meta.type=="vless" and .clients.sing_box.type=="vless" and (.clients|has("surge")|not) and
+  (.note|startswith("Shadowrocket 走这个节点时 UDP 不可用"))' "$work/json" >/dev/null || { cat "$work/json"; fail 'Reality JSON'; }
 grep -q '配置已应用\|部署：' "$work/err" || fail 'progress not on stderr'
 main add shadowsocks --port 20444 --name ss-x --yes --json > "$work/json" 2> "$work/err" || { cat "$work/err"; fail 'ss --json'; }
 jq -e '.name=="ss-x" and .port==20444 and .firewall==[{port:20444,protocol:"tcp"},{port:20444,protocol:"udp"}] and (.clients.surge|startswith("ss-x = ss"))' "$work/json" >/dev/null || { cat "$work/json"; fail 'SS JSON'; }

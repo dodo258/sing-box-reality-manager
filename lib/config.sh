@@ -82,9 +82,19 @@ validate_state() {
     while IFS= read -r h; do valid_host "$h" || { err "地址不合法：$h"; return 1; }; done < <(jq -r '.nodes[].host, (.egress.server // empty)' "$1")
     while IFS= read -r h; do valid_domain "$h" || { err "域名不合法：$h"; return 1; }; done < <(jq -r '.nodes[].sni // empty, .policies[].domains[]' "$1")
 }
+# Without an IPv6 route to the internet, AAAA answers only end in "network unreachable",
+# so domains are then resolved to IPv4 only (mack-a addSingBoxOutbound does the same).
+# Read locally at every render (route lookup, no packet sent; policy routing such as
+# WARP / wg-quick counts); without the ip command nothing changes.
+server_has_ipv6() {
+    command -v ip >/dev/null || return 0
+    ip -6 route get 2606:4700:4700::1111 >/dev/null 2>&1
+}
 render_config() {
     validate_state "$1" || return 1
-    jq "$PROTO_JQ_DEFS"'
+    local resolver='"local"'
+    server_has_ipv6 || resolver='{"server":"local","strategy":"ipv4_only"}'
+    jq --argjson resolver "$resolver" "$PROTO_JQ_DEFS"'
       # A policy limited to some nodes matches only traffic entering through their inbounds.
       def scope: if .inbounds then {inbound:.inbounds} else {} end;
       . as $s |
@@ -102,8 +112,8 @@ render_config() {
         },
         inbounds: [$s.nodes[]|select(.enabled)|('"$(proto_jq render_inbound '[]')"')[]],
         outbounds: ([{type:"direct",tag:"direct"}]
-          + (if ($proxy|length)>0 then [$s.egress + {tag:"media-proxy",domain_resolver:"local"}] else [] end)),
-        route: {default_domain_resolver:"local",final:"direct",rules: (
+          + (if ($proxy|length)>0 then [$s.egress + {tag:"media-proxy",domain_resolver:$resolver}] else [] end)),
+        route: {default_domain_resolver:$resolver,final:"direct",rules: (
           [{action:"sniff",timeout:"300ms"},{protocol:"dns",action:"hijack-dns"}]
           + [$proxy[]|scope + {domain_suffix:.domains,action:"route",outbound:"media-proxy"}]
           + [$dns[]|(scope + {domain_suffix:.domains,action:"resolve",server:"unlock",strategy:"ipv4_only"}),

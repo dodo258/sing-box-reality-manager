@@ -290,9 +290,19 @@ validate_state() {
     while IFS= read -r h; do valid_host "$h" || { err "地址不合法：$h"; return 1; }; done < <(jq -r '.nodes[].host, (.egress.server // empty)' "$1")
     while IFS= read -r h; do valid_domain "$h" || { err "域名不合法：$h"; return 1; }; done < <(jq -r '.nodes[].sni // empty, .policies[].domains[]' "$1")
 }
+# Without an IPv6 route to the internet, AAAA answers only end in "network unreachable",
+# so domains are then resolved to IPv4 only (mack-a addSingBoxOutbound does the same).
+# Read locally at every render (route lookup, no packet sent; policy routing such as
+# WARP / wg-quick counts); without the ip command nothing changes.
+server_has_ipv6() {
+    command -v ip >/dev/null || return 0
+    ip -6 route get 2606:4700:4700::1111 >/dev/null 2>&1
+}
 render_config() {
     validate_state "$1" || return 1
-    jq "$PROTO_JQ_DEFS"'
+    local resolver='"local"'
+    server_has_ipv6 || resolver='{"server":"local","strategy":"ipv4_only"}'
+    jq --argjson resolver "$resolver" "$PROTO_JQ_DEFS"'
       # A policy limited to some nodes matches only traffic entering through their inbounds.
       def scope: if .inbounds then {inbound:.inbounds} else {} end;
       . as $s |
@@ -310,8 +320,8 @@ render_config() {
         },
         inbounds: [$s.nodes[]|select(.enabled)|('"$(proto_jq render_inbound '[]')"')[]],
         outbounds: ([{type:"direct",tag:"direct"}]
-          + (if ($proxy|length)>0 then [$s.egress + {tag:"media-proxy",domain_resolver:"local"}] else [] end)),
-        route: {default_domain_resolver:"local",final:"direct",rules: (
+          + (if ($proxy|length)>0 then [$s.egress + {tag:"media-proxy",domain_resolver:$resolver}] else [] end)),
+        route: {default_domain_resolver:$resolver,final:"direct",rules: (
           [{action:"sniff",timeout:"300ms"},{protocol:"dns",action:"hijack-dns"}]
           + [$proxy[]|scope + {domain_suffix:.domains,action:"route",outbound:"media-proxy"}]
           + [$dns[]|(scope + {domain_suffix:.domains,action:"resolve",server:"unlock",strategy:"ipv4_only"}),
@@ -494,6 +504,10 @@ proto_vless_clash() {
     printf '%s' 'clash_base + {type:"vless",uuid:.uuid,network:"tcp",tls:true,udp:true,flow:"xtls-rprx-vision",servername:.sni,
       "reality-opts":{"public-key":.public_key,"short-id":.short_id},"client-fingerprint":"chrome"}'
 }
+# Shadowrocket sends UDP without the Vision flow, which sing-box rejects ("flow mismatch",
+# sing-vmess vless/service.go): web pages fall back to TCP, UDP-only apps fail.
+VISION_UDP_NOTE='"Shadowrocket 走这个节点时 UDP 不可用，需要 UDP 请用 Hysteria2 / TUIC / AnyTLS（在菜单里选「1. 添加节点」部署）。原因：Shadowrocket 的 UDP 请求不带 Vision 流控，服务端会拒绝；网页会自动改走 TCP 照常打开，游戏、语音通话等纯 UDP 应用不通。"'
+proto_vless_note() { printf '%s' "$VISION_UDP_NOTE"; }
 proto_vless_secrets() { printf '%s' '.uuid,.private_key,.public_key,.short_id'; }
 proto_vless_prompt() { handshake_target_prompt; }
 proto_vless_create() {
@@ -758,7 +772,9 @@ proto_anytls_render_inbound() {
 # with the "/" before "?"; domain certificates only, so never insecure.
 proto_anytls_share_uri() { printf '%s' '"anytls://\(.password|@uri)@\(uri_host):\(.port)/?sni=\(.sni|@uri)#\(.name|@uri)"'; }
 proto_anytls_client_outbound() { printf '%s' 'base_outbound + {type:"anytls",password:.password,tls:tls_client}'; }
-proto_anytls_clash() { printf '%s' 'clash_base + {type:"anytls",password:.password,sni:.sni,udp:true}'; }
+# mihomo docs config/proxies/anytls.md (Meta-Docs), as mack-a writes it: Chrome's TLS
+# fingerprint and ALPN instead of Go's.
+proto_anytls_clash() { printf '%s' 'clash_base + {type:"anytls",password:.password,sni:.sni,udp:true,"client-fingerprint":"chrome",alpn:["h2","http/1.1"]}'; }
 proto_anytls_surge() { printf '%s' '"\(surge_head("anytls")), password=\"\(.password)\", sni=\(.sni)"'; }
 proto_anytls_secrets() { printf '%s' '.password'; }
 proto_anytls_prompt() { tls_prompt; }
@@ -1159,6 +1175,7 @@ proto_vlesstls_client_outbound() {
 proto_vlesstls_clash() {
     printf '%s' 'clash_base + {type:"vless",uuid:.uuid,tls:true,servername:.sni,"client-fingerprint":"chrome",udp:true} + stream_clash'
 }
+proto_vlesstls_note() { printf '%s' "if .transport == \"tcp\" then $VISION_UDP_NOTE else empty end"; }
 proto_vlesstls_secrets() { printf '%s' '.uuid'; }
 # Sets stream (a local of node_add) from --transport; tcp by default.
 proto_vlesstls_prompt() {
@@ -1212,7 +1229,7 @@ proto_trojan_render_inbound() {
 # discussion #716 (security, sni, type).
 proto_trojan_share_uri() { printf '%s' '"trojan://\(.password|@uri)@\(uri_host):\(.port)?security=tls&sni=\(.sni|@uri)&type=tcp#\(.name|@uri)"'; }
 proto_trojan_client_outbound() { printf '%s' 'base_outbound + {type:"trojan",password:.password,tls:tls_client}'; }
-proto_trojan_clash() { printf '%s' 'clash_base + {type:"trojan",password:.password,sni:.sni,udp:true}'; }
+proto_trojan_clash() { printf '%s' 'clash_base + {type:"trojan",password:.password,sni:.sni,udp:true,"client-fingerprint":"chrome"}'; }
 proto_trojan_surge() { printf '%s' '"\(surge_head("trojan")), password=\"\(.password)\", sni=\(.sni)"'; }
 proto_trojan_secrets() { printf '%s' '.password'; }
 proto_trojan_prompt() { tls_prompt; }

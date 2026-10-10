@@ -163,6 +163,10 @@ proto_vless_clash() {
     printf '%s' 'clash_base + {type:"vless",uuid:.uuid,network:"tcp",tls:true,udp:true,flow:"xtls-rprx-vision",servername:.sni,
       "reality-opts":{"public-key":.public_key,"short-id":.short_id},"client-fingerprint":"chrome"}'
 }
+# Shadowrocket sends UDP without the Vision flow, which sing-box rejects ("flow mismatch",
+# sing-vmess vless/service.go): web pages fall back to TCP, UDP-only apps fail.
+VISION_UDP_NOTE='"Shadowrocket 走这个节点时 UDP 不可用，需要 UDP 请用 Hysteria2 / TUIC / AnyTLS（在菜单里选「1. 添加节点」部署）。原因：Shadowrocket 的 UDP 请求不带 Vision 流控，服务端会拒绝；网页会自动改走 TCP 照常打开，游戏、语音通话等纯 UDP 应用不通。"'
+proto_vless_note() { printf '%s' "$VISION_UDP_NOTE"; }
 proto_vless_secrets() { printf '%s' '.uuid,.private_key,.public_key,.short_id'; }
 proto_vless_prompt() { handshake_target_prompt; }
 proto_vless_create() {
@@ -427,7 +431,9 @@ proto_anytls_render_inbound() {
 # with the "/" before "?"; domain certificates only, so never insecure.
 proto_anytls_share_uri() { printf '%s' '"anytls://\(.password|@uri)@\(uri_host):\(.port)/?sni=\(.sni|@uri)#\(.name|@uri)"'; }
 proto_anytls_client_outbound() { printf '%s' 'base_outbound + {type:"anytls",password:.password,tls:tls_client}'; }
-proto_anytls_clash() { printf '%s' 'clash_base + {type:"anytls",password:.password,sni:.sni,udp:true}'; }
+# mihomo docs config/proxies/anytls.md (Meta-Docs), as mack-a writes it: Chrome's TLS
+# fingerprint and ALPN instead of Go's.
+proto_anytls_clash() { printf '%s' 'clash_base + {type:"anytls",password:.password,sni:.sni,udp:true,"client-fingerprint":"chrome",alpn:["h2","http/1.1"]}'; }
 proto_anytls_surge() { printf '%s' '"\(surge_head("anytls")), password=\"\(.password)\", sni=\(.sni)"'; }
 proto_anytls_secrets() { printf '%s' '.password'; }
 proto_anytls_prompt() { tls_prompt; }
@@ -828,6 +834,7 @@ proto_vlesstls_client_outbound() {
 proto_vlesstls_clash() {
     printf '%s' 'clash_base + {type:"vless",uuid:.uuid,tls:true,servername:.sni,"client-fingerprint":"chrome",udp:true} + stream_clash'
 }
+proto_vlesstls_note() { printf '%s' "if .transport == \"tcp\" then $VISION_UDP_NOTE else empty end"; }
 proto_vlesstls_secrets() { printf '%s' '.uuid'; }
 # Sets stream (a local of node_add) from --transport; tcp by default.
 proto_vlesstls_prompt() {
@@ -881,7 +888,7 @@ proto_trojan_render_inbound() {
 # discussion #716 (security, sni, type).
 proto_trojan_share_uri() { printf '%s' '"trojan://\(.password|@uri)@\(uri_host):\(.port)?security=tls&sni=\(.sni|@uri)&type=tcp#\(.name|@uri)"'; }
 proto_trojan_client_outbound() { printf '%s' 'base_outbound + {type:"trojan",password:.password,tls:tls_client}'; }
-proto_trojan_clash() { printf '%s' 'clash_base + {type:"trojan",password:.password,sni:.sni,udp:true}'; }
+proto_trojan_clash() { printf '%s' 'clash_base + {type:"trojan",password:.password,sni:.sni,udp:true,"client-fingerprint":"chrome"}'; }
 proto_trojan_surge() { printf '%s' '"\(surge_head("trojan")), password=\"\(.password)\", sni=\(.sni)"'; }
 proto_trojan_secrets() { printf '%s' '.password'; }
 proto_trojan_prompt() { tls_prompt; }
