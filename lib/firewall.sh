@@ -341,10 +341,15 @@ hop_backend() {
 # The service start (hop-sync) runs without srm's lock, maybe inside a locked
 # transaction restarting the service, so the rules have a lock of their own, taken
 # only around the change (no subshell: FIREWALL_IPT_CHANGED must reach the caller).
+HOP_LOCK=/run/lock/srm-hop.lock
 hop_sync() {
     local rc=0
-    if [[ -d /run/lock ]] && command -v flock >/dev/null; then
-        exec 8>/run/lock/srm-hop.lock || return 1
+    # Nothing to add and nothing recorded: done without the lock.
+    if [[ ! -f $DATA/port-hopping ]] && ! { [[ -n ${1:-} && -f $1 ]] && jq -e 'any(.nodes[]; .enabled and .hop != null)' "$1" >/dev/null; }; then
+        return 0
+    fi
+    if [[ -d ${HOP_LOCK%/*} ]] && command -v flock >/dev/null; then
+        exec 8>"$HOP_LOCK" || return 1
         flock -w 30 8 || { exec 8>&-; err '端口跳跃规则正被另一个操作修改，稍后重试。'; return 1; }
         hop_sync_locked "$@" || rc=$?
         exec 8>&-

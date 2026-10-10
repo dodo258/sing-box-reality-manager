@@ -15,6 +15,7 @@ fail() { printf 'FAIL %s\n' "$*"; exit 1; }
 SRM_ROOT=$work/root
 DATA=$work/data
 STATE=$DATA/current/state.json
+HOP_LOCK=$work/hop.lock
 mkdir -p "$SRM_ROOT" "$DATA/current" "$work/bin"
 touch "$SRM_ROOT/.srm-owned" "$DATA/.srm-owned"
 for tool in curl wget; do
