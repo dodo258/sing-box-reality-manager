@@ -119,6 +119,18 @@ grep -q '缺少 Snell v5' "$work/err" || fail 'missing binary message'
 printf '#!/bin/sh\n' > "$SRM_ROOT/snell/v5/snell-server"; chmod 755 "$SRM_ROOT/snell/v5/snell-server"
 echo 'PASS snell-server configuration per version in the generation, loopback only, 640, enabled nodes only'
 
+# A download whose SHA-256 differs from the pinned one installs nothing, even a
+# well-formed zip whose snell-server would pass the version check.
+printf '#!/bin/sh\necho "snell-server v6.0.0 (test)"\n' > "$work/fake-snell"
+python3 -I -c 'import sys, zipfile; zipfile.ZipFile(sys.argv[1], "w").write(sys.argv[2], "snell-server")' "$work/fake.zip" "$work/fake-snell"
+(
+    fetch() { cp "$work/fake.zip" "$2"; }
+    if snell_download 6 "$work/snell-bad" 2> "$work/err"; then fail 'unverified download accepted'; fi
+    grep -q 'Snell v6 下载、SHA256 校验或试运行失败' "$work/err" && [[ ! -e $work/snell-bad ]] || fail 'failed download left a binary'
+    if snell_download 4 "$work/snell-bad" 2>/dev/null; then fail 'Snell v4 download accepted'; fi
+) || exit 1
+echo 'PASS snell-server downloads must match the pinned SHA-256'
+
 # Helper services: one unit per enabled node; status, logs and sync cover them.
 [[ $(sidecar_units "$work/off.json" | tr '\n' ' ') == 'srm-snell@5000000000000001.service srm-snell@5000000000000003.service ' ]] || fail 'enabled units'
 [[ $(sidecar_units "$work/off.json" true | wc -l | tr -d ' ') == 3 ]] || fail 'all units'
@@ -174,7 +186,7 @@ jq '.nodes=[]' "$work/state.json" > "$STATE"
 node_add self snell --host 192.0.2.1 --port 20010 --yes > "$work/out" 2>&1 || { cat "$work/out"; fail 'deploy defaults'; }
 last | jq -e '.snell_version==6 and .snell_mode=="default" and .sni=="www.ctrip.com" and .port==20010 and
   (.psk|test("^[a-f0-9]{32}$")) and (.shadowtls_password|test("^[a-f0-9]{32}$")) and .psk != .shadowtls_password and
-  .local_port >= 10000 and .local_port <= 50000 and .local_port != 20010' >/dev/null || { last; fail 'default fields'; }
+  .local_port >= 10000 and .local_port < 32768 and .local_port != 20010' >/dev/null || { last; fail 'default fields'; }
 grep -q '= snell, 192.0.2.1, 20010, psk=' "$work/out" && grep -q 'Clash Meta (mihomo) 不支持 Snell v6' "$work/out" &&
     grep -q '节点端口：20010/TCP' "$work/out" || { cat "$work/out"; fail 'deploy output'; }
 [[ $(cat "$work/installed") == 6 && $(cat "$work/checked") == www.ctrip.com ]] || fail 'install / target check'
@@ -207,7 +219,19 @@ jq -e -n --argjson a "$old" --argjson b "$(last)" '($a|del(.psk,.shadowtls_passw
 node_change "$id" retarget www.ixigua.com > /dev/null || fail retarget
 last | jq -e '.sni=="www.ixigua.com"' >/dev/null || fail 'retarget field'
 if node_change "$id" retarget example.com 2>/dev/null; then fail 'retarget outside the list'; fi
-echo 'PASS rotation renews PSK and ShadowTLS password; handshake target switches within the vetted list'
+# Re-enabling refuses a loopback port another program took meanwhile.
+node_change "$id" toggle > /dev/null || fail 'disable'
+lp=$(last | jq -r .local_port)
+ss() { local filter="$*"; [[ ${filter##*:} != "$lp" ]] || printf 'LISTEN\n'; }
+before=$(sha256 "$STATE")
+if node_change "$id" toggle 2> "$work/err"; then fail 'enabled with its loopback port taken'; fi
+grep -q "本机端口 $lp 已被其他程序占用" "$work/err" && [[ $(sha256 "$STATE") == "$before" ]] || fail 'taken loopback port message'
+ss() { return 0; }
+node_change "$id" toggle > /dev/null || fail 're-enable'
+# The command line takes 6 or 5, not menu numbers.
+if node_add self snell --host 192.0.2.1 --proto-version 2 --yes > /dev/null 2>&1; then fail '--proto-version 2 accepted'; fi
+if node_add self snell --host 192.0.2.1 --proto-mode 2 --yes > /dev/null 2>&1; then fail '--proto-mode 2 accepted'; fi
+echo 'PASS rotation renews PSK and ShadowTLS password; target switches within the vetted list; re-enabling checks the loopback port'
 
 # Pages: the client page explains the link, Clash Meta support and routing.
 export_node "$id" clients > "$work/clients" || fail 'clients page'

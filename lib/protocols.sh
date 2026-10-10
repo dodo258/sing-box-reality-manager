@@ -427,13 +427,14 @@ proto_snell_prompt() {
     [[ -n ${opt_proto_version:-} || ${assume_yes:-0} == 1 ]] ||
         msg 'Snell 版本：1.v6（推荐；Surge iOS 5.20 / Mac 6.7 起支持） 2.v5（客户端还不支持 v6 时选；Clash Meta 只能用 v5）'
     ask_opt "${opt_proto_version:-}" 'Snell 版本' 1 || return 1
-    case $REPLY in 1|6|v6) proto_version=6;; 2|5|v5) proto_version=5;; *) err 'Snell 版本只能是 6 或 5。'; return 1;; esac
+    # Menu numbers count only in the menu; the command line takes 6 or 5.
+    case ${opt_proto_version:+cli}$REPLY in 1|6|v6|cli6) proto_version=6;; 2|5|v5|cli5) proto_version=5;; *) err 'Snell 版本只能是 6 或 5。'; return 1;; esac
     proto_mode=''
     if [[ $proto_version == 6 ]]; then
         [[ -n ${opt_proto_mode:-} || ${assume_yes:-0} == 1 ]] ||
             msg 'Snell v6 模式（客户端要选同一个）：1.default（流量整形 + 加密，推荐） 2.unshaped（只加密，吞吐约高 10%）'
         ask_opt "${opt_proto_mode:-}" 'Snell 模式' 1 || return 1
-        case $REPLY in 1|default) proto_mode=default;; 2|unshaped) proto_mode=unshaped;; *) err 'Snell 模式只能是 default 或 unshaped。'; return 1;; esac
+        case ${opt_proto_mode:+cli}$REPLY in 1|default|clidefault) proto_mode=default;; 2|unshaped|cliunshaped) proto_mode=unshaped;; *) err 'Snell 模式只能是 default 或 unshaped。'; return 1;; esac
     elif [[ -n ${opt_proto_mode:-} ]]; then err '--proto-mode 只适用于 Snell v6。'; return 1; fi
     msg 'ShadowTLS 借用下面网站的 TLS 1.3 握手：'
     handshake_target_prompt
@@ -442,8 +443,15 @@ proto_snell_create() {
     local psk password local_port
     reality_target_check "$sni" && snell_install "$proto_version" || return 1
     psk=$(random_hex 16) && password=$(random_hex 16) || return 1
-    # snell-server listens on its own loopback port, never the node port ($port of node_add).
-    while :; do local_port=$(choose_port) || return 1; [[ $local_port == "$port" ]] || break; done
+    # snell-server listens on its own loopback port, never the node port ($port of node_add),
+    # and below Linux's default ephemeral range (32768–60999): a source port of a live
+    # connection could otherwise block snell-server from binding it again on restart.
+    local tries
+    for ((tries=0; tries<100; tries++)); do
+        local_port=$(choose_port) || return 1
+        (( local_port < 32768 )) && [[ $local_port != "$port" ]] && break
+    done
+    (( tries < 100 )) || { err '未找到空闲的本机端口。'; return 1; }
     REPLY=$(jq -nc --argjson v "$proto_version" --arg m "$proto_mode" --arg psk "$psk" --arg pw "$password" --argjson lp "$local_port" \
         '{snell_version:$v} + (if $v == 6 then {snell_mode:$m} else {} end) + {psk:$psk,shadowtls_password:$pw,local_port:$lp}')
 }

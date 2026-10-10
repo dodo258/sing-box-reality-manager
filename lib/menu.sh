@@ -134,7 +134,7 @@ list_nodes() {
     jq -r '.nodes[]|[.id,.name,.type,(.port|tostring),(if .enabled then "启用" else "停用" end)]|@tsv' "$STATE"
 }
 node_change() {
-    local id=$1 action=$2 value=${3:-} candidate tmp type node dropped='' name
+    local id=$1 action=$2 value=${3:-} candidate tmp type node dropped='' name local_port
     candidate=$(new_candidate) || return 1
     node=$(node_json "$candidate" "$id") || { rm -f "$candidate"; err '节点不存在。'; return 1; }
     type=$(printf '%s' "$node" | jq -r .type)
@@ -143,6 +143,11 @@ node_change() {
       toggle)
         if [[ $(printf '%s' "$node" | jq -r .enabled) == false ]]; then
             port_free "$(printf '%s' "$node" | jq -r .port)" "$id" || { rm -f "$tmp" "$candidate"; err '端口被占用，无法启用。'; return 1; }
+            # A helper's loopback port may have been taken while the node was off.
+            local_port=$(printf '%s' "$node" | jq -r '.local_port // empty')
+            if [[ -n $local_port && -n $(ss -H -ltn "sport = :$local_port") ]]; then
+                rm -f "$tmp" "$candidate"; err "本机端口 $local_port 已被其他程序占用，无法启用；请删除此节点后重新部署。"; return 1
+            fi
             cert_port_ok "$(printf '%s' "$node" | jq -r .port)" "$(proto_call "$type" transport)" || { rm -f "$tmp" "$candidate"; return 1; }
         fi
         jq --arg id "$id" '(.nodes[]|select(.id==$id)|.enabled) |= not' "$candidate" > "$tmp";;
