@@ -1969,7 +1969,7 @@ firewall_sync() {
         if [[ $backend == none ]]; then msg '未检测到活动的 UFW/firewalld，也没有拦截入站的 iptables 规则，未更改防火墙。若使用自定义 nftables 规则，仍需检查。'
         elif [[ $backend == iptables ]] && (( failures == 0 )); then msg '已在 iptables 拦截规则之前放行节点端口（规则注释 srm）；云安全组和外部连通仍需检查。'
         elif (( failures == 0 )); then msg "已自动配置 $backend 节点端口；云安全组和外部连通仍需检查。"; fi
-        [[ -z $kept ]] || msg "${kept/ufw/UFW} 当前没有运行，srm 之前加的放行规则都保留着，重新启用后照常生效；这期间新加或改了端口的节点，启用后在菜单「4. 运行状态」里选「重新同步防火墙端口规则」。"
+        [[ -z $kept || $backend == ufw || $backend == firewalld ]] || msg "${kept/ufw/UFW} 当前没有运行，还在用的节点的放行规则保留着，重新启用后照常生效；这期间新加或改了端口的节点，启用后在菜单「4. 运行状态」里选「重新同步防火墙端口规则」。"
     fi
     rm -f "$ports" "$desired"
     return "$failures"
