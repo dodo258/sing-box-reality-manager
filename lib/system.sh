@@ -52,6 +52,7 @@ LimitNOFILE=65536
 WantedBy=multi-user.target
 UNIT
     systemctl daemon-reload || return 1
+    update_check_setup || { err '每日版本检查定时任务注册失败。'; return 1; }
     msg '运行环境就绪。'
 }
 # `vasma` is the v3 command name. Never shadow a v3 installation that still owns it.
@@ -200,20 +201,34 @@ rollback_config() {
     [[ -f $DATA/previous/state.json ]] || { err '没有可回滚的配置。'; return 1; }
     apply_state "$DATA/previous/state.json"
 }
+# Under the lock: the newest stable sing-box replaces the core only after its archive
+# matches the Release digest and it accepts the current configuration; a failed
+# health check after the restart puts the previous core back.
 update_core() {
     owned_root || return 1
-    local tmp old_active=0
-    if [[ $("$CORE" version | head -n 1) == "sing-box version $CORE_VERSION" ]]; then msg "已是本脚本验证的核心版本 $CORE_VERSION。"; return 0; fi
+    local tmp old_active=0 current release version
+    current=$(core_installed)
+    release=$(core_release) || { err "sing-box 保持 ${current:-当前版本}，没有更新。"; return 1; }
+    version=${release% *}
+    if ! version_newer "$version" "$current"; then
+        msg "sing-box 已是最新版本 $current，不需要重启。"; update_cache_mark sing-box "$current"; return 0
+    fi
     tmp=$(mktemp "$SRM_ROOT/core/.candidate.XXXXXX") || return 1
-    if ! core_download "$tmp"; then rm -f "$tmp"; return 1; fi
-    if [[ -f $DATA/current/config.json ]] && ! "$tmp" check -c "$DATA/current/config.json"; then rm -f "$tmp"; return 1; fi
+    if ! core_fetch "$tmp" "$version" "${release#* }"; then rm -f "$tmp"; err "sing-box 保持 $current，没有替换。"; return 1; fi
+    if [[ -f $DATA/current/config.json ]] && ! "$tmp" check -c "$DATA/current/config.json"; then
+        rm -f "$tmp"; err "sing-box $version 不接受当前配置，保持 $current，没有替换。"; return 1
+    fi
     systemctl is-active --quiet "$SERVICE" && old_active=1
-    cp -p "$CORE" "$CORE.previous" && mv -f "$tmp" "$CORE" || return 1
-    if [[ $old_active == 0 ]]; then msg '核心已更新；服务保持停止状态。'; return 0; fi
-    if restart_unit "$SERVICE" && service_healthy "$STATE"; then msg "核心已更新到 $CORE_VERSION。"; return 0; fi
+    cp -p "$CORE" "$CORE.previous" && mv -f "$tmp" "$CORE" || { rm -f "$tmp"; return 1; }
+    if [[ $old_active == 0 ]] || { restart_unit "$SERVICE" && service_healthy "$STATE"; }; then
+        update_cache_mark sing-box "$version"
+        msg "sing-box 已从 $current 更新到 $version。"
+        [[ $old_active == 1 ]] || msg '服务原本没有运行，保持停止。'
+        return 0
+    fi
     mv -f "$CORE.previous" "$CORE"
     restart_unit "$SERVICE"
-    err '新核心启动失败，已恢复原核心。'; return 1
+    err "sing-box $version 启动后健康检查失败，已恢复 $current。"; return 1
 }
 update_script() {
     owned_root || return 1
@@ -254,6 +269,9 @@ show_status() {
     # shellcheck disable=SC2046 # unit names have no spaces
     systemctl --no-pager --full status "$SERVICE" $(sidecar_units "$STATE" true) || true
     msg '节点变更时自动同步 UFW/firewalld 端口规则；云安全组需在服务商控制台放行对应端口。'
+    local hint
+    hint=$(update_hint)
+    [[ -z $hint ]] || msg "可更新：$hint（在菜单里选「5. 更新」）"
 }
 show_logs() {
     local unit args=(-u "$SERVICE")
@@ -262,12 +280,14 @@ show_logs() {
 }
 uninstall() {
     owned_root || return 1
-    msg "删除本脚本服务、续期任务、$SRM_ROOT、$DATA 和快捷命令；节点凭据与本脚本证书会删除。系统依赖、其他服务和防火墙保留。"
+    msg "删除本脚本服务、续期和版本检查任务、$SRM_ROOT、$DATA 和快捷命令；节点凭据与本脚本证书会删除。系统依赖、其他服务和防火墙保留。"
     [[ ${assume_yes:-0} == 1 ]] || yesno '已导出需要的节点资料，确认卸载' || return 0
     # One unit per call: systemctl stops nothing when any unit in the list is missing
     # (srm-renew.timer exists only after a certificate was issued).
     systemctl disable --now "$SERVICE" 2>/dev/null || true
     systemctl disable --now srm-renew.timer 2>/dev/null || true
+    systemctl disable --now "$CHECK_UNIT.timer" 2>/dev/null || true
+    systemctl stop "$CHECK_UNIT.service" 2>/dev/null || true
     sidecars_sync || true
     if systemctl is-active --quiet "$SERVICE" || systemctl is-active --quiet srm-renew.service; then err '服务仍在运行，停止卸载。'; return 1; fi
     local unit
@@ -276,7 +296,8 @@ uninstall() {
     done
     firewall_clear || { err '端口规则清理失败，保留数据以便重试卸载。'; return 1; }
     bbr_restore || return 1
-    rm -f "/etc/systemd/system/$SERVICE" /etc/systemd/system/srm-renew.service /etc/systemd/system/srm-renew.timer /etc/systemd/system/srm-*@.service
+    rm -f "/etc/systemd/system/$SERVICE" /etc/systemd/system/srm-renew.service /etc/systemd/system/srm-renew.timer /etc/systemd/system/srm-*@.service \
+        "/etc/systemd/system/$CHECK_UNIT.service" "/etc/systemd/system/$CHECK_UNIT.timer"
     [[ $(readlink /usr/local/sbin/srm) != "$SRM_ROOT/manager.sh" ]] || rm -f /usr/local/sbin/srm
     [[ $(readlink /usr/local/sbin/vasma) != "$SRM_ROOT/manager.sh" ]] || rm -f /usr/local/sbin/vasma
     rm -rf "$SRM_ROOT" "$DATA"

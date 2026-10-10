@@ -7,7 +7,7 @@ fail() { printf 'FAIL %s\n' "$*"; exit 1; }
 help=$(bash srm.sh --help) || fail 'srm --help exit code'
 # Top-level case labels in main() are indented six spaces; nested ones more.
 commands=$(awk '/^main\(\) \{/,/^}/' lib/main.sh | grep -E '^      [a-z][a-z|-]*\)' | sed -E 's/^ +//; s/\).*//' | tr '|' '\n' | grep -v '^-')
-(( $(printf '%s\n' "$commands" | wc -l) >= 25 )) || fail "too few commands parsed: $commands"
+(( $(printf '%s\n' "$commands" | wc -l) >= 24 )) || fail "too few commands parsed: $commands"
 for command in $commands; do
     grep -qE "^  srm $command( |$)" <<< "$help" || fail "help does not list: srm $command"
 done
@@ -32,14 +32,30 @@ echo 'PASS version and protocol list'
     source ./srm.sh
     with_lock() { printf '%s\n' "$*"; }
     require_root() { return 0; }
+    require_linux() { return 0; }
     [[ $(main routing dns 192.0.2.1) == 'routing_change dns 192.0.2.1' ]] || fail 'routing dispatch'
     [[ $(main routing add N dns 'a.com b.com') == 'routing_change add N dns a.com b.com' ]] || fail 'routing add dispatch'
     [[ $(main add vless --name x --yes) == "node_add $SRM_SELF vless --name x --yes" ]] || fail 'add dispatch'
     [[ $(main node 1111111111111111 port 20000) == 'node_change 1111111111111111 port 20000' ]] || fail 'node dispatch'
     [[ $(main uninstall --yes) == uninstall ]] || fail 'uninstall dispatch'
-    [[ $(main bbr on) == bbr_enable && $(main update-core) == update_core && $(main firewall) == "firewall_sync $STATE" ]] || fail 'subcommand dispatch'
+    [[ $(main bbr on) == bbr_enable && $(main firewall) == "firewall_sync $STATE" ]] || fail 'subcommand dispatch'
+    [[ $(main update --yes) == update_all && $(main update core --yes) == update_core && $(main update snell -y) == 'update_programs snell' ]] || fail 'update dispatch'
+    [[ $(main update script) == update_latest && $(main update-check off) == 'update_check_set off' ]] || fail 'update script / update-check dispatch'
+    if main update vless --yes > /dev/null 2>&1 || main update-check never > /dev/null 2>&1; then fail 'bad update target accepted'; fi
 ) || exit 1
 echo 'PASS subcommands pass their arguments to the right handler'
+# Every function the command line and the menus call exists in the bundle. Words
+# with an underscore are functions unless assigned, expanded or a registry hook name.
+(
+    source ./dist/srm
+    body=$(declare -f main main_menu status_menu node_menu update_menu routing_menu certificate_menu update_run)
+    hooks=$(compgen -A function | sed -nE 's/^proto_[a-z0-9]+_//p' | sort -u)
+    for word in $(grep -oE '[a-z][a-z0-9]*_[a-z0-9_]+' <<< "$body" | sort -u); do
+        grep -qE "(^|[^a-z0-9_])$word=|\\\$\{?$word" <<< "$body" || grep -qx "$word" <<< "$hooks" || declare -F "$word" >/dev/null ||
+            fail "called but not defined: $word"
+    done
+) || exit 1
+echo 'PASS every handler the command line and the menus call is defined'
 # Beginners use the menu: user-facing text never tells them to run a command.
 if grep -nE '(运行|执行|输入) *srm [a-z-]' lib/*.sh; then fail 'UI text asks the user to run an srm subcommand'; fi
 if grep -nE 'auto_update|srm-update' lib/*.sh; then fail 'automatic update code present'; fi

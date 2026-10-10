@@ -2,6 +2,7 @@
 # Opening the menu and viewing nodes must never reach the network.
 # curl/wget are replaced by recorders; system commands by local fixtures.
 set -euo pipefail
+fail() { printf "FAIL %s\n" "$*"; exit 1; }
 cd -- "$(dirname -- "$0")/.."
 source ./srm.sh
 work=$(mktemp -d)
@@ -36,6 +37,8 @@ jq -n '{schema:1,nodes:[
  {id:"2222222222222222",name:"a",type:"anytls",enabled:true,host:"192.0.2.1",port:18102,sni:"test.example.com",password:"password",cert_dir:"/nonexistent"},
  {id:"3333333333333333",name:"h",type:"hysteria2",enabled:false,host:"192.0.2.1",port:18103,sni:"test.example.com",password:"password",cert_dir:"/nonexistent"}
 ],policies:[{name:"N",mode:"dns",domains:["netflix.com"]}],unlock_dns:"192.0.2.53",egress:null}' > "$STATE"
+# The daily check's cache: the header and the update page show it without a lookup.
+jq -n '{checked_at:"2026-10-10 03:12",items:[{name:"sing-box",current:"1.14.1",latest:"1.14.3",newer:true},{name:"Snell v6",current:"6.0.0rc2",latest:"6.0.0rc2",newer:false}],errors:[]}' > "$DATA/update-check.json"
 # Every read-only page: node link, QR, details, client outbound, routing, status
 # and logs, update page, BBR status, certificates; then exit.
 input=$'2\n1\n2\n2\n1\n3\n2\n1\n1\n2\n2\n4\n3\n1\n4\n1\n5\n0\n6\nn\n8\n0\n0'
@@ -56,3 +59,7 @@ grep -q '1 条平台规则' "$work/menu"
 ! grep -q '"private_key"' "$work/menu" || exit 1
 ! grep -q $'\033' "$work/menu" || exit 1
 echo 'PASS pages render locally; details hide secrets; no color when not a terminal'
+[[ $(grep -c '可更新：sing-box 1.14.1 → 1.14.3（选 5 更新）' "$work/menu") == 10 ]] || fail 'update hint in every header'
+grep -q '上次检查：2026-10-10 03:12' "$work/menu" && grep -q 'Snell v6：当前 6.0.0rc2，最新 6.0.0rc2' "$work/menu" || fail 'update page from the cache'
+if grep -q '可更新' "$work/fresh"; then fail 'hint without a cache'; fi
+echo 'PASS update hints come only from the cached daily check, without network access'

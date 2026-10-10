@@ -8,6 +8,8 @@ SRM_REPO=dodo258/sing-box-reality-manager
 SRM_ROOT=/opt/srm
 DATA=/var/lib/srm
 SERVICE=srm.service
+# Daily version check (timer + oneshot service); never downloads or restarts.
+CHECK_UNIT=srm-version-check
 STATE=$DATA/current/state.json
 CORE=$SRM_ROOT/core/sing-box
 ACME=$SRM_ROOT/acme/acme.sh
@@ -73,24 +75,76 @@ ensure_dependencies() {
     fi
     for pkg in curl jq openssl qrencode ss flock tar; do command -v "$pkg" >/dev/null || return 1; done
 }
-core_download() {
-    local target=$1 platform=${2:-linux} arch hash asset tmp
-    case $(uname -m) in x86_64) arch=amd64;; aarch64|arm64) arch=arm64;; *) err '只支持 amd64/arm64。'; return 1;; esac
-    case $platform-$arch in
-      linux-amd64) hash=12cb2816b52febb356f6a885b740cc8758c3f30b8ae0ca8edba80f0d2d35343f;;
-      linux-arm64) hash=6060b42fa84c5dcaeae1799af7f61b0f1ae4855d9d5ddc9e02baba17154b3ae2;;
-      darwin-arm64) hash=b9024642ef7b4848252df5469b7f60ef3c18bb5e217a16a0934f0174f8ad11b4;;
+core_arch() {
+    case $(uname -m) in x86_64) printf 'amd64\n';; aarch64|arm64) printf 'arm64\n';; *) err '只支持 amd64/arm64。'; return 1;; esac
+}
+# Version order for sing-box and the Snell server: 1.14.1 < 1.14.3; pre-releases (alpha,
+# b/beta, rc; a bare "rc" counts as rc1) sort before their release.
+version_latest() {
+    printf '%s\n' "$@" | awk '{
+        base = $0; stage = 3; num = 0
+        if (match($0, /-?(alpha|beta|b|rc)\.?[0-9]*$/)) {
+            suf = substr($0, RSTART); base = substr($0, 1, RSTART - 1)
+            sub(/^-/, "", suf); sub(/\./, "", suf)
+            if (suf ~ /^alpha/) stage = 0; else if (suf ~ /^b/) stage = 1; else stage = 2
+            sub(/^[a-z]+/, "", suf); num = (suf == "" ? 1 : suf + 0)
+        }
+        split(base, p, ".")
+        printf "%09d %09d %09d %d %09d %s\n", p[1], p[2], p[3], stage, num, $0
+    }' | sort | tail -n 1 | awk '{print $NF}'
+}
+# True when NEW is a later version than OLD; an unreadable OLD counts as older.
+version_newer() {
+    local new=$1 old=$2 pattern='^[0-9]+\.[0-9]+\.[0-9]+'
+    [[ $new =~ $pattern ]] || return 1
+    [[ $old =~ $pattern ]] || return 0
+    [[ $new != "$old" && $(version_latest "$new" "$old") == "$new" ]]
+}
+# Newest stable sing-box (1.14 or later): "VERSION SHA256" of this machine's Linux
+# archive, the SHA256 being the asset digest GitHub's Release API reports.
+# /releases/latest skips drafts and pre-releases; a payload that is one is refused.
+core_release() {
+    local tmp arch out=''
+    arch=$(core_arch) || return 1
+    tmp=$(mktemp) || return 1
+    if fetch https://api.github.com/repos/SagerNet/sing-box/releases/latest "$tmp"; then
+        out=$(jq -r --arg arch "$arch" 'select(.draft == false and .prerelease == false and (.tag_name|test("^v[0-9]+\\.[0-9]+\\.[0-9]+$")))
+          | (.tag_name|ltrimstr("v")) as $v | .assets[]? | select(.name == "sing-box-\($v)-linux-\($arch).tar.gz")
+          | select(.digest|test("^sha256:[a-f0-9]{64}$")) | "\($v) \(.digest|ltrimstr("sha256:"))"' "$tmp" 2>/dev/null) || out=''
+    fi
+    rm -f "$tmp"
+    [[ $out =~ ^[0-9]+\.[0-9]+\.[0-9]+\ [a-f0-9]{64}$ ]] || { err '没有查到 sing-box 的稳定版发布信息（或缺少 SHA256）。'; return 1; }
+    ! version_newer 1.14.0 "${out%% *}" || { err "sing-box ${out%% *} 低于最低支持的 1.14。"; return 1; }
+    printf '%s\n' "$out"
+}
+# The release this script was tested with, pinned by archive SHA256.
+core_pinned_hash() {
+    case $(core_arch) in
+      amd64) printf '12cb2816b52febb356f6a885b740cc8758c3f30b8ae0ca8edba80f0d2d35343f\n';;
+      arm64) printf '6060b42fa84c5dcaeae1799af7f61b0f1ae4855d9d5ddc9e02baba17154b3ae2\n';;
       *) return 1;;
     esac
-    asset=sing-box-$CORE_VERSION-$platform-$arch
+}
+core_fetch() {
+    local target=$1 version=$2 hash=$3 arch asset tmp
+    arch=$(core_arch) || return 1
+    asset=sing-box-$version-linux-$arch
     tmp=$(mktemp -d) || return 1
-    if fetch "https://github.com/SagerNet/sing-box/releases/download/v$CORE_VERSION/$asset.tar.gz" "$tmp/core.tar.gz" &&
+    if [[ $hash =~ ^[a-f0-9]{64}$ ]] &&
+       fetch "https://github.com/SagerNet/sing-box/releases/download/v$version/$asset.tar.gz" "$tmp/core.tar.gz" &&
        [[ $(sha256 "$tmp/core.tar.gz") == "$hash" ]] &&
        tar -xzf "$tmp/core.tar.gz" -C "$tmp" "$asset/sing-box" &&
        install -m 755 "$tmp/$asset/sing-box" "$target"; then
         rm -rf "$tmp"; return 0
     fi
-    rm -rf "$tmp"; err '核心下载或 SHA256 校验失败。'; return 1
+    rm -rf "$tmp"; err "sing-box $version 下载或 SHA256 校验失败。"; return 1
+}
+# Installation takes the newest stable release; without the Release API the tested one.
+core_download() {
+    local release
+    if release=$(core_release); then core_fetch "$1" "${release% *}" "${release#* }"; return; fi
+    msg "改为安装本脚本测试过的 sing-box $CORE_VERSION。"
+    core_fetch "$1" "$CORE_VERSION" "$(core_pinned_hash)"
 }
 port_free() {
     local port=$1 exclude=${2:-} output
@@ -249,6 +303,11 @@ client_note() { jq -r "$PROTO_JQ_DEFS $(proto_jq note empty)"; }
 # by its own program next to sing-box: sidecar (jq string: systemd unit of the node,
 # which listens on 127.0.0.1:.local_port) and sidecar_render NODE DIR (writes the
 # node's files into the generation, so switching generations switches them too).
+# A protocol whose server program srm downloads adds the program group, used by the
+# version check and manual updates: program_label (name shown to users), program_key
+# (jq string: the program variant a node runs, e.g. "v6"), program_path KEY,
+# program_current KEY (installed version), program_latest KEY… (one network lookup;
+# prints KEY<TAB>VERSION lines) and program_fetch KEY VERSION TARGET (download and verify).
 PROTO_HOOKS='label transport validate render_inbound share_uri client_outbound secrets prompt create rotate'
 PROTOCOLS=''
 PROTO_JQ_DEFS='
@@ -277,6 +336,9 @@ proto_register() {
     optional=0
     for hook in sidecar sidecar_render; do declare -F "proto_${type}_$hook" >/dev/null && optional=$((optional+1)); done
     (( optional == 0 || optional == 2 )) || { err "协议 $type 的 sidecar 钩子不完整，未注册。"; return 1; }
+    optional=0
+    for hook in program_label program_key program_path program_current program_latest program_fetch; do declare -F "proto_${type}_$hook" >/dev/null && optional=$((optional+1)); done
+    (( optional == 0 || optional == 6 )) || { err "协议 $type 的 program 钩子不完整，未注册。"; return 1; }
     proto_known "$type" || PROTOCOLS="${PROTOCOLS:+$PROTOCOLS }$type"
 }
 proto_known() { [[ $1 =~ ^[a-z][a-z0-9]*$ && " $PROTOCOLS " == *" $1 "* ]]; }
@@ -544,34 +606,54 @@ proto_hysteria2_rotate() { REPLY=''; with_password; }
 # whose override_address/override_port point at snell-server, so the front end goes
 # through sing-box check, the generation switch and rollback like any other node.
 # Routing rules do not apply: snell-server makes its own outbound connections.
-# Server binaries are pinned by the SHA-256 of the official zip (the vendor publishes
-# no checksums): https://dl.nssurge.com/snell/snell-server-v<version>-linux-<arch>.zip,
+# Deploying installs a pinned build, checked against the SHA-256 of the official zip
+# (the vendor publishes no checksums): https://dl.nssurge.com/snell/snell-server-v<version>-linux-<arch>.zip,
 # versions from kb.nssurge.com/surge-knowledge-base/release-notes/snell (2026-10-10:
-# v6.0.0rc2 is the newest v6, v5.0.1 the newest v5).
+# v6.0.0rc2 is the newest v6, v5.0.1 the newest v5). Manual updates take the newest
+# build of the node's major version listed there; a build without a pinned SHA-256
+# relies on HTTPS from the vendor and must report its own version when run.
 SNELL_V6=6.0.0rc2
 SNELL_V5=5.0.1
+SNELL_NOTES=https://kb.nssurge.com/surge-knowledge-base/release-notes/snell
 snell_download() {
-    local major=$1 target=$2 version arch hash tmp
-    case $major in 6) version=$SNELL_V6;; 5) version=$SNELL_V5;; *) err 'Snell 版本只能是 6 或 5。'; return 1;; esac
+    local major=$1 target=$2 version=${3:-} arch hash='' tmp
+    case $major in 6) version=${version:-$SNELL_V6};; 5) version=${version:-$SNELL_V5};; *) err 'Snell 版本只能是 6 或 5。'; return 1;; esac
+    [[ $version =~ ^$major\.[0-9]+\.[0-9]+((b|beta|rc)[0-9]*)?$ ]] || { err "Snell 版本号不合法：$version"; return 1; }
     case $(uname -m) in x86_64) arch=amd64;; aarch64|arm64) arch=aarch64;; *) err 'Snell 只支持 amd64/arm64。'; return 1;; esac
     case $version-$arch in
       6.0.0rc2-amd64) hash=8a9c4463ca87cfa5eaa37c6af0d37ab93ea275aa12391985bb2a375ca3abd7f2;;
       6.0.0rc2-aarch64) hash=a0b2915cbc77dc3baf8fa069e741c20808d8a10c3a8a93e709a0a580645c3bd7;;
       5.0.1-amd64) hash=9bea1c2b9e35b73b31634856c04d18c393072b9e5dcde6a32781d8b8f908c539;;
       5.0.1-aarch64) hash=2f178bf5ac468ce1a130454efa40a0603fbbe4e47ecc4880a989f4abc7f824cf;;
-      *) return 1;;
     esac
-    tmp=$(mktemp -d) || return 1
-    # `snell-server -v` prints "snell-server v6.0.0 (…)" for 6.0.0rc2, so only the
-    # major version is compared; running it also proves the binary loads here.
+    # `snell-server -v` prints "snell-server v6.0.0 (…)" for 6.0.0rc2, so the
+    # version without its beta/RC suffix is compared; running it also proves the
+    # binary loads here. As root it runs as the service user, like the service does,
+    # from a directory under /tmp that user can enter.
+    local run=()
+    if [[ $EUID == 0 ]] && id srm >/dev/null 2>&1 && command -v runuser >/dev/null; then
+        tmp=$(mktemp -d /tmp/srm-snell.XXXXXXXX) && chmod 755 "$tmp" || return 1
+        run=(runuser -u srm --)
+    else tmp=$(mktemp -d) || return 1; fi
     if fetch "https://dl.nssurge.com/snell/snell-server-v$version-linux-$arch.zip" "$tmp/snell.zip" &&
-       [[ $(sha256 "$tmp/snell.zip") == "$hash" ]] &&
+       [[ -z $hash || $(sha256 "$tmp/snell.zip") == "$hash" ]] &&
        unzip -p "$tmp/snell.zip" snell-server > "$tmp/snell-server" && chmod 755 "$tmp/snell-server" &&
-       "$tmp/snell-server" -v 2>&1 | grep -q "snell-server v$major\." &&
+       ${run[@]+"${run[@]}"} "$tmp/snell-server" -v 2>&1 | grep -qF "snell-server v${version%%[a-z]*}" &&
        install -m 755 "$tmp/snell-server" "$target"; then
         rm -rf "$tmp"; return 0
     fi
-    rm -rf "$tmp"; err "Snell v$major 下载、SHA256 校验或试运行失败。"; return 1
+    rm -rf "$tmp"; err "Snell $version 下载、SHA256 校验或试运行失败。"; return 1
+}
+# Newest build of MAJOR in the release notes on stdin: the newest release, or the
+# newest beta/RC while the major version has no release yet.
+snell_pick() {
+    local versions stable
+    versions=$(grep -oE "snell-server-v$1\.[0-9]+\.[0-9]+((b|beta|rc)[0-9]*)?-linux-" | sed -E 's/^snell-server-v//; s/-linux-$//' | sort -u) || true
+    stable=$(grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' <<< "$versions") || true
+    [[ -z $stable ]] || versions=$stable
+    [[ -n $versions ]] || return 1
+    # shellcheck disable=SC2086 # one version per word
+    version_latest $versions
 }
 # Under the lock while deploying: the binary of this major version, and the unit.
 # The unit starts whatever the current generation links for the node, so switching
@@ -584,6 +666,7 @@ snell_install() {
             { apt-get update && DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l apt-get install -y --no-install-recommends unzip; } || return 1
         fi
         install -d -m 755 "$SRM_ROOT/snell" "$SRM_ROOT/snell/v$major" && snell_download "$major" "$SRM_ROOT/snell/v$major/snell-server" || return 1
+        if [[ $major == 6 ]]; then printf '%s\n' "$SNELL_V6"; else printf '%s\n' "$SNELL_V5"; fi > "$SRM_ROOT/snell/v$major/version" || return 1
     fi
     tmp=$(mktemp) || return 1
     cat > "$tmp" <<UNIT
@@ -697,6 +780,26 @@ proto_snell_retarget_label() { printf '切换 ShadowTLS 握手目标（携程 / 
 proto_snell_retarget_select() { reality_target_select; }
 proto_snell_retarget() { handshake_retarget "$@"; }
 proto_snell_sidecar() { printf '%s' '"srm-snell@\(.id).service"'; }
+proto_snell_program_label() { printf 'Snell'; }
+proto_snell_program_key() { printf '%s' '"v\(.snell_version)"'; }
+proto_snell_program_path() { printf '%s\n' "$SRM_ROOT/snell/$1/snell-server"; }
+# Installations before version files existed run the pinned build.
+proto_snell_program_current() {
+    if [[ -f $SRM_ROOT/snell/$1/version ]]; then cat "$SRM_ROOT/snell/$1/version"
+    elif [[ $1 == v6 ]]; then printf '%s\n' "$SNELL_V6"; else printf '%s\n' "$SNELL_V5"; fi
+}
+proto_snell_program_latest() {
+    local tmp key version rc=0
+    tmp=$(mktemp) || return 1
+    if ! fetch "$SNELL_NOTES" "$tmp"; then rm -f "$tmp"; err '无法读取 Snell 官方发布说明。'; return 1; fi
+    for key in "$@"; do
+        if version=$(snell_pick "${key#v}" < "$tmp"); then printf '%s\t%s\n' "$key" "$version"
+        else err "Snell 发布说明里没有找到 $key 的版本。"; rc=1; fi
+    done
+    rm -f "$tmp"
+    return "$rc"
+}
+proto_snell_program_fetch() { snell_download "${1#v}" "$3" "$2"; }
 # Server configuration as written by `snell-server --wizard` of each version, with
 # listen moved to loopback (v6 `--help` lists listen, psk, mode, dns,
 # dns-ip-preference, ipv6 (deprecated) and egress-interface; the v5 wizard writes
@@ -977,6 +1080,7 @@ LimitNOFILE=65536
 WantedBy=multi-user.target
 UNIT
     systemctl daemon-reload || return 1
+    update_check_setup || { err '每日版本检查定时任务注册失败。'; return 1; }
     msg '运行环境就绪。'
 }
 # `vasma` is the v3 command name. Never shadow a v3 installation that still owns it.
@@ -1125,20 +1229,34 @@ rollback_config() {
     [[ -f $DATA/previous/state.json ]] || { err '没有可回滚的配置。'; return 1; }
     apply_state "$DATA/previous/state.json"
 }
+# Under the lock: the newest stable sing-box replaces the core only after its archive
+# matches the Release digest and it accepts the current configuration; a failed
+# health check after the restart puts the previous core back.
 update_core() {
     owned_root || return 1
-    local tmp old_active=0
-    if [[ $("$CORE" version | head -n 1) == "sing-box version $CORE_VERSION" ]]; then msg "已是本脚本验证的核心版本 $CORE_VERSION。"; return 0; fi
+    local tmp old_active=0 current release version
+    current=$(core_installed)
+    release=$(core_release) || { err "sing-box 保持 ${current:-当前版本}，没有更新。"; return 1; }
+    version=${release% *}
+    if ! version_newer "$version" "$current"; then
+        msg "sing-box 已是最新版本 $current，不需要重启。"; update_cache_mark sing-box "$current"; return 0
+    fi
     tmp=$(mktemp "$SRM_ROOT/core/.candidate.XXXXXX") || return 1
-    if ! core_download "$tmp"; then rm -f "$tmp"; return 1; fi
-    if [[ -f $DATA/current/config.json ]] && ! "$tmp" check -c "$DATA/current/config.json"; then rm -f "$tmp"; return 1; fi
+    if ! core_fetch "$tmp" "$version" "${release#* }"; then rm -f "$tmp"; err "sing-box 保持 $current，没有替换。"; return 1; fi
+    if [[ -f $DATA/current/config.json ]] && ! "$tmp" check -c "$DATA/current/config.json"; then
+        rm -f "$tmp"; err "sing-box $version 不接受当前配置，保持 $current，没有替换。"; return 1
+    fi
     systemctl is-active --quiet "$SERVICE" && old_active=1
-    cp -p "$CORE" "$CORE.previous" && mv -f "$tmp" "$CORE" || return 1
-    if [[ $old_active == 0 ]]; then msg '核心已更新；服务保持停止状态。'; return 0; fi
-    if restart_unit "$SERVICE" && service_healthy "$STATE"; then msg "核心已更新到 $CORE_VERSION。"; return 0; fi
+    cp -p "$CORE" "$CORE.previous" && mv -f "$tmp" "$CORE" || { rm -f "$tmp"; return 1; }
+    if [[ $old_active == 0 ]] || { restart_unit "$SERVICE" && service_healthy "$STATE"; }; then
+        update_cache_mark sing-box "$version"
+        msg "sing-box 已从 $current 更新到 $version。"
+        [[ $old_active == 1 ]] || msg '服务原本没有运行，保持停止。'
+        return 0
+    fi
     mv -f "$CORE.previous" "$CORE"
     restart_unit "$SERVICE"
-    err '新核心启动失败，已恢复原核心。'; return 1
+    err "sing-box $version 启动后健康检查失败，已恢复 $current。"; return 1
 }
 update_script() {
     owned_root || return 1
@@ -1179,6 +1297,9 @@ show_status() {
     # shellcheck disable=SC2046 # unit names have no spaces
     systemctl --no-pager --full status "$SERVICE" $(sidecar_units "$STATE" true) || true
     msg '节点变更时自动同步 UFW/firewalld 端口规则；云安全组需在服务商控制台放行对应端口。'
+    local hint
+    hint=$(update_hint)
+    [[ -z $hint ]] || msg "可更新：$hint（在菜单里选「5. 更新」）"
 }
 show_logs() {
     local unit args=(-u "$SERVICE")
@@ -1187,12 +1308,14 @@ show_logs() {
 }
 uninstall() {
     owned_root || return 1
-    msg "删除本脚本服务、续期任务、$SRM_ROOT、$DATA 和快捷命令；节点凭据与本脚本证书会删除。系统依赖、其他服务和防火墙保留。"
+    msg "删除本脚本服务、续期和版本检查任务、$SRM_ROOT、$DATA 和快捷命令；节点凭据与本脚本证书会删除。系统依赖、其他服务和防火墙保留。"
     [[ ${assume_yes:-0} == 1 ]] || yesno '已导出需要的节点资料，确认卸载' || return 0
     # One unit per call: systemctl stops nothing when any unit in the list is missing
     # (srm-renew.timer exists only after a certificate was issued).
     systemctl disable --now "$SERVICE" 2>/dev/null || true
     systemctl disable --now srm-renew.timer 2>/dev/null || true
+    systemctl disable --now "$CHECK_UNIT.timer" 2>/dev/null || true
+    systemctl stop "$CHECK_UNIT.service" 2>/dev/null || true
     sidecars_sync || true
     if systemctl is-active --quiet "$SERVICE" || systemctl is-active --quiet srm-renew.service; then err '服务仍在运行，停止卸载。'; return 1; fi
     local unit
@@ -1201,7 +1324,8 @@ uninstall() {
     done
     firewall_clear || { err '端口规则清理失败，保留数据以便重试卸载。'; return 1; }
     bbr_restore || return 1
-    rm -f "/etc/systemd/system/$SERVICE" /etc/systemd/system/srm-renew.service /etc/systemd/system/srm-renew.timer /etc/systemd/system/srm-*@.service
+    rm -f "/etc/systemd/system/$SERVICE" /etc/systemd/system/srm-renew.service /etc/systemd/system/srm-renew.timer /etc/systemd/system/srm-*@.service \
+        "/etc/systemd/system/$CHECK_UNIT.service" "/etc/systemd/system/$CHECK_UNIT.timer"
     [[ $(readlink /usr/local/sbin/srm) != "$SRM_ROOT/manager.sh" ]] || rm -f /usr/local/sbin/srm
     [[ $(readlink /usr/local/sbin/vasma) != "$SRM_ROOT/manager.sh" ]] || rm -f /usr/local/sbin/vasma
     rm -rf "$SRM_ROOT" "$DATA"
@@ -2016,7 +2140,196 @@ node_menu() {
       *) err '无效选项。';;
     esac
 }
-# Called under the same flock as node/configuration changes.
+# Updates are manual: replacing sing-box or a program next to it restarts it and drops
+# connections for a few seconds. A daily timer only looks up version numbers
+# (update_check_run) and writes $DATA/update-check.json; the menu header reads that
+# file and never reaches the network.
+# Protocols whose server program srm downloads (registry program_* hooks).
+program_types() {
+    local type
+    for type in $PROTOCOLS; do proto_has "$type" program_latest && printf '%s\n' "$type"; done
+    return 0
+}
+program_labels() {
+    local type out=''
+    for type in $(program_types); do out+="${out:+ / }$(proto_call "$type" program_label)"; done
+    printf '%s\n' "$out"
+}
+# Program variants (e.g. v6) that TYPE's nodes in the state use.
+program_keys() {
+    [[ -f $STATE ]] || return 0
+    jq -r --arg t "$1" "$PROTO_JQ_DEFS .nodes[]|select(.type == \$t)|$(proto_jq program_key empty)" "$STATE" | sort -u
+}
+core_installed() { "$CORE" version 2>/dev/null | awk 'NR == 1 {print $3}'; }
+update_item() {
+    local newer=false
+    [[ -z $4 ]] || ! version_newer "$4" "$3" || newer=true
+    jq -c --arg n "$2" --arg c "$3" --arg l "$4" --argjson newer "$newer" \
+        '. + [{name:$n,current:(if $c == "" then null else $c end),latest:(if $l == "" then null else $l end),newer:$newer}]' <<< "$1"
+}
+update_cache_write() {
+    local tmp
+    tmp=$(mktemp "$DATA/.update-check.XXXXXX") || return 1
+    if printf '%s\n' "$1" > "$tmp" && chmod 644 "$tmp" && mv -f "$tmp" "$DATA/update-check.json"; then return 0; fi
+    rm -f "$tmp"; return 1
+}
+# After a manual update the cached entry NAME runs VERSION; the hint goes away.
+update_cache_mark() {
+    local file=$DATA/update-check.json latest cache
+    [[ -f $file ]] || return 0
+    latest=$(jq -r --arg n "$1" '.items[]|select(.name == $n)|.latest // empty' "$file") || return 0
+    local newer=false
+    [[ -z $latest ]] || ! version_newer "$latest" "$2" || newer=true
+    cache=$(jq --arg n "$1" --arg v "$2" --argjson newer "$newer" '(.items[]|select(.name == $n)) |= (.current = $v | .newer = $newer)' "$file") &&
+        update_cache_write "$cache" || true
+}
+# The daily timer's job: looks up the newest versions and records them. It downloads
+# no program, replaces no file other than the cache, restarts nothing and takes no
+# lock (the lock would resume an interrupted change).
+update_check_run() {
+    owned_root || return 1
+    local items='[]' errors=() release latest='' type key version keys lines label
+    if release=$(core_release); then latest=${release% *}; else errors+=('sing-box：没有查到最新版本'); fi
+    items=$(update_item "$items" sing-box "$(core_installed)" "$latest") || return 1
+    for type in $(program_types); do
+        keys=$(program_keys "$type")
+        [[ -n $keys ]] || continue
+        label=$(proto_call "$type" program_label)
+        # shellcheck disable=SC2086 # one key per word
+        lines=$(proto_call "$type" program_latest $keys) || true
+        for key in $keys; do
+            version=$(awk -F '\t' -v k="$key" '$1 == k {print $2}' <<< "$lines")
+            [[ -n $version ]] || errors+=("$label $key：没有查到最新版本")
+            items=$(update_item "$items" "$label $key" "$(proto_call "$type" program_current "$key")" "$version") || return 1
+        done
+    done
+    local cache
+    cache=$(jq -n --arg at "$(date '+%Y-%m-%d %H:%M')" --argjson items "$items" '{checked_at:$at,items:$items,errors:$ARGS.positional}' --args ${errors[@]+"${errors[@]}"}) &&
+        update_cache_write "$cache" || return 1
+    (( ${#errors[@]} == 0 ))
+}
+# "sing-box 1.14.1 → 1.14.3，Snell v6 …" from the cache; empty when nothing is newer.
+update_hint() {
+    [[ -f $DATA/update-check.json ]] && command -v jq >/dev/null || return 0
+    jq -r '[.items[]?|select(.newer)|"\(.name) \(.current // "未知") → \(.latest)"]|join("，")' "$DATA/update-check.json" 2>/dev/null || true
+}
+update_summary() {
+    local file=$DATA/update-check.json
+    if systemctl is-enabled --quiet "$CHECK_UNIT.timer" 2>/dev/null; then
+        msg '每日检查：已开启（每天凌晨只查一次版本号，不下载、不重启）'
+    else msg '每日检查：已关闭'; fi
+    if [[ ! -f $file ]]; then msg '还没有检查过新版本。'
+    elif ! jq -r '"上次检查：\(.checked_at)",
+          (.items[]|"  \(.name)：当前 \(.current // "未知")，最新 \(.latest // "未查到")\(if .newer then "（可更新）" else "" end)"),
+          (.errors[]?|"  \(.)")' "$file" 2>/dev/null; then
+        msg '检查记录无法读取，下次检查会重写。'
+    fi
+}
+update_check_install() {
+    cat > "/etc/systemd/system/$CHECK_UNIT.service" <<UNIT
+[Unit]
+Description=srm daily version check (version numbers only: no download, no restart)
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/srm update-check run
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=$DATA
+CapabilityBoundingSet=
+UNIT
+    cat > "/etc/systemd/system/$CHECK_UNIT.timer" <<'UNIT'
+[Unit]
+Description=srm daily version check
+[Timer]
+OnCalendar=*-*-* 02:00:00
+RandomizedDelaySec=4h
+Persistent=true
+[Install]
+WantedBy=timers.target
+UNIT
+    systemctl daemon-reload
+}
+# On unless turned off in the menu; reinstalling keeps it off.
+update_check_setup() {
+    update_check_install || return 1
+    [[ -e $DATA/update-check.off ]] || systemctl enable --now "$CHECK_UNIT.timer" >/dev/null 2>&1
+}
+update_check_set() {
+    owned_root || return 1
+    case $1 in
+      on)
+        rm -f "$DATA/update-check.off"
+        update_check_setup || { err '每日检查开启失败。'; return 1; }
+        msg '每日检查已开启：每天凌晨只查一次版本号，有新版本时在菜单顶部提示。';;
+      off)
+        touch "$DATA/update-check.off" || return 1
+        systemctl disable --now "$CHECK_UNIT.timer" >/dev/null 2>&1 || { err '每日检查关闭失败。'; return 1; }
+        rm -f "$DATA/update-check.json"
+        msg '每日检查已关闭；需要时在菜单「5. 更新」里选「立即检查新版本」。';;
+      *) err '每日检查只能是 on 或 off。'; return 1;;
+    esac
+}
+# Under the lock. Programs of TYPE (or of every type) used by nodes: each variant is
+# replaced only when a newer build downloads and verifies, then its enabled nodes'
+# services restart; a failed health check puts the previous build back.
+update_programs() {
+    owned_root || return 1
+    local type keys failures=0
+    for type in $(program_types); do
+        [[ -z ${1:-} || $1 == "$type" ]] || continue
+        keys=$(program_keys "$type")
+        if [[ -z $keys ]]; then msg "没有 $(proto_call "$type" program_label) 节点，不需要更新。"; continue; fi
+        # shellcheck disable=SC2086 # one key per word
+        update_program "$type" $keys || failures=1
+    done
+    return "$failures"
+}
+update_program() {
+    local type=$1 label lines key latest current path tmp units unit failures=0
+    shift
+    label=$(proto_call "$type" program_label)
+    # A variant missing from the lookup fails alone; the others still update.
+    lines=$(proto_call "$type" program_latest "$@") || failures=1
+    [[ -n $lines ]] || { err "$label 没有更新。"; return 1; }
+    # fd 3: downloads and restarts must not read the remaining lines.
+    while IFS=$'\t' read -r key latest <&3; do
+        current=$(proto_call "$type" program_current "$key")
+        if ! version_newer "$latest" "$current"; then
+            msg "$label $key 已是最新版本 $current，不需要重启。"; update_cache_mark "$label $key" "$current"; continue
+        fi
+        path=$(proto_call "$type" program_path "$key")
+        tmp=$(mktemp "${path%/*}/.candidate.XXXXXX") || return 1
+        if ! proto_call "$type" program_fetch "$key" "$latest" "$tmp"; then
+            rm -f "$tmp"; err "$label $key 保持 $current，没有替换。"; failures=1; continue
+        fi
+        cp -p "$path" "$path.previous" && mv -f "$tmp" "$path" || { rm -f "$tmp"; failures=1; continue; }
+        # Services of the enabled nodes running this variant; none, or nodes stopped
+        # with sing-box, means nothing to restart: they start the new build later.
+        units=''
+        if systemctl is-active --quiet "$SERVICE"; then
+            units=$(jq -r --arg t "$type" --arg k "$key" "$PROTO_JQ_DEFS .nodes[]|select(.enabled and .type == \$t)|select(($(proto_jq program_key empty)) == \$k)|$(proto_jq sidecar empty)" "$STATE") || units=''
+        fi
+        local good=1
+        for unit in $units; do restart_unit "$unit" || good=0; done
+        if [[ $good == 1 ]] && { [[ -z $units ]] || service_healthy "$STATE"; }; then
+            printf '%s\n' "$latest" > "${path%/*}/version"
+            update_cache_mark "$label $key" "$latest"
+            msg "$label $key 已从 $current 更新到 $latest。"
+            [[ -n $units ]] || msg '没有正在运行的节点用它，不需要重启；节点下次启动时用新版本。'
+            continue
+        fi
+        mv -f "$path.previous" "$path"
+        for unit in $units; do restart_unit "$unit" || true; done
+        err "$label $latest 启动后健康检查失败，已恢复 $current。"; failures=1
+    done 3<<< "$lines"
+    return "$failures"
+}
+# Called under the same flock as node/configuration changes. The new script's own
+# updaters replace sing-box and the programs.
 update_all() {
     owned_root || return 1
     local before after backup
@@ -2025,28 +2338,66 @@ update_all() {
     before=$(sha256 "$backup")
     if ! update_latest; then rm -f "$backup"; return 1; fi
     after=$(sha256 "$SRM_ROOT/manager.sh")
-    # Load the new script's validated core version without reacquiring our lock.
-    if bash -c 'source "$1" && update_core' bash "$SRM_ROOT/manager.sh"; then
-        rm -f "$backup"
-        msg '脚本和已验证核心已检查完成；协议实现随核心更新。'
-        return 0
-    fi
-    if [[ $before != "$after" ]]; then
+    local rc=0
+    bash -c 'source "$1" && declare -F update_core update_programs >/dev/null || exit 3
+             rc=0; update_core || rc=1; update_programs || rc=1; exit "$rc"' bash "$SRM_ROOT/manager.sh" || rc=$?
+    # sing-box and the programs no longer follow the script's version: their own
+    # failure (a lookup or a download) keeps the new script, only a script that does
+    # not load is reverted.
+    if [[ $rc == 3 && $before != "$after" ]]; then
         mv -f "$backup" "$SRM_ROOT/manager.sh" || return 1
-        err '核心更新失败，管理脚本已恢复为更新前版本。'
+        err '新脚本无法加载，管理脚本已恢复为更新前版本。'
     else rm -f "$backup"; fi
-    return 1
+    [[ $rc == 0 ]] || { err '更新没有全部完成，原因见上方；没更新的部分保持原版本。'; return 1; }
 }
-# No automatic updates: replacing the core restarts the service and drops connections.
+# Restarting drops every connection: the menu asks "confirm / back" (back by default).
+update_confirm() {
+    [[ ${assume_yes:-0} != 1 ]] || return 0
+    msg '更新需要重启服务，所有连接会断开几秒。'
+    msg '  1. 确认更新'
+    msg '  0. 返回'
+    ask '请选择' 0 || return 1
+    [[ $REPLY == 1 ]]
+}
+# TARGET: all, core, script, programs (all types) or one program type; menu choices
+# and `srm update` both come here.
+update_run() {
+    local target=${1:-all}
+    if [[ $target == script ]]; then with_lock update_latest; return; fi
+    update_confirm || { msg '已返回，没有更新。'; return 0; }
+    case $target in
+      all) with_lock update_all;;
+      core) with_lock update_core;;
+      programs) with_lock update_programs;;
+      *) with_lock update_programs "$target";;
+    esac
+}
 update_menu() {
-    msg $'\n更新与回滚（不会自动更新；更新核心要重启服务，所有连接会断开几秒）\n1.一键更新脚本和已验证核心\n2.仅更新脚本（不重启服务）\n3.仅更新已验证核心\n4.回滚配置\n5.回滚脚本\n0.返回'
+    local labels toggle=off
+    labels=$(program_labels)
+    msg $'\n更新（不会自动更新；更新 sing-box 或 '"$labels"$' 要重启服务，所有连接会断开几秒）'
+    update_summary
+    systemctl is-enabled --quiet "$CHECK_UNIT.timer" 2>/dev/null || toggle=on
+    msg "
+1. 全部更新（脚本、sing-box、$labels）
+2. 只更新 sing-box
+3. 只更新 $labels
+4. 只更新脚本（不重启服务）
+5. 立即检查新版本（只查版本号，不下载）
+6. $(if [[ $toggle == off ]]; then printf '关闭'; else printf '开启'; fi)每日检查
+7. 回滚配置
+8. 回滚脚本
+0. 返回"
     ask '请选择' || return 0
     case $REPLY in
-      1) yesno '更新会重启服务，所有连接断开几秒，确认更新' && with_lock update_all;;
-      2) with_lock update_latest;;
-      3) yesno '更新会重启服务，所有连接断开几秒，确认更新' && with_lock update_core;;
-      4) yesno '恢复上一份配置（影响本脚本节点）' && with_lock rollback_config;;
-      5) with_lock rollback_script;;
+      1) update_run all;;
+      2) update_run core;;
+      3) update_run programs;;
+      4) update_run script;;
+      5) update_check_run; update_summary;;
+      6) with_lock update_check_set "$toggle";;
+      7) yesno '恢复上一份配置（影响本脚本节点）' && with_lock rollback_config;;
+      8) with_lock rollback_script;;
       *) err '无效选项。';;
     esac
 }
@@ -2057,7 +2408,7 @@ restart_nodes() {
     "$CORE" check -c "$DATA/current/config.json" && sidecars_sync "$STATE" && restart_unit "$SERVICE" && service_healthy "$STATE"
 }
 menu_header() {
-    local status='未部署' counts='0 / 0' renew='未配置' routing='未启用' color='' reset=''
+    local status='未部署' counts='0 / 0' renew='未配置' routing='未启用' updates color='' reset=''
     if use_color; then color=$'\033[1;36m'; reset=$'\033[0m'; fi
     if [[ -f $SRM_ROOT/.srm-owned ]]; then
         status='已安装，服务未运行'
@@ -2068,18 +2419,22 @@ menu_header() {
         routing=$(jq -r 'if (.policies|length)==0 then "未启用" else "\(.policies|length) 条平台规则" end' "$STATE")
     fi
     systemctl is-active --quiet srm-renew.timer && renew='每日自动检查'
+    # Versions come from the daily check's cache; the menu never looks them up.
+    updates=$(update_hint)
     printf '\n%s━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━%s\n' "$color" "$reset"
     printf '  sing-box-reality-manager (srm)  v%s\n' "$SRM_VERSION"
     printf '  %s\n' "$(proto_labels 3)"
     printf '%s━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━%s\n' "$color" "$reset"
     printf '  服务：%s    节点：%s（启用 / 总数）\n' "$status" "$counts"
-    printf '  分流：%s    证书续期：%s\n\n' "$routing" "$renew"
+    printf '  分流：%s    证书续期：%s\n' "$routing" "$renew"
+    [[ -z $updates ]] || printf '  可更新：%s（选 5 更新）\n' "$updates"
+    printf '\n'
 }
 main_menu() {
     require_linux || return 1
     while :; do
         menu_header
-        msg $'  1. 部署节点\n  2. 节点管理 · 原始链接 / 二维码\n  3. 流媒体分流 · 解锁 DNS / 代理出口\n  4. 运行状态 · 日志 / 重启 / 防火墙\n  5. 更新与回滚\n  6. BBR 与系统检测\n  7. 卸载\n  8. 证书管理 · 到期时间 / 自动续期\n\n  0. 退出\n'
+        msg $'  1. 部署节点\n  2. 节点管理 · 原始链接 / 二维码\n  3. 流媒体分流 · 解锁 DNS / 代理出口\n  4. 运行状态 · 日志 / 重启 / 防火墙\n  5. 更新 · 新版本检查 / 回滚\n  6. BBR 与系统检测\n  7. 卸载\n  8. 证书管理 · 到期时间 / 自动续期\n\n  0. 退出\n'
         ask '请选择' || return 0
         case $REPLY in
           1) with_lock node_add "$SRM_SELF";;
@@ -2151,9 +2506,12 @@ srm $SRM_VERSION：sing-box 节点管理（$(proto_labels)）
   srm rollback            恢复上一份节点配置
   srm rollback-script     恢复上一个版本的脚本
   srm bbr [status|on]     查看或开启 BBR + FQ
-  srm update              更新脚本和已验证核心
-  srm update-script       仅更新脚本
-  srm update-core         仅更新已验证核心
+  srm update [core|$(program_types | tr '\n' '|')script] [--yes]
+                          手动更新，不写为全部（脚本、sing-box、$(program_labels)）；core 只更新 sing-box，
+                          $(program_types | paste -sd / -) 只更新 $(program_labels)，script 只更新脚本（不重启服务）；
+                          更新 sing-box 或 $(program_labels) 会重启服务、断开连接几秒，--yes 跳过确认
+  srm update-check [on|off|status|run]
+                          每日检查新版本（只查版本号，不下载、不重启）：开启、关闭、查看（默认）、立即检查
   srm uninstall [--yes]   卸载（默认需要确认）
   srm render STATE        用 state 文件生成 sing-box 配置（调试用）
   srm version             版本
@@ -2205,9 +2563,27 @@ main() {
           status) require_linux && bbr_status;; on) with_lock bbr_enable;;
           *) err '用法：srm bbr [status|on]'; return 1;;
         esac;;
-      update) with_lock update_all;;
-      update-script) with_lock update_latest;;
-      update-core) with_lock update_core;;
+      update)
+        local target=all
+        shift
+        while (( $# )); do
+            case $1 in
+              -y|--yes) assume_yes=1;;
+              all|core|script) target=$1;;
+              *)
+                proto_has "$1" program_latest || { err "用法：srm update [core|$(program_types | tr '\n' '|')script] [--yes]"; return 1; }
+                target=$1;;
+            esac
+            shift
+        done
+        require_linux && update_run "$target";;
+      update-check)
+        case ${2:-status} in
+          on|off) with_lock update_check_set "$2";;
+          status) require_linux && update_summary;;
+          run) require_linux && update_check_run;;
+          *) err '用法：srm update-check [on|off|status|run]'; return 1;;
+        esac;;
       uninstall)
         case ${2:-} in -y|--yes) assume_yes=1;; '') ;; *) err '用法：srm uninstall [--yes]'; return 1;; esac
         with_lock uninstall;;

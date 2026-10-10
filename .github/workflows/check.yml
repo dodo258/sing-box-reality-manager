@@ -23,11 +23,12 @@ jobs:
       - name: Download checksum-pinned sing-box core
         run: |
           source ./srm.sh
-          core_download "$RUNNER_TEMP/sing-box"
+          # Tests use the tested release; installation itself takes the newest stable one.
+          core_fetch "$RUNNER_TEMP/sing-box" "$CORE_VERSION" "$(core_pinned_hash)"
           # The naive client in tests/traffic.sh loads libcronet.so from the core's
           # directory; it comes from the same checksum-pinned archive (servers do not need it).
           fetch "https://github.com/SagerNet/sing-box/releases/download/v$CORE_VERSION/sing-box-$CORE_VERSION-linux-amd64.tar.gz" "$RUNNER_TEMP/core.tar.gz"
-          [[ $(sha256 "$RUNNER_TEMP/core.tar.gz") == 12cb2816b52febb356f6a885b740cc8758c3f30b8ae0ca8edba80f0d2d35343f ]]
+          [[ $(sha256 "$RUNNER_TEMP/core.tar.gz") == "$(core_pinned_hash)" ]]
           tar -xzf "$RUNNER_TEMP/core.tar.gz" -C "$RUNNER_TEMP" --strip-components=1 "sing-box-$CORE_VERSION-linux-amd64/libcronet.so"
       - name: Download checksum-pinned mihomo (Clash Meta) client
         run: |
