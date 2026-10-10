@@ -2071,7 +2071,9 @@ node_add_main() {
         if [[ -z $type ]]; then quick_pick || return 0; type=$REPLY; fi
         rc=0; node_deploy "$type" || rc=$?
         [[ $rc == 3 ]] || return "$rc"
-        type=''
+        # Options that belonged to the previous protocol do not follow to the next one.
+        type='' opt_domain='' opt_sni='' opt_cert='' opt_webroot='' opt_cert_file='' opt_key_file=''
+        opt_transport='' opt_proto_version='' opt_proto_mode=''
     done
 }
 # The quick-deploy list; REPLY = protocol type, failure = back.

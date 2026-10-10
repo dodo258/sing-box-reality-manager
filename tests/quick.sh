@@ -111,6 +111,11 @@ if node_add self anytls <<< $'0' > "$work/out" 2>&1; then fail 'srm add anytls, 
 [[ $(sha256 "$STATE") == "$before" ]] || fail 'cancelled deploys changed state'
 node_add self anytls <<< $'\n1\n\n\n\n' > "$work/out" 2>&1 || { cat "$work/out"; fail 'no domain, then the list'; }
 grep -q '快速部署（' "$work/out" && last | jq -e '.type=="vless"' >/dev/null || fail 'no domain did not open the list'
+# The protocol's own options stay behind: --domain of AnyTLS does not block Reality.
+dns_answer=198.51.100.7
+node_add self anytls --domain bad.example.com <<< $'\n\n3\n1\n\n\n\n' > "$work/out" 2>&1 || { cat "$work/out"; fail 'another protocol after --domain'; }
+last | jq -e '.type=="vless"' >/dev/null || fail 'switched to Reality after --domain'
+dns_answer=192.0.2.10
 node_add self hysteria2 --cert auto <<< $'hy2.example.com\n\n\n\n' > "$work/out" 2>&1 || { cat "$work/out"; fail 'hysteria2 --cert auto asks the domain'; }
 last | jq -e '.type=="hysteria2" and .sni=="hy2.example.com" and (has("cert_sha256")|not)' >/dev/null || fail 'hysteria2 domain certificate'
 node_add self vlesstls --domain www2.example.com --cert webroot <<< $'\n\n/srv/www\n\n' > "$work/out" 2>&1 || { cat "$work/out"; fail 'webroot path asked'; }
