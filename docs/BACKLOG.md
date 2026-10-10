@@ -8,6 +8,8 @@
 
 - [ ] v4 iptables 规则开机自动补回（没有 netfilter-persistent 的系统）—— 来源：2026-10-10 iptables 后端审查（PR #13）。没装 netfilter-persistent 时，srm 加的 iptables 规则重启后就没了，而系统自己的 REJECT 可能由别的方式恢复，节点要等下次改节点或手动同步才通；现在只打印提示。要做：srm.service 启动前（如 ExecStartPre 或单独的 oneshot）按当前 state 同步一次防火墙端口规则，失败不阻止服务启动。验收：测试断言单元里有这一步、规则缺失时启动后补回；install-live 里真实 systemd 跑通；CI 全绿。提示：srm.service 已有 `ExecStartPre=-+/opt/srm/manager.sh hop-sync`（2392455，端口跳跃用，不占 srm 主锁、只读当前那一代的 state），可以把它扩展成同步全部防火墙规则，旧单元的补写机制见 `service_unit_write`。
 
+- [ ] tests/traffic.sh 的 mihomo 流量测试偶发失败 —— 来源：2026-10-11 main 上 2392455 的 CI（run 38073278751）报「FAIL mihomo through vless-httpupgrade」，mihomo 启动后约 0.2 秒就被关掉、没取到页面；同样代码的 PR #16 三次 CI 和紧接着的 401da53 都通过，和端口跳跃无关。可能是 wait_port 只等端口监听、mihomo 还没准备好出站，或 fetch_via 超时太短。要做：查清原因，给 mihomo 那段加就绪等待或有限次重试（只针对启动竞态，不放松断言）。验收：本机或 CI 连跑 traffic.sh 多次不再出现；CI 全绿。
+
 ## 等主人拍板
 
 - [ ] v4 切换发布 —— 前面 7 条合并、主人验收后才做。内容：
