@@ -78,7 +78,7 @@ service_healthy() {
                 [[ -n $port ]] || continue
                 if [[ $kind == udp ]]; then output=$(ss -H -lun "sport = :$port"); else output=$(ss -H -ltn "sport = :$port"); fi
                 [[ -n $output ]] || good=0
-            done < <(jq -r ".nodes[]|select(.enabled)|[.port,($(proto_jq_transport))]|@tsv" "$candidate")
+            done < <(jq -r ".nodes[]|select(.enabled)|.port as \$p|($(proto_jq_transports))[]|[\$p,.]|@tsv" "$candidate")
             [[ $good == 1 ]] && return 0
         fi
         sleep 1

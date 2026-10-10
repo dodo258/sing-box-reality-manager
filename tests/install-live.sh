@@ -82,6 +82,24 @@ echo 'PASS real Reality configuration transaction rolls back on failure and pres
     ! systemctl is-active --quiet "$SERVICE" || exit 1
 )
 echo 'PASS a node on port 853 starts under the unprivileged service user'
+# A self-signed TUIC node and a TCP+UDP Shadowsocks node deploy through the real
+# transaction: the service user reads the self-signed key and both transports listen.
+(
+    source ./srm.sh
+    node_add "$PWD/dist/srm" tuic --name tuic-self --host 127.0.0.1 --yes
+    node_add "$PWD/dist/srm" shadowsocks --name ss --host 127.0.0.1 --yes
+    systemctl is-active --quiet "$SERVICE" || exit 1
+    dir=$(jq -r '.nodes[]|select(.name=="tuic-self")|.cert_dir' "$STATE")
+    [[ $dir == "$DATA/selfsigned/"* && $(stat -c '%U:%G %a' "$dir/key.pem") == 'root:srm 640' ]] || exit 1
+    runuser -u srm -- test -r "$dir/key.pem" || exit 1
+    port=$(jq -r '.nodes[]|select(.name=="tuic-self")|.port' "$STATE")
+    [[ -n $(ss -H -lun "sport = :$port") ]] || exit 1
+    port=$(jq -r '.nodes[]|select(.name=="ss")|.port' "$STATE")
+    [[ -n $(ss -H -ltn "sport = :$port") && -n $(ss -H -lun "sport = :$port") ]] || exit 1
+    for id in $(jq -r '.nodes[]|select(.name=="tuic-self" or .name=="ss")|.id' "$STATE"); do node_change "$id" delete; done
+    ! systemctl is-active --quiet "$SERVICE" || exit 1
+)
+echo 'PASS self-signed TUIC and TCP+UDP Shadowsocks run under the service user'
 # Updates are manual only: installation must not schedule any update job.
 if compgen -G '/etc/systemd/system/srm-update*' > /dev/null; then echo 'FAIL update unit installed'; exit 1; fi
 if crontab -l 2>/dev/null | grep -q srm; then echo 'FAIL update cron job installed'; exit 1; fi

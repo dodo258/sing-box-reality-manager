@@ -1,17 +1,18 @@
 # All mutation menu paths execute under with_lock.
-# node_add SELF [TYPE] [--name N] [--host H] [--port P|random] [--sni D] [--cert auto|webroot|import]
-#          [--webroot DIR] [--cert-file F] [--key-file F] [--email E] [--bbr enable|keep] [--yes]
+# node_add SELF [TYPE] [--name N] [--host H] [--port P|random] [--sni D] [--cert auto|webroot|import|selfsigned]
+#          [--webroot DIR] [--cert-file F] [--key-file F] [--email E] [--transport tcp|ws|grpc|httpupgrade]
+#          [--bbr enable|keep] [--yes]
 node_add() {
     local self=$1 type='' name host port sni='' bbr=keep candidate node id tmp transport var assume_yes=0 cert_avoid_port=''
-    local opt_name='' opt_host='' opt_port='' opt_sni='' opt_cert='' opt_webroot='' opt_cert_file='' opt_key_file='' opt_email='' opt_bbr=''
+    local opt_name='' opt_host='' opt_port='' opt_sni='' opt_cert='' opt_webroot='' opt_cert_file='' opt_key_file='' opt_email='' opt_bbr='' opt_transport=''
     # Protocol prompt hooks fill these.
-    local mode=none email='' webroot='' cert='' key=''
+    local mode=none email='' webroot='' cert='' key='' stream=''
     shift
     if [[ -n ${1:-} && $1 != -* ]]; then type=$1; shift; fi
     while (( $# )); do
         case $1 in
           -y|--yes) assume_yes=1; shift; continue;;
-          --name|--host|--port|--sni|--cert|--webroot|--cert-file|--key-file|--email|--bbr) ;;
+          --name|--host|--port|--sni|--cert|--webroot|--cert-file|--key-file|--email|--transport|--bbr) ;;
           *) err "未知参数：$1（可用参数见 srm --help）"; return 1;;
         esac
         [[ $# -ge 2 && -n $2 ]] || { err "$1 需要一个值。"; return 1; }
@@ -34,20 +35,21 @@ node_add() {
     ask_opt "$opt_port" '端口：1–65535，回车随机（10000–50000 里的空闲端口）' random || return 1; port=$REPLY
     if [[ $port != random ]]; then valid_port "$port" || { err '端口必须在 1–65535。'; return 1; }; fi
     proto_call "$type" prompt || return 1
-    valid_domain "$sni" || { err '域名不合法，请使用 ASCII/Punycode 域名。'; return 1; }
+    [[ -z $sni ]] || valid_domain "$sni" || { err '域名不合法，请使用 ASCII/Punycode 域名。'; return 1; }
+    [[ -z $opt_transport || -n $stream ]] || { err "--transport 不适用于 $(proto_call "$type" label)。"; return 1; }
     if [[ ! -f $STATE ]]; then
         [[ -n $opt_bbr || $assume_yes == 1 ]] || msg 'BBR：1.内核支持时自动启用（主机级 TCP 设置） 2.保持现状（与现有程序共存时选择）'
         ask_opt "$opt_bbr" 'BBR 设置' 2 || return 1
         case $REPLY in 1|enable) bbr=enable;; 2|keep) bbr=keep;; *) err '无效选项。'; return 1;; esac
     fi
-    msg "部署：$name / $(proto_call "$type" label) / $host:$port / $sni"
+    msg "部署：$name / $(proto_call "$type" label) / $host:$port${sni:+ / $sni}"
     if [[ $assume_yes != 1 ]]; then yesno '开始安装缺失依赖、申请证书并部署' || return 0; fi
     [[ -f $SRM_ROOT/.srm-owned ]] || setup "$self" || return 1
     ensure_dependencies || return 1
     if [[ $port == random ]]; then port=$(choose_port) || return 1; else port_free "$port" || { err '端口被占用，原服务未改动。'; return 1; }; fi
     transport=$(proto_call "$type" transport) || return 1
     cert_port_ok "$port" "$transport" || return 1
-    [[ $transport != tcp ]] || cert_avoid_port=$port
+    [[ " $transport " != *" tcp "* ]] || cert_avoid_port=$port
     id=$(random_hex 8) || return 1
     proto_call "$type" create || return 1
     # A reused certificate may validate on this node's port.
@@ -55,7 +57,7 @@ node_add() {
         msg '证书已经申请好，换一个端口重新部署时会直接复用。'; return 1
     fi
     node=$(jq -n --arg id "$id" --arg name "$name" --arg host "$host" --arg sni "$sni" --arg type "$type" --argjson port "$port" --argjson fields "$REPLY" \
-        '{id:$id,name:$name,host:$host,sni:$sni,port:$port,type:$type,enabled:true} + $fields') || return 1
+        '{id:$id,name:$name,host:$host} + (if $sni == "" then {} else {sni:$sni} end) + {port:$port,type:$type,enabled:true} + $fields') || return 1
     if [[ $(sysctl -n net.ipv6.conf.all.disable_ipv6 2>/dev/null) == 1 ]]; then
         node=$(printf '%s' "$node" | jq '.listen="0.0.0.0"') || return 1
     fi
@@ -67,7 +69,7 @@ node_add() {
         if [[ $bbr == enable ]]; then
             if [[ $(sysctl -n net.ipv4.tcp_congestion_control) == bbr ]]; then msg 'BBR 已开启。'; else bbr_enable || msg '节点已部署；BBR 未启用，原因见上方。'; fi
         fi
-        transport=$(printf '%s' "$transport" | tr '[:lower:]' '[:upper:]')
+        transport=$(printf '%s' "$transport" | tr '[:lower:] ' '[:upper:]+')
         msg "节点 ID：$id"
         msg "节点端口：${port}/${transport}；如仍无法连接，请在服务商控制台的云安全组允许 ${transport} ${port}。"
         printf '%s' "$node" | share_uri
@@ -98,12 +100,26 @@ export_node() {
             if use_color; then printf '%s' "$link" | qrencode -t ANSIUTF8; else printf '%s' "$link" | qrencode -t UTF8; fi
         else msg '未安装 qrencode，只显示链接：'; msg "$link"; fi;;
       outbound) printf '%s' "$node" | client_outbound;;
+      clash) printf '%s' "$node" | clash_proxy;;
+      surge) printf '%s' "$node" | surge_proxy;;
+      clients)
+        msg '── sing-box 客户端出站 ──'
+        printf '%s' "$node" | client_outbound || return 1
+        msg '── Clash Meta (mihomo)：放进 proxies: 列表 ──'
+        link=$(printf '%s' "$node" | clash_proxy) || return 1
+        msg "${link:-Clash Meta 不支持此协议。}"
+        msg '── Surge：放进 [Proxy] 段 ──'
+        link=$(printf '%s' "$node" | surge_proxy) || return 1
+        msg "${link:-Surge 不支持此协议。}"
+        msg '── Shadowrocket、v2rayN 等：导入原始分享链接或扫二维码 ──'
+        link=$(printf '%s' "$node" | jq -r '.cert_sha256 // empty')
+        [[ -z $link ]] || msg "自签证书：以上配置已带证书指纹；只导入链接的客户端会跳过证书校验，客户端能填证书 SHA-256 指纹时填：$link";;
       details)
         printf '%s' "$node" | jq "del($(proto_call "$type" secrets))" || return 1
         if [[ $(printf '%s' "$node" | jq -r '.cert_dir // empty') ]]; then
             openssl x509 -in "$(printf '%s' "$node" | jq -r .cert_dir)/fullchain.pem" -noout -subject -enddate
         fi;;
-      *) err '格式只能是 uri、qr、outbound 或 details。'; return 1;;
+      *) err '格式只能是 uri、qr、outbound、clash、surge、clients 或 details。'; return 1;;
     esac
 }
 list_nodes() {
@@ -169,11 +185,11 @@ node_menu() {
         id=$(jq -r --argjson i "$((REPLY-1))" '.nodes[$i].id' "$STATE") || return 1
     fi
     type=$(node_json "$STATE" "$id" | jq -r .type) || { err '节点不存在。'; return 1; }
-    msg $'1.详情 2.原始分享链接 3.二维码 4.sing-box 客户端出站\n5.启用/停用 6.修改端口 7.重置凭据 8.修改名称 9.删除'
+    msg $'1.详情 2.原始分享链接 3.二维码 4.客户端配置（sing-box / Clash Meta / Surge）\n5.启用/停用 6.修改端口 7.重置凭据 8.修改名称 9.删除'
     ! proto_has "$type" retarget_select || msg "10.$(proto_call "$type" retarget_label)"
     ask '操作' 1 || return 0
     case $REPLY in
-      1) export_node "$id" details;; 2) export_node "$id" uri;; 3) export_node "$id" qr;; 4) export_node "$id" outbound;;
+      1) export_node "$id" details;; 2) export_node "$id" uri;; 3) export_node "$id" qr;; 4) export_node "$id" clients;;
       5) with_lock node_change "$id" toggle;;
       6) ask '新端口' || return 0; with_lock node_change "$id" port "$REPLY";;
       7) yesno '旧凭据会失效，确认重置' && with_lock node_change "$id" rotate;;

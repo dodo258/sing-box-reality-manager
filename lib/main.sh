@@ -12,7 +12,7 @@ menu_header() {
     systemctl is-active --quiet srm-renew.timer && renew='每日自动检查'
     printf '\n%s━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━%s\n' "$color" "$reset"
     printf '  sing-box-reality-manager (srm)  v%s\n' "$SRM_VERSION"
-    printf '  %s\n' "$(proto_labels)"
+    printf '  %s\n' "$(proto_labels 3)"
     printf '%s━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━%s\n' "$color" "$reset"
     printf '  服务：%s    节点：%s（启用 / 总数）\n' "$status" "$counts"
     printf '  分流：%s    证书续期：%s\n\n' "$routing" "$renew"
@@ -66,12 +66,15 @@ srm $SRM_VERSION：sing-box 节点管理（$(proto_labels)）
   srm install             只安装运行环境（核心、服务、srm / vasma 命令）
   srm add [协议] [选项]   部署节点，协议：$PROTOCOLS
                             --name 名称  --host 地址  --port 端口|random  --sni 域名
-                            --cert auto|webroot|import  --webroot 目录  --cert-file 文件  --key-file 文件
-                            --email 邮箱  --bbr enable|keep  --yes（不提问，未给的选项用默认值）
+                            --cert auto|webroot|import|selfsigned（自签只用于 TUIC / Hysteria / Hysteria2）
+                            --webroot 目录  --cert-file 文件  --key-file 文件  --email 邮箱
+                            --transport tcp|ws|grpc|httpupgrade（VLESS TLS）
+                            --bbr enable|keep  --yes（不提问，未给的选项用默认值）
   srm list                列出节点：ID、名称、协议、端口、状态
   srm nodes               节点管理菜单：原始链接、二维码、启停、改端口、重置凭据
   srm node ID 操作 [值]   toggle | delete | rotate | port 端口 | name 名称 | retarget 目标域名
-  srm export ID [格式]    uri（默认）| qr | outbound | details；只在本机生成，不联网
+  srm export ID [格式]    uri（默认）| qr | outbound（sing-box）| clash | surge | clients（全部客户端）| details
+                          只在本机生成，不联网
   srm protocols           支持的协议和传输层
   srm routing [show]      流媒体分流菜单；show 只查看
   srm routing dns IP      设置解锁 DNS

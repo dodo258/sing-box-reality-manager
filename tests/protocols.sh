@@ -15,15 +15,15 @@ STATE=$DATA/current/state.json
 mkdir -p "$SRM_ROOT" "$DATA/current"
 touch "$SRM_ROOT/.srm-owned" "$DATA/.srm-owned"
 
-[[ $PROTOCOLS == 'vless anytls hysteria2' ]] || fail "registered: $PROTOCOLS"
+[[ $PROTOCOLS == 'vless anytls hysteria2 shadowsocks tuic vlesstls trojan vmess naive hysteria' ]] || fail "registered: $PROTOCOLS"
 for type in $PROTOCOLS; do
     for hook in $PROTO_HOOKS; do declare -F "proto_${type}_$hook" >/dev/null || fail "$type lacks $hook"; done
 done
 [[ $(proto_call hysteria2 transport) == udp && $(proto_call vless transport) == tcp ]] || fail transport
-echo 'PASS Reality, AnyTLS and Hysteria2 are registered with every hook'
+echo 'PASS every registered protocol has every hook'
 
-if proto_register vmess 2> "$work/err"; then fail 'protocol without hooks registered'; fi
-grep -q 'proto_vmess_label' "$work/err" || fail 'missing hook not reported'
+if proto_register socks 2> "$work/err"; then fail 'protocol without hooks registered'; fi
+grep -q 'proto_socks_label' "$work/err" || fail 'missing hook not reported'
 proto_partial_label() { printf 'Partial'; }
 if proto_register partial 2>/dev/null; then fail 'protocol with missing hooks registered'; fi
 if proto_register 'Bad-Name' 2>/dev/null; then fail 'invalid protocol name registered'; fi
@@ -34,10 +34,10 @@ if proto_register 'Bad-Name' 2>/dev/null; then fail 'invalid protocol name regis
     proto_half_retarget_select() { :; }; proto_half_retarget_label() { :; }
     proto_register half || fail 'complete optional hook group rejected'
 ) || exit 1
-[[ $PROTOCOLS == 'vless anytls hysteria2' ]] || fail "registry changed: $PROTOCOLS"
-if proto_call vmess label 2> "$work/err"; then fail 'unknown protocol dispatched'; fi
-grep -q '不支持的协议：vmess' "$work/err" || fail 'unknown protocol message'
-if proto_known '' || proto_known vmess || proto_known 'vless anytls'; then fail 'proto_known accepted unknown name'; fi
+[[ $PROTOCOLS == 'vless anytls hysteria2 shadowsocks tuic vlesstls trojan vmess naive hysteria' ]] || fail "registry changed: $PROTOCOLS"
+if proto_call socks label 2> "$work/err"; then fail 'unknown protocol dispatched'; fi
+grep -q '不支持的协议：socks' "$work/err" || fail 'unknown protocol message'
+if proto_known '' || proto_known socks || proto_known 'vless anytls'; then fail 'proto_known accepted unknown name'; fi
 if proto_call anytls retarget '{}' www.ctrip.com 2>/dev/null; then fail 'optional hook dispatched to a protocol without it'; fi
 echo 'PASS registry rejects unknown names, incomplete protocols and missing hooks'
 
@@ -45,18 +45,18 @@ jq -n '{schema:2,policies:[],unlock_dns:null,egress:null,nodes:[
  {id:"1111111111111111",name:"r",type:"vless",enabled:true,host:"192.0.2.1",port:18101,sni:"www.ctrip.com",uuid:"0f2a6c1e-3b4d-4e5f-8a9b-0c1d2e3f4a5b",private_key:"private",public_key:"public",short_id:"0123456789abcdef"},
  {id:"2222222222222222",name:"h",type:"hysteria2",enabled:true,host:"192.0.2.1",port:18103,sni:"test.example.com",password:"password",cert_dir:"/certs"}]}' > "$work/state.json"
 validate_state "$work/state.json" || fail 'valid state rejected'
-jq '.nodes[0].type="vmess"' "$work/state.json" > "$work/unknown.json"
+jq '.nodes[0].type="socks"' "$work/state.json" > "$work/unknown.json"
 if validate_state "$work/unknown.json" 2>/dev/null; then fail 'unknown node type accepted'; fi
 if node_json "$work/unknown.json" 1111111111111111 | share_uri >/dev/null 2>&1; then fail 'share link for unknown type'; fi
-[[ $(jq -r ".nodes[]|$(proto_jq_transport)" "$work/state.json" | tr '\n' ' ') == 'tcp udp ' ]] || fail 'transport dispatch'
+[[ $(jq -c ".nodes[]|$(proto_jq_transports)" "$work/state.json" | tr '\n' ' ') == '["tcp"] ["udp"] ' ]] || fail 'transport dispatch'
 echo 'PASS state validation, links and transport dispatch reject an unknown node type'
 
 # Deploying an unknown protocol fails before prompting, setup or any change.
 setup() { touch "$work/setup-called"; }
 cp "$work/state.json" "$STATE"
 before=$(sha256 "$STATE")
-if node_add self vmess --name x --host 192.0.2.1 --port 20000 --yes > "$work/out" 2>&1; then fail 'node_add accepted vmess'; fi
-grep -q '不支持的协议：vmess' "$work/out" || fail 'node_add message'
+if node_add self socks --name x --host 192.0.2.1 --port 20000 --yes > "$work/out" 2>&1; then fail 'node_add accepted socks'; fi
+grep -q '不支持的协议：socks' "$work/out" || fail 'node_add message'
 [[ $(sha256 "$STATE") == "$before" && ! -e $work/setup-called ]] || fail 'unknown protocol changed state'
 if node_add self anytls --yes > "$work/out" 2>&1; then fail 'non-interactive add without --host accepted'; fi
 grep -q '非交互模式缺少参数' "$work/out" || fail 'missing option message'
@@ -115,14 +115,14 @@ echo 'PASS QR codes use only local qrencode and fall back to the link'
     proto_demo_create() { REPLY='{"password":"pw"}'; }
     proto_demo_rotate() { REPLY='{"password":"new"}'; }
     proto_register demo
-    [[ $PROTOCOLS == 'vless anytls hysteria2 demo' ]] || fail 'demo not registered'
+    [[ $PROTOCOLS == 'vless anytls hysteria2 shadowsocks tuic vlesstls trojan vmess naive hysteria demo' ]] || fail 'demo not registered'
     jq '.nodes += [{id:"4444444444444444",name:"d",type:"demo",enabled:true,host:"2001:db8::1",port:18104,sni:"demo.example.com",password:"pw"}]' "$work/state.json" > "$work/demo.json"
     render_config "$work/demo.json" | jq -e '.inbounds[-1]=={tag:"4444444444444444",listen:"::",listen_port:18104,type:"demo",password:"pw"}' >/dev/null || fail 'demo render'
     [[ $(node_json "$work/demo.json" 4444444444444444 | share_uri) == 'demo://pw@[2001:db8::1]:18104' ]] || fail 'demo link'
-    [[ $(jq -r ".nodes[-1]|$(proto_jq_transport)" "$work/demo.json") == udp ]] || fail 'demo transport'
+    [[ $(jq -c ".nodes[-1]|$(proto_jq_transports)" "$work/demo.json") == '["udp"]' ]] || fail 'demo transport'
 ) || exit 1
 echo 'PASS a new protocol plugs in by adding one block of hooks'
 
 # Only the registry may branch on protocol type names.
-if grep -nwE 'vless|anytls|hysteria2' lib/*.sh | grep -v '^lib/protocols.sh:'; then fail 'protocol type matched outside lib/protocols.sh'; fi
+if grep -nwE "$(tr ' ' '|' <<< "$PROTOCOLS")" lib/*.sh | grep -v '^lib/protocols.sh:'; then fail 'protocol type matched outside lib/protocols.sh'; fi
 echo 'PASS no module outside lib/protocols.sh matches protocol type names'

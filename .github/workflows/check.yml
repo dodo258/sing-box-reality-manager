@@ -24,11 +24,17 @@ jobs:
         run: |
           source ./srm.sh
           core_download "$RUNNER_TEMP/sing-box"
+      - name: Download checksum-pinned mihomo (Clash Meta) client
+        run: |
+          curl -fsSL --max-time 120 -o "$RUNNER_TEMP/mihomo.gz" https://github.com/MetaCubeX/mihomo/releases/download/v1.19.32/mihomo-linux-amd64-v1.19.32.gz
+          echo "8451100836c9eda194331c2babfad490b2faf30cebc1a04b0e76fd8ac2d35d10  $RUNNER_TEMP/mihomo.gz" | sha256sum -c -
+          gunzip "$RUNNER_TEMP/mihomo.gz" && chmod 755 "$RUNNER_TEMP/mihomo"
       - name: Unit tests and real proxy traffic through the core
         env:
           TEST_CORE: ${{ runner.temp }}/sing-box
+          TEST_MIHOMO: ${{ runner.temp }}/mihomo
         run: |
-          for test in cli menu protocols state local updates firewall certificates-menu management; do
+          for test in cli menu protocols clients state local traffic updates firewall certificates-menu management; do
             echo "::group::tests/$test.sh"
             bash "tests/$test.sh"
             echo "::endgroup::"
