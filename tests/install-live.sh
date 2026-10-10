@@ -106,8 +106,9 @@ echo 'PASS self-signed TUIC and TCP+UDP Shadowsocks run under the service user'
 (
     source ./srm.sh
     reality_target_check() { return 0; }
-    node_add "$PWD/dist/srm" snell --name snell6 --host 127.0.0.1 --yes
-    node_add "$PWD/dist/srm" snell --name snell5 --host 127.0.0.1 --proto-version 5 --yes
+    logs() { journalctl -u srm.service -u 'srm-snell@*' -n 60 --no-pager; ss -ltnp; exit 1; }
+    node_add "$PWD/dist/srm" snell --name snell6 --host 127.0.0.1 --yes || logs
+    node_add "$PWD/dist/srm" snell --name snell5 --host 127.0.0.1 --proto-version 5 --yes || logs
     systemctl is-active --quiet "$SERVICE" || exit 1
     [[ -x /opt/srm/snell/v6/snell-server && -x /opt/srm/snell/v5/snell-server ]] || exit 1
     for name in snell6 snell5; do
