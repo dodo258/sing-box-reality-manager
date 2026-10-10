@@ -79,6 +79,33 @@ if firewall_add ufw global both 24003 tcp; then echo 'FAIL foreign profile overw
 [[ ! -e $DATA/firewall/ufw-global-both-24003-tcp ]] || exit 1
 rm /etc/ufw/applications.d/srm-24003-tcp
 echo 'PASS conflicting application file is preserved'
+# A temporary `ufw disable`: syncs meanwhile (node changes, every service start) keep
+# srm's rules for the nodes still there, so `ufw enable` lets them through again.
+firewall_sync "$STATE"
+ufw --force disable >/dev/null
+[[ $(firewall_detect) == none ]] || exit 1
+firewall_sync "$STATE" > "$work/sync.out"
+grep -q 'UFW 当前没有运行' "$work/sync.out"
+[[ -f $DATA/firewall/ufw-global-both-23999-tcp && -f $DATA/firewall/ufw-global-both-24000-udp ]] || exit 1
+ufw --force enable >/dev/null
+ufw show added | grep -q 'srm-23999-tcp'
+ufw show added | grep -q 'srm-24000-udp'
+iptables-save | grep -- '--dport 24000 ' | grep -q -- '-j ACCEPT'
+echo 'PASS real UFW disabled, synced, enabled again: the srm rules are still there and let the nodes through'
+ufw --force disable >/dev/null
+jq 'del(.nodes[1])' "$STATE" > "$work/new-state"
+firewall_sync "$work/new-state"
+[[ ! -e $DATA/firewall/ufw-global-both-24000-udp && ! -e /etc/ufw/applications.d/srm-24000-udp ]] || exit 1
+ufw --force enable >/dev/null
+ufw show added | grep -q 'srm-23999-tcp'
+! ufw show added | grep -q 'srm-24000-udp' || exit 1
+! iptables-save | grep -q -- '--dport 24000 ' || exit 1
+firewall_sync "$STATE"
+ufw show added | grep -q 'srm-24000-udp'
+firewall_clear
+LC_ALL=C ufw show added > "$work/final.rules"
+cmp "$work/original.rules" "$work/final.rules"
+echo 'PASS real UFW: a node deleted while UFW is disabled loses its rule, the others keep theirs; the next sync after enabling adds what is missing'
 ufw --force disable >/dev/null
 [[ $(firewall_detect) == none ]] || exit 1
 firewall_sync "$STATE"
