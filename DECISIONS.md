@@ -136,6 +136,8 @@
   - 注册表新增必需钩子 `domain`（none / optional / required）和 `link_clients`（能导入分享链接的客户端），可选钩子 `hint`（列表说明）和 `variant`（协议自己的那一个问题）；第一页的协议和顺序是 `QUICK_PROTOCOLS`。新协议注册后自动出现在「更多协议」里。
   - 能导入分享链接的客户端：v2rayN 按它的源码（`ServiceLib/Enums/EConfigType.cs` 和 `Handler/Fmt/`，7.25.4）支持 VMess、Shadowsocks、VLESS、Trojan、Hysteria2、TUIC、AnyTLS、Naive，不支持 Hysteria v1 和 Snell。Shadowrocket 没有公开的协议清单：AnyTLS 按 App Store 版本说明（2.2.64 起）；VLESS Reality、Hysteria v1/v2、TUIC、Trojan、VMess、SS2022 按社区普遍用法；Naive 查不到可靠来源，不列；Snell 的分享内容是 Surge 配置行，两者都不能导入。
   - `srm add` 新增 `--domain`（证书域名，不需要域名的协议拒绝）和 `--json`；`--host` 改为可选。`--cert` 只接受 auto/webroot/import/selfsigned（菜单不再问证书方式，数字写法去掉了）。
+  - `srm add` 交互运行时没部署出节点（输入 0、读到输入结尾）退出码为 1、`--json` 不输出；在菜单里同样的情况不算失败。`srm add <协议>` 里选「没有域名，换一个协议」会打开快速部署列表。命令行指定了 `--cert webroot|import` 却没给路径时，交互模式会问路径（审查发现原先报「非交互模式缺少参数」）。
+  - 节点地址是域名、又查不到本机公网 IP 时（NAT 且访问不到 Cloudflare），没有可比对的地址，域名解析检查只提示跳过、不拦截。
   - `srm install` 在终端里运行完会直接打开菜单（没有节点就是快速部署）；非终端（自动化、CI）不进菜单。
   - 已有启用的节点时，添加节点前显示一句「应用新配置会重启服务，已有节点的连接会断开几秒」，不再二次确认（方案「更新」一节）。
 - 理由：方案「交互原则」「部署流程」；主人要新手只用选、不用填。

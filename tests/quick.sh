@@ -94,10 +94,29 @@ done
 echo "PASS each of the $(wc -w <<< "$PROTOCOLS" | tr -d ' ') protocols asks at most two questions with defaults; only certificate protocols ask the domain"
 
 # More protocols: those without a domain first.
-node_add self <<< $'5\n0\n0' > "$work/out" 2>&1 || fail 'more list'
+# Leaving the list without deploying: fine inside the menu, a failure for `srm add`.
+if node_add self <<< $'5\n0\n0' > "$work/out" 2>&1; then fail 'srm add without a node exited 0'; fi
+grep -q '没有部署节点' "$work/out" || fail 'no-node message'
 grep -q '1. Shadowsocks 2022' "$work/out" && grep -q '2. TUIC v5' "$work/out" && grep -qE '3. Hysteria v1 +兼容老客户端' "$work/out" &&
     grep -qE '4. VLESS TLS +需要域名' "$work/out" || { cat "$work/out"; fail 'more list order'; }
 echo 'PASS 更多协议 lists the protocols without a domain first'
+
+# `srm add TYPE` interactively: no input, 0 or no domain deploys nothing and fails;
+# 「没有域名，换一个协议」 opens the list. Missing paths for --cert are asked.
+before=$(sha256 "$STATE")
+if node_add self vless < /dev/null > "$work/out" 2>&1; then fail 'srm add vless at EOF exited 0'; fi
+if main add vless --json < /dev/null > "$work/json" 2> "$work/err"; then fail 'srm add --json without --yes at EOF exited 0'; fi
+[[ ! -s $work/json ]] || fail 'JSON printed without a node'
+if node_add self anytls <<< $'0' > "$work/out" 2>&1; then fail 'srm add anytls, 0 at the domain, exited 0'; fi
+[[ $(sha256 "$STATE") == "$before" ]] || fail 'cancelled deploys changed state'
+node_add self anytls <<< $'\n1\n\n\n\n' > "$work/out" 2>&1 || { cat "$work/out"; fail 'no domain, then the list'; }
+grep -q '快速部署（' "$work/out" && last | jq -e '.type=="vless"' >/dev/null || fail 'no domain did not open the list'
+node_add self hysteria2 --cert auto <<< $'hy2.example.com\n\n\n\n' > "$work/out" 2>&1 || { cat "$work/out"; fail 'hysteria2 --cert auto asks the domain'; }
+last | jq -e '.type=="hysteria2" and .sni=="hy2.example.com" and (has("cert_sha256")|not)' >/dev/null || fail 'hysteria2 domain certificate'
+node_add self vlesstls --domain www2.example.com --cert webroot <<< $'\n\n/srv/www\n\n' > "$work/out" 2>&1 || { cat "$work/out"; fail 'webroot path asked'; }
+grep -q '^ISSUE www2.example.com webroot$' "$work/out" && grep -q '现有网站根目录绝对路径' "$work/out" || { cat "$work/out"; fail 'webroot path'; }
+if grep -q '非交互模式' "$work/out"; then fail 'interactive run says non-interactive'; fi
+echo 'PASS srm add TYPE fails without a node (no JSON), opens the list when there is no domain and asks the paths --cert needs'
 
 # A domain that does not point here is reported before any certificate request:
 # AnyTLS → domain → wrong record → 3 (no domain, another protocol) → Reality.
@@ -165,5 +184,6 @@ done
 echo 'PASS docs/menu-preview.txt matches the menus'
 
 # User-facing text never asks to run a command (the --help text is for advanced users).
-if grep -nE '(运行|执行) *(srm|vasma)' lib/*.sh; then fail 'UI text asks the user to run srm'; fi
+# Typing srm to open the menu is fine; running it or typing a subcommand is not.
+if grep -nE '(运行|执行)[ `「]*(srm|vasma)|输入[ `「]*(srm|vasma) +[a-z-]' lib/*.sh; then fail 'UI text asks the user to run srm'; fi
 echo 'PASS no 「运行 srm」 or 「执行 srm」 in lib/'

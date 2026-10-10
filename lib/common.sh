@@ -168,15 +168,20 @@ domain_resolves_here() {
     local domain=$1 host=$2 addresses mine address
     msg "检查域名 $domain 的解析…"
     addresses=$(resolve_domain "$domain") || addresses=''
-    [[ $host =~ ^[0-9.]+$ || $host == *:* ]] || { detect_public_ip || true; host=$PUBLIC_IP; }
+    if [[ ! $host =~ ^[0-9.]+$ && $host != *:* ]]; then
+        # A domain as the node address and no public IP to compare with (NAT, no
+        # route to the lookup): nothing to check against, so it is not blocked.
+        if ! detect_public_ip; then msg '没有查到本机公网 IP，无法确认域名解析，跳过检查。'; return 0; fi
+        host=$PUBLIC_IP
+    fi
     if [[ -z $addresses ]]; then
-        err "域名 $domain 还没有解析记录：请在域名服务商添加 A 记录指向本机 ${host:-公网 IP}，生效后再试。"; return 1
+        err "域名 $domain 还没有解析记录：请在域名服务商添加 A 记录指向本机 $host，生效后再试。"; return 1
     fi
     mine=$(printf '%s\n' "$host" "$PUBLIC_IP"; ip -o addr show 2>/dev/null | awk '{sub(/\/.*/, "", $4); print $4}')
     while IFS= read -r address; do
         grep -Fxq -- "$address" <<< "$mine" && return 0
     done <<< "$addresses"
-    err "域名 $domain 解析到 $(paste -sd ' ' - <<< "$addresses")，不是本机 ${host:-公网 IP}：请把 A 记录改成本机 IP（Cloudflare 要关掉代理，设为「仅 DNS」），生效后再试。"
+    err "域名 $domain 解析到 $(paste -sd ' ' - <<< "$addresses")，不是本机 $host：请把 A 记录改成本机 IP（Cloudflare 要关掉代理，设为「仅 DNS」），生效后再试。"
     return 1
 }
 port_free() {

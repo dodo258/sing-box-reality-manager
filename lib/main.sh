@@ -23,6 +23,8 @@ menu_header() {
 }
 main_menu() {
     require_linux || return 1
+    # Leaving quick deploy without a node is fine here; `srm add` treats it as a failure.
+    local IN_MENU=1
     # No node yet: straight into quick deploy; 0 there shows the menu.
     if [[ ! -f $STATE ]] || ! jq -e '.nodes|length > 0' "$STATE" >/dev/null 2>&1; then
         menu_header

@@ -7,15 +7,21 @@
 # opens. Only the domain is typed (protocols that need a certificate); besides it at
 # most two questions with defaults: the protocol's own one, port, name. The server
 # address, handshake target and certificate method are chosen automatically.
-# --json prints one JSON object on stdout and everything else on stderr.
+# --json prints one JSON object on stdout and everything else on stderr. Outside the
+# menu, leaving without a new node is a failure (exit code non-zero, no JSON).
 node_add() {
-    local self=$1 arg json=0
+    local self=$1 arg json=0 rc=0
     shift
     for arg in "$@"; do [[ $arg != --json ]] || json=1; done
     DEPLOYED_NODE=''
-    if [[ $json == 0 ]]; then node_add_main "$self" "$@"; return; fi
-    node_add_main "$self" "$@" >&2 || return 1
-    [[ -z $DEPLOYED_NODE ]] || deploy_json <<< "$DEPLOYED_NODE"
+    if [[ $json == 0 ]]; then node_add_main "$self" "$@" || rc=$?
+    else node_add_main "$self" "$@" >&2 || rc=$?; fi
+    [[ $rc == 0 ]] || return "$rc"
+    if [[ -z $DEPLOYED_NODE ]]; then
+        [[ -n ${IN_MENU:-} ]] || { err '没有部署节点。'; return 1; }
+        return 0
+    fi
+    [[ $json == 0 ]] || deploy_json <<< "$DEPLOYED_NODE"
 }
 node_add_main() {
     local self=$1 type='' var assume_yes=0 rc
@@ -37,16 +43,13 @@ node_add_main() {
     done
     if [[ -n $type ]]; then
         proto_known "$type" || { err "不支持的协议：$type（可选：$PROTOCOLS）"; return 1; }
-        rc=0; node_deploy "$type" || rc=$?
-        # 3: the user went back or has no domain.
-        [[ $rc == 3 ]] && return 0
-        return "$rc"
-    fi
-    if [[ $assume_yes == 1 ]]; then err "非交互模式需要指定协议：$PROTOCOLS"; return 1; fi
+    elif [[ $assume_yes == 1 ]]; then err "非交互模式需要指定协议：$PROTOCOLS"; return 1; fi
+    # 3 from node_deploy: the user went back or has no domain; the list comes (back).
     while :; do
-        quick_pick || return 0
-        rc=0; node_deploy "$REPLY" || rc=$?
+        if [[ -z $type ]]; then quick_pick || return 0; type=$REPLY; fi
+        rc=0; node_deploy "$type" || rc=$?
         [[ $rc == 3 ]] || return "$rc"
+        type=''
     done
 }
 # The quick-deploy list; REPLY = protocol type, failure = back.
@@ -151,11 +154,20 @@ node_deploy() {
         msg '检测本机公网 IP…'
         if detect_public_ip; then host=$PUBLIC_IP; msg "本机公网 IP：$host"
         elif [[ $assume_yes == 1 ]]; then err '没有检测到本机公网 IP，非交互模式缺少参数：--host'; return 1
-        else ask '没有检测到本机公网 IP，请填写客户端连接用的 IP 或域名' || return 3; host=$REPLY; fi
+        else
+            while :; do
+                ask '没有检测到本机公网 IP，请填写客户端连接用的 IP 或域名' || return 3
+                host=$REPLY
+                valid_host "$host" && break
+                err '地址不合法，例如 203.0.113.5 或 vpn.example.com。'
+            done
+        fi
     fi
     valid_host "$host" || { err '地址不合法。'; return 1; }
     # The domain comes first: without one the user picks another protocol right away.
-    if [[ $need == required && -z $opt_sni ]] && ! { [[ ! $host =~ ^[0-9.]+$ ]] && valid_domain "$host"; }; then
+    # Optional-domain protocols need one only when a domain certificate was asked for.
+    if [[ $need == required || ( $need == optional && -n $opt_cert && $opt_cert != selfsigned ) ]] &&
+       [[ -z $opt_sni ]] && ! { [[ ! $host =~ ^[0-9.]+$ ]] && valid_domain "$host"; }; then
         [[ $assume_yes != 1 ]] || { err '非交互模式缺少参数：证书域名（--domain）'; return 1; }
         cert_domain_confirm 1 || return 3
         checked=$opt_sni
@@ -178,6 +190,15 @@ node_deploy() {
     name=$(default_node_name "$type${PUBLIC_LOC:+-$PUBLIC_LOC}")
     if [[ -n $opt_name ]]; then name=$opt_name
     elif [[ $assume_yes != 1 ]] && (( questions < 2 )); then ask '节点名称' "$name" || return 3; name=$REPLY; fi
+    # Paths that only the command line chose a method for (--cert webroot / import).
+    if [[ $assume_yes != 1 ]]; then
+        case $opt_cert in
+          webroot) [[ -n $opt_webroot ]] || { ask '现有网站根目录绝对路径' || return 3; opt_webroot=$REPLY; };;
+          import)
+            [[ -n $opt_cert_file ]] || { ask '完整证书链绝对路径' || return 3; opt_cert_file=$REPLY; }
+            [[ -n $opt_key_file ]] || { ask '私钥绝对路径' || return 3; opt_key_file=$REPLY; };;
+        esac
+    fi
     # The questions are over; protocol options take their defaults without asking.
     saved=$assume_yes; assume_yes=1
     proto_call "$type" prompt || { assume_yes=$saved; return 1; }
@@ -243,7 +264,7 @@ node_deploy() {
         fi
         DEPLOYED_NODE=$node
         printf '%s' "$node" | deploy_summary
-        if [[ $assume_yes != 1 ]]; then printf '按回车返回菜单' >&2; IFS= read -r _ || true; fi
+        if [[ $assume_yes != 1 ]]; then printf '按回车继续' >&2; IFS= read -r _ || true; fi
         return 0
     fi
     # A self-signed certificate made for this node is unused once the deploy fails.
