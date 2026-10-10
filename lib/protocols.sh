@@ -59,16 +59,17 @@ PROTO_JQ_DEFS='
 # lists install-config and install-module only; a whole profile from a URL), so phone
 # users fill in the new-proxy form. The manual does not name that form's fields: each
 # line gives a Chinese name and, unless they match, the parameter name of the Surge line.
-# Input: the line; quoted values (passwords) may contain commas.
+# Input: the line; quoted values (passwords) may contain commas. Regular expressions
+# instead of index: some jq builds return byte offsets for non-ASCII names.
 SURGE_FORM_JQ='
   {psk:"PSK",version:"版本",mode:"模式",reuse:"连接复用",password:"密码",username:"用户名（UUID）",uuid:"UUID",
    sni:"SNI",alpn:"ALPN","encrypt-method":"加密方式","udp-relay":"UDP 转发",tls:"TLS",ws:"WebSocket",
    "ws-path":"WebSocket 路径","ws-headers":"WebSocket 请求头","vmess-aead":"VMess AEAD",
    "server-cert-fingerprint-sha256":"证书 SHA-256 指纹","shadow-tls-password":"Shadow TLS 密码",
    "shadow-tls-sni":"Shadow TLS SNI","shadow-tls-version":"Shadow TLS 版本"} as $names |
-  index(" = ") as $i | [.[$i+3:]|scan("(?:\"[^\"]*\"|[^,])+")|ltrimstr(" ")] as $f |
-  "  名称：\(.[:$i])", "  类型：\($f[0])", "  服务器：\($f[1])", "  端口：\($f[2])",
-  ($f[3:][]|index("=") as $j|.[:$j] as $k|(.[$j+1:]|ltrimstr("\"")|rtrimstr("\"")) as $v|
+  capture("^(?<name>.*?) = (?<rest>.*)$") as $l | [$l.rest|scan("(?:\"[^\"]*\"|[^,])+")|ltrimstr(" ")] as $f |
+  "  名称：\($l.name)", "  类型：\($f[0])", "  服务器：\($f[1])", "  端口：\($f[2])",
+  ($f[3:][]|capture("^(?<k>[^=]*)=(?<v>.*)$") as $p|$p.k as $k|($p.v|ltrimstr("\"")|rtrimstr("\"")) as $v|
    "  \(($names[$k] // $k) as $n|if ($n|ascii_downcase) == $k then $n else "\($n)（\($k)）" end)：\(if $v == "true" then "开" elif $v == "false" then "关" else $v end)")
 '
 proto_register() {
