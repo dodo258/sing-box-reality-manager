@@ -136,12 +136,28 @@ firewall_remove() {
         done
         [[ $rc == 1 ]] || { err "无法清理 $cmd $port/${proto}，保留记录。"; return 1; }
     else
-        local args=(--zone="$zone")
+        local cmd=firewall-cmd args=(--zone="$zone")
         [[ $scope != permanent ]] || args+=(--permanent)
+        # Uninstalled (no firewall-cmd): nothing is left to clean. Not running (exit 252,
+        # e.g. uninstalling while it is stopped): its runtime rules went when it stopped,
+        # the permanent ones are edited in its configuration files.
+        if ! command -v firewall-cmd >/dev/null; then rm -f "$file"; return 0; fi
         rc=0
-        output=$(firewall-cmd "${args[@]}" --query-port="$port/$proto" 2>&1) || rc=$?
+        firewall-cmd --state >/dev/null 2>&1 || rc=$?
+        if [[ $rc == 252 ]]; then
+            command -v firewall-offline-cmd >/dev/null || { err "firewalld 没有运行，无法清理 $zone $port/${proto}：先启动 firewalld（systemctl start firewalld）再重试。"; return 1; }
+            if [[ $scope == runtime ]]; then
+                # The permanent record sorts first; still there, its removal failed and
+                # firewalld would bring the rule back at its start, so this one stays too.
+                [[ ! -f $DATA/firewall/firewalld-$zone-permanent-$port-$proto ]] || return 1
+                rm -f "$file"; return 0
+            fi
+            cmd=firewall-offline-cmd args=(--zone="$zone")
+        fi
+        rc=0
+        output=$("$cmd" "${args[@]}" --query-port="$port/$proto" 2>&1) || rc=$?
         if [[ $rc == 0 && $output == yes ]]; then
-            firewall-cmd "${args[@]}" --remove-port="$port/$proto" || return 1
+            "$cmd" "${args[@]}" --remove-port="$port/$proto" || return 1
         elif [[ $rc != 1 || $output != no ]]; then err "无法清理 firewalld $zone $port/${proto}，保留记录。"; return 1; fi
     fi
     rm -f "$file"

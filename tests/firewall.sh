@@ -83,6 +83,59 @@ firewall_sync "$work/state-deleted" > /dev/null
 firewall_clear
 [[ $(ls "$work/rules") == public-permanent-23999-tcp ]] || exit 1
 echo 'PASS firewalld stopped, synced (also deleting a node), started again: the rules of the remaining nodes are still there; the next sync removes the deleted one'
+# Uninstalling while firewalld is stopped: the runtime records go (firewalld dropped
+# those rules when it stopped), the permanent rules are removed from its configuration
+# files with firewall-offline-cmd, which edits only permanent rules (no --permanent).
+firewall-offline-cmd() {
+    local arg
+    for arg in "$@"; do [[ $arg != --permanent ]] || return 2; done
+    running=1 firewall-cmd --permanent "$@"
+}
+firewall_sync "$work/state" > /dev/null
+running=0
+rm "$work/rules"/public-runtime-*
+firewall_clear > "$work/out" 2>&1 || { cat "$work/out"; echo 'FAIL uninstalling failed while firewalld was stopped'; exit 1; }
+[[ -z $(ls "$DATA/firewall") ]] || { echo 'FAIL records left after uninstalling while firewalld was stopped'; exit 1; }
+[[ $(ls "$work/rules") == public-permanent-23999-tcp ]] || { echo 'FAIL the permanent rules were not removed (or the existing one was)'; exit 1; }
+echo 'PASS uninstalling while firewalld is stopped removes its permanent rules offline and keeps the existing one'
+# A permanent rule that cannot be removed would come back at firewalld's start, so its
+# runtime record stays for the retry too.
+running=1
+firewall_sync "$work/state" > /dev/null
+running=0
+rm "$work/rules"/public-runtime-*
+firewall-offline-cmd() { [[ $* != *--remove-port=24000/udp* ]] || return 1; running=1 firewall-cmd --permanent "$@"; }
+if firewall_clear > /dev/null 2>&1; then echo 'FAIL a failed offline removal was ignored'; exit 1; fi
+[[ $(ls "$DATA/firewall") == $'firewalld-public-permanent-24000-udp\nfirewalld-public-runtime-24000-udp' ]] || { echo 'FAIL the runtime record of a rule still there was dropped'; exit 1; }
+running=1
+for rule in "$work/rules"/public-permanent-*; do cp "$rule" "${rule/permanent/runtime}"; done
+firewall_clear > /dev/null
+# 23999/tcp now comes back at runtime from the permanent rule that was there before srm.
+[[ -z $(ls "$DATA/firewall") && $(ls "$work/rules") == $'public-permanent-23999-tcp\npublic-runtime-23999-tcp' ]] || { echo 'FAIL retry after a failed offline removal'; exit 1; }
+rm "$work/rules/public-runtime-23999-tcp"
+echo 'PASS a permanent rule that fails to be removed offline keeps its runtime record'
+# Without firewall-offline-cmd the permanent rules stay and the error says to start firewalld.
+running=1
+firewall_sync "$work/state" > /dev/null
+records=$(ls "$DATA/firewall")
+running=0
+rm "$work/rules"/public-runtime-*
+unset -f firewall-offline-cmd
+if firewall_clear > "$work/out" 2>&1; then echo 'FAIL uninstalled without firewall-offline-cmd'; exit 1; fi
+grep -q 'systemctl start firewalld' "$work/out" || { cat "$work/out"; echo 'FAIL no hint to start firewalld'; exit 1; }
+[[ $(ls "$DATA/firewall") == "$records" ]] || { echo 'FAIL records dropped without firewall-offline-cmd'; exit 1; }
+# Started: the runtime rules come back from the permanent ones, and the retry removes them.
+running=1
+for rule in "$work/rules"/public-permanent-*; do cp "$rule" "${rule/permanent/runtime}"; done
+firewall_clear > /dev/null
+[[ -z $(ls "$DATA/firewall") && $(ls "$work/rules") == public-permanent-23999-tcp ]] || { echo 'FAIL retry after starting firewalld'; exit 1; }
+echo 'PASS without firewall-offline-cmd uninstalling stops with a hint to start firewalld, and works once it runs'
+# firewalld removed from the system: nothing is left to clean.
+firewall_sync "$work/state" > /dev/null
+unset -f firewall-cmd
+firewall_clear > /dev/null || { echo 'FAIL uninstalling failed after firewalld was removed'; exit 1; }
+[[ -z $(ls "$DATA/firewall") ]] || { echo 'FAIL records left after firewalld was removed'; exit 1; }
+echo 'PASS uninstalling after firewalld was removed drops its records'
 firewall-cmd() {
     case $1 in --state) return 0;; --get-active-zones) printf 'public\n';; *) printf 'query failed\n'; return 254;; esac
 }
