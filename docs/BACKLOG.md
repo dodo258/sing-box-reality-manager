@@ -6,7 +6,7 @@
 
 从上往下做。正在做的条目后面标「（进行中：分支名 时间）」。
 
-- [ ] v4 防火墙支持 iptables（无 UFW / firewalld 的系统）—— 来源：2026-10-10 对比 mack-a/v2ray-agent（提交 5c5e2b7，下称 M，行号指其 install.sh）。`lib/firewall.sh` 检测不到 UFW / firewalld 时只打印提示，甲骨文这类预装 iptables REJECT 规则的镜像会直接连不上；M 的 `allowPort`（883-892）在 netfilter-persistent 系统插 iptables ACCEPT 并保存。要做：加 iptables / ip6tables 后端，规则插在 REJECT 之前、带 `srm` 注释，用 netfilter-persistent 保存（没有就提示）；删节点、卸载时按注释撤掉，不碰别人的规则。验收：测试用 netfilter-persistent 的模拟环境，断言加节点插入带注释的规则、删节点撤掉、已有规则不变；CI 全绿。
+- [ ] v4 防火墙支持 iptables（无 UFW / firewalld 的系统）—— 来源：2026-10-10 对比 mack-a/v2ray-agent（提交 5c5e2b7，下称 M，行号指其 install.sh）。`lib/firewall.sh` 检测不到 UFW / firewalld 时只打印提示，甲骨文这类预装 iptables REJECT 规则的镜像会直接连不上；M 的 `allowPort`（883-892）在 netfilter-persistent 系统插 iptables ACCEPT 并保存。要做：加 iptables / ip6tables 后端，规则插在 REJECT 之前、带 `srm` 注释，用 netfilter-persistent 保存（没有就提示）；删节点、卸载时按注释撤掉，不碰别人的规则。验收：测试用 netfilter-persistent 的模拟环境，断言加节点插入带注释的规则、删节点撤掉、已有规则不变；CI 全绿。（进行中：agent/1010-iptables 2026-10-10 23:33）
 
 - [ ] v4 完整客户端配置与一键导入（替代旧订阅）—— 来源：2026-10-10 对比 mack-a/v2ray-agent（提交 5c5e2b7，下称 M，行号指其 install.sh）。新手用 Clash Verge、sing-box 官方 App（SFI/SFA）、手机版 Surge 时，光有一段节点片段导入不了；M 靠订阅给出完整配置（`clashMetaConfig` 9216、sing-box 合并 `documents/sing-box.json` 9613 起）。要做：在菜单「节点管理」里加「导出完整配置」，生成可直接导入的完整 mihomo 配置和完整 sing-box 客户端配置（含所选节点、基本分流、DNS），可选全部或单个节点；再加「临时导入链接」：srm 起一个只在随机路径上服务的临时 HTTP 端口，默认 10 分钟或首次下载后自动关闭并撤掉防火墙规则，给出二维码和各 App 的一键导入链接（`sing-box://import-remote-profile?url=` 已在官方文档核实；`clash://install-config?url=`、Surge 的 `install-config` 先查官方文档，查不到的不放）。如果「客户端导入修正」已经确定了 Surge 的导入方式就复用。没有域名只能走 HTTP 时，界面要提示「链接里带节点密码，用完即关」。验收：生成的 mihomo 配置能被 mihomo `-t` 校验、sing-box 配置能被 `sing-box check` 校验；临时链接在超时或下载一次后关闭且防火墙规则被撤掉（测试断言）；一键导入链接的格式有单元测试并注明官方出处；CI 全绿。
 
