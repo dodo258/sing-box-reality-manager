@@ -603,7 +603,7 @@ update_script() {
         err '脚本校验失败，原脚本未改动。'; rm -f "$tmp"; return 1
     fi
     cp -p "$SRM_ROOT/manager.sh" "$SRM_ROOT/manager.previous.sh" && chmod 755 "$tmp" && mv -f "$tmp" "$SRM_ROOT/manager.sh" || return 1
-    msg '脚本更新完成，请退出后重新运行 srm。核心和节点配置未自动升级。'
+    msg '脚本更新完成，请退出菜单后重新输入 srm 打开。核心和节点配置未自动升级。'
 }
 bbr_status() {
     sysctl net.ipv4.tcp_congestion_control net.ipv4.tcp_available_congestion_control net.core.default_qdisc
@@ -634,10 +634,8 @@ show_status() {
 }
 uninstall() {
     owned_root || return 1
-    if systemctl is-active --quiet srm-update.service; then err '自动更新正在运行，请稍后卸载。'; return 1; fi
     msg "删除本脚本服务、续期任务、$SRM_ROOT、$DATA 和快捷命令；节点凭据与本脚本证书会删除。系统依赖、其他服务和防火墙保留。"
     [[ ${assume_yes:-0} == 1 ]] || yesno '已导出需要的节点资料，确认卸载' || return 0
-    auto_update_off || return 1
     systemctl disable --now "$SERVICE" srm-renew.timer 2>/dev/null || true
     if systemctl is-active --quiet "$SERVICE" || systemctl is-active --quiet srm-renew.service; then err '服务仍在运行，停止卸载。'; return 1; fi
     firewall_clear || { err '端口规则清理失败，保留数据以便重试卸载。'; return 1; }
@@ -809,7 +807,7 @@ firewall_renew() (
         read -r port < "$account/challenge-port" || exit 1
     elif grep -q "^Le_Webroot='alpn'" "$account/${domain}_ecc/$domain.conf" 2>/dev/null; then port=443; fi
     [[ $port == 80 || $port == 443 ]] || { err '证书验证端口记录异常。'; exit 1; }
-    trap 'firewall_sync "$STATE" || err "证书临时端口清理失败，请运行 srm firewall 重试。"' EXIT
+    trap 'firewall_sync "$STATE" || err "证书临时端口清理失败，请在菜单「4. 运行状态」里选「重新同步防火墙端口规则」重试。"' EXIT
     trap 'exit 130' INT TERM HUP
     firewall_sync "$STATE" "$port" || exit 1
     acme_call "$domain" --renew -d "$domain" --ecc
@@ -885,7 +883,7 @@ issue_certificate() (
     fi
     local challenge_port=80
     case $mode in alpn) challenge_port=443;; http|webroot) ;; *) err '未知证书验证方式。'; exit 1;; esac
-    trap 'firewall_sync "$STATE" || err "证书临时端口清理失败，请运行 srm firewall 重试。"' EXIT
+    trap 'firewall_sync "$STATE" || err "证书临时端口清理失败，请在菜单「4. 运行状态」里选「重新同步防火墙端口规则」重试。"' EXIT
     trap 'exit 130' INT TERM HUP
     firewall_sync "$STATE" "$challenge_port" || exit 1
     if [[ $mode == alpn ]]; then
@@ -1154,7 +1152,7 @@ node_add() {
         case $1 in
           -y|--yes) assume_yes=1; shift; continue;;
           --name|--host|--port|--sni|--cert|--webroot|--cert-file|--key-file|--email|--bbr) ;;
-          *) err "未知参数：$1（见 srm help）"; return 1;;
+          *) err "未知参数：$1（可用参数见 srm --help）"; return 1;;
         esac
         [[ $# -ge 2 && -n $2 ]] || { err "$1 需要一个值。"; return 1; }
         var=${1#--}; var=opt_${var//-/_}
@@ -1206,7 +1204,7 @@ node_add() {
         msg "节点 ID：$id"
         msg "节点端口：${port}/${transport}；如仍无法连接，请在服务商控制台的云安全组允许 ${transport} ${port}。"
         printf '%s' "$node" | share_uri
-        msg '完整信息和二维码：主菜单 → 节点管理，或 srm export 节点ID qr。'
+        msg '二维码、详情和客户端配置：在菜单里选「2. 节点管理」。'
         return 0
     fi
     rm -f "$candidate"; return 1
@@ -1222,7 +1220,7 @@ export_node() {
         link=$(printf '%s' "$node" | share_uri) || return 1
         if command -v qrencode >/dev/null; then
             if use_color; then printf '%s' "$link" | qrencode -t ANSIUTF8; else printf '%s' "$link" | qrencode -t UTF8; fi
-        else msg '未安装 qrencode，只显示链接（可运行 apt-get install qrencode 后再生成二维码）：'; msg "$link"; fi;;
+        else msg '未安装 qrencode，只显示链接：'; msg "$link"; fi;;
       outbound) printf '%s' "$node" | client_outbound;;
       details)
         printf '%s' "$node" | jq "del($(proto_call "$type" secrets))" || return 1
@@ -1327,72 +1325,16 @@ update_all() {
     else rm -f "$backup"; fi
     return 1
 }
-update_units_owned() {
-    local unit
-    for unit in srm-update.service srm-update.timer; do
-        if [[ -e /etc/systemd/system/$unit ]] && ! grep -qx '# SRM_AUTO_UPDATE' "/etc/systemd/system/$unit"; then
-            err "自动更新服务名被其他配置占用：$unit"; return 1
-        fi
-        if [[ ! -e /etc/systemd/system/$unit ]] && systemctl cat "$unit" >/dev/null 2>&1; then
-            err "自动更新服务名已存在：$unit"; return 1
-        fi
-    done
-}
-auto_update_on() {
-    owned_root && update_units_owned || return 1
-    cat > /etc/systemd/system/srm-update.service <<'UNIT' || return 1
-# SRM_AUTO_UPDATE
-[Unit]
-Description=Update srm and its validated sing-box core
-Wants=network-online.target
-After=network-online.target
-[Service]
-Type=oneshot
-UMask=0077
-ExecStart=/bin/bash /opt/srm/manager.sh update
-TimeoutStartSec=15min
-UNIT
-    cat > /etc/systemd/system/srm-update.timer <<'UNIT' || return 1
-# SRM_AUTO_UPDATE
-[Unit]
-Description=Daily srm update check
-[Timer]
-OnCalendar=*-*-* 04:00:00
-RandomizedDelaySec=30min
-Persistent=true
-Unit=srm-update.service
-[Install]
-WantedBy=timers.target
-UNIT
-    systemctl daemon-reload && systemctl enable --now srm-update.timer || return 1
-    msg '已开启每日自动更新（服务器时间 04:00–04:30，错过后会补做）。核心更新可能短暂中断本脚本节点。'
-}
-auto_update_off() {
-    owned_root && update_units_owned || return 1
-    systemctl disable --now srm-update.timer 2>/dev/null || true
-    # Do not interrupt an update already in progress.
-    rm -f /etc/systemd/system/srm-update.timer /etc/systemd/system/srm-update.service
-    systemctl daemon-reload || return 1
-    msg '自动更新已关闭；若已有更新正在运行，会完成本次操作。证书续期不受影响。'
-}
-auto_update_status() {
-    if systemctl is-enabled --quiet srm-update.timer 2>/dev/null; then
-        msg '自动更新：已开启'
-        systemctl list-timers srm-update.timer --no-pager
-    else msg '自动更新：未开启（可手动运行 srm update）'; fi
-}
+# No automatic updates: replacing the core restarts the service and drops connections.
 update_menu() {
-    auto_update_status
-    msg $'\n1.一键更新脚本和已验证核心\n2.仅更新脚本\n3.仅更新已验证核心\n4.开启每日自动更新\n5.关闭每日自动更新\n6.回滚配置\n7.回滚脚本\n0.返回'
+    msg $'\n更新与回滚（不会自动更新；更新核心要重启服务，所有连接会断开几秒）\n1.一键更新脚本和已验证核心\n2.仅更新脚本（不重启服务）\n3.仅更新已验证核心\n4.回滚配置\n5.回滚脚本\n0.返回'
     ask '请选择' || return 0
     case $REPLY in
-      1) with_lock update_all;;
+      1) yesno '更新会重启服务，所有连接断开几秒，确认更新' && with_lock update_all;;
       2) with_lock update_latest;;
-      3) with_lock update_core;;
-      4) msg '每天自动下载安装本项目发布的脚本和对应核心；重启仅影响本脚本节点。'; yesno '开启自动更新' && with_lock auto_update_on;;
-      5) with_lock auto_update_off;;
-      6) yesno '恢复上一份配置（影响本脚本节点）' && with_lock rollback_config;;
-      7) with_lock rollback_script;;
+      3) yesno '更新会重启服务，所有连接断开几秒，确认更新' && with_lock update_core;;
+      4) yesno '恢复上一份配置（影响本脚本节点）' && with_lock rollback_config;;
+      5) with_lock rollback_script;;
       *) err '无效选项。';;
     esac
 }
@@ -1425,13 +1367,13 @@ main_menu() {
     require_linux || return 1
     while :; do
         menu_header
-        msg $'  1. 部署节点\n  2. 节点管理 · 原始链接 / 二维码\n  3. 流媒体分流 · 解锁 DNS / 代理出口\n  4. 运行状态与日志\n  5. 更新与回滚\n  6. BBR 与系统检测\n  7. 卸载\n  8. 证书管理 · 到期时间 / 自动续期\n\n  0. 退出\n'
+        msg $'  1. 部署节点\n  2. 节点管理 · 原始链接 / 二维码\n  3. 流媒体分流 · 解锁 DNS / 代理出口\n  4. 运行状态 · 日志 / 重启 / 防火墙\n  5. 更新与回滚\n  6. BBR 与系统检测\n  7. 卸载\n  8. 证书管理 · 到期时间 / 自动续期\n\n  0. 退出\n'
         ask '请选择' || return 0
         case $REPLY in
           1) with_lock node_add "$SRM_SELF";;
           2) node_menu;;
           3) with_lock routing_menu;;
-          4) show_status; yesno '查看最近 50 行日志（分享前请检查敏感信息）' && journalctl -u "$SERVICE" -n 50 --no-pager;;
+          4) status_menu;;
           5) update_menu;;
           6)
             bbr_status
@@ -1443,6 +1385,17 @@ main_menu() {
         esac
     done
 }
+status_menu() {
+    show_status
+    msg $'\n1.查看最近 50 行日志（分享前请检查敏感信息）\n2.重启本脚本节点（连接会断开几秒）\n3.重新同步防火墙端口规则\n0.返回'
+    ask '请选择' || return 0
+    case $REPLY in
+      1) journalctl -u "$SERVICE" -n 50 --no-pager;;
+      2) yesno '重启会断开所有连接几秒，确认重启' && with_lock restart_nodes;;
+      3) with_lock firewall_sync "$STATE";;
+      *) err '无效选项。';;
+    esac
+}
 rollback_script() {
     owned_root || return 1
     [[ -f $SRM_ROOT/manager.previous.sh ]] || { err '没有可回滚的脚本版本。'; return 1; }
@@ -1452,6 +1405,7 @@ usage() {
     cat <<EOF
 srm $SRM_VERSION：sing-box 节点管理（$(proto_labels)）
 用法：srm [命令] [参数]；任何命令加 --help 显示本帮助。
+日常使用只需输入 srm 打开菜单，所有功能都能在菜单里选；下面的命令给进阶用户和自动化脚本。
 
   srm                     打开管理菜单（常驻，做完回到菜单，输入 0 返回或退出）
   srm menu                同上
@@ -1482,7 +1436,6 @@ srm $SRM_VERSION：sing-box 节点管理（$(proto_labels)）
   srm update              更新脚本和已验证核心
   srm update-script       仅更新脚本
   srm update-core         仅更新已验证核心
-  srm auto-update on|off|status
   srm uninstall [--yes]   卸载（默认需要确认）
   srm render STATE        用 state 文件生成 sing-box 配置（调试用）
   srm version             版本
@@ -1537,19 +1490,13 @@ main() {
       update) with_lock update_all;;
       update-script) with_lock update_latest;;
       update-core) with_lock update_core;;
-      auto-update)
-        case ${2:-status} in
-          on) with_lock auto_update_on;; off) with_lock auto_update_off;;
-          status) require_linux && auto_update_status;;
-          *) err '用法：srm auto-update [on|off|status]'; return 1;;
-        esac;;
       uninstall)
         case ${2:-} in -y|--yes) assume_yes=1;; '') ;; *) err '用法：srm uninstall [--yes]'; return 1;; esac
         with_lock uninstall;;
       render) [[ -n ${2:-} ]] || { err '用法：srm render STATE'; return 1; }; render_config "$2";;
       version|--version) printf 'srm %s / tested core %s\n' "$SRM_VERSION" "$CORE_VERSION";;
       help) usage;;
-      *) err "未知命令：$1。运行 srm help 查看全部命令。"; return 1;;
+      *) err "未知命令：$1。可用命令见 srm --help。"; return 1;;
     esac
 }
 

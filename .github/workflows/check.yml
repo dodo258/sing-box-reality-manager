@@ -37,5 +37,5 @@ jobs:
         run: |
           sudo apt-get install -y --no-install-recommends ufw
           sudo env GITHUB_ACTIONS=true unshare --net --mount bash tests/firewall-live.sh
-      - name: Verify real systemd install, update timer and uninstall
-        run: sudo env GITHUB_ACTIONS=true bash tests/update-timer.sh
+      - name: Verify real systemd install, configuration transaction and uninstall
+        run: sudo env GITHUB_ACTIONS=true bash tests/install-live.sh

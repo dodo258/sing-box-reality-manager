@@ -38,7 +38,7 @@ jq -n '{schema:1,nodes:[
 ],policies:[{name:"N",mode:"dns",domains:["netflix.com"]}],unlock_dns:"192.0.2.53",egress:null}' > "$STATE"
 # Every read-only page: node link, QR, details, client outbound, routing, status
 # and logs, update page, BBR status, certificates; then exit.
-input=$'2\n1\n2\n2\n1\n3\n2\n1\n1\n2\n2\n4\n3\n1\n4\ny\n5\n0\n6\nn\n8\n0\n0'
+input=$'2\n1\n2\n2\n1\n3\n2\n1\n1\n2\n2\n4\n3\n1\n4\n1\n5\n0\n6\nn\n8\n0\n0'
 main <<< "$input" > "$work/menu" 2>&1
 [[ ! -e $work/network-calls ]] || { cat "$work/network-calls"; exit 1; }
 echo 'PASS opening the menu and every read-only page makes no curl or wget call'
@@ -51,6 +51,7 @@ grep -q '\[QR -t UTF8\]' "$work/menu"
 grep -q '10.切换 Reality 目标' "$work/menu"
 grep -q '"type": "anytls"' "$work/menu"
 grep -q 'journal fixture' "$work/menu"
+grep -q '2.重启本脚本节点' "$work/menu" && grep -q '3.重新同步防火墙端口规则' "$work/menu" || exit 1
 grep -q '1 条平台规则' "$work/menu"
 ! grep -q '"private_key"' "$work/menu" || exit 1
 ! grep -q $'\033' "$work/menu" || exit 1

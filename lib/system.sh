@@ -166,7 +166,7 @@ update_script() {
         err '脚本校验失败，原脚本未改动。'; rm -f "$tmp"; return 1
     fi
     cp -p "$SRM_ROOT/manager.sh" "$SRM_ROOT/manager.previous.sh" && chmod 755 "$tmp" && mv -f "$tmp" "$SRM_ROOT/manager.sh" || return 1
-    msg '脚本更新完成，请退出后重新运行 srm。核心和节点配置未自动升级。'
+    msg '脚本更新完成，请退出菜单后重新输入 srm 打开。核心和节点配置未自动升级。'
 }
 bbr_status() {
     sysctl net.ipv4.tcp_congestion_control net.ipv4.tcp_available_congestion_control net.core.default_qdisc
@@ -197,10 +197,8 @@ show_status() {
 }
 uninstall() {
     owned_root || return 1
-    if systemctl is-active --quiet srm-update.service; then err '自动更新正在运行，请稍后卸载。'; return 1; fi
     msg "删除本脚本服务、续期任务、$SRM_ROOT、$DATA 和快捷命令；节点凭据与本脚本证书会删除。系统依赖、其他服务和防火墙保留。"
     [[ ${assume_yes:-0} == 1 ]] || yesno '已导出需要的节点资料，确认卸载' || return 0
-    auto_update_off || return 1
     systemctl disable --now "$SERVICE" srm-renew.timer 2>/dev/null || true
     if systemctl is-active --quiet "$SERVICE" || systemctl is-active --quiet srm-renew.service; then err '服务仍在运行，停止卸载。'; return 1; fi
     firewall_clear || { err '端口规则清理失败，保留数据以便重试卸载。'; return 1; }

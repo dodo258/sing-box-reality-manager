@@ -69,7 +69,7 @@ issue_certificate() (
     fi
     local challenge_port=80
     case $mode in alpn) challenge_port=443;; http|webroot) ;; *) err '未知证书验证方式。'; exit 1;; esac
-    trap 'firewall_sync "$STATE" || err "证书临时端口清理失败，请运行 srm firewall 重试。"' EXIT
+    trap 'firewall_sync "$STATE" || err "证书临时端口清理失败，请在菜单「4. 运行状态」里选「重新同步防火墙端口规则」重试。"' EXIT
     trap 'exit 130' INT TERM HUP
     firewall_sync "$STATE" "$challenge_port" || exit 1
     if [[ $mode == alpn ]]; then

@@ -21,13 +21,13 @@ main_menu() {
     require_linux || return 1
     while :; do
         menu_header
-        msg $'  1. 部署节点\n  2. 节点管理 · 原始链接 / 二维码\n  3. 流媒体分流 · 解锁 DNS / 代理出口\n  4. 运行状态与日志\n  5. 更新与回滚\n  6. BBR 与系统检测\n  7. 卸载\n  8. 证书管理 · 到期时间 / 自动续期\n\n  0. 退出\n'
+        msg $'  1. 部署节点\n  2. 节点管理 · 原始链接 / 二维码\n  3. 流媒体分流 · 解锁 DNS / 代理出口\n  4. 运行状态 · 日志 / 重启 / 防火墙\n  5. 更新与回滚\n  6. BBR 与系统检测\n  7. 卸载\n  8. 证书管理 · 到期时间 / 自动续期\n\n  0. 退出\n'
         ask '请选择' || return 0
         case $REPLY in
           1) with_lock node_add "$SRM_SELF";;
           2) node_menu;;
           3) with_lock routing_menu;;
-          4) show_status; yesno '查看最近 50 行日志（分享前请检查敏感信息）' && journalctl -u "$SERVICE" -n 50 --no-pager;;
+          4) status_menu;;
           5) update_menu;;
           6)
             bbr_status
@@ -39,6 +39,17 @@ main_menu() {
         esac
     done
 }
+status_menu() {
+    show_status
+    msg $'\n1.查看最近 50 行日志（分享前请检查敏感信息）\n2.重启本脚本节点（连接会断开几秒）\n3.重新同步防火墙端口规则\n0.返回'
+    ask '请选择' || return 0
+    case $REPLY in
+      1) journalctl -u "$SERVICE" -n 50 --no-pager;;
+      2) yesno '重启会断开所有连接几秒，确认重启' && with_lock restart_nodes;;
+      3) with_lock firewall_sync "$STATE";;
+      *) err '无效选项。';;
+    esac
+}
 rollback_script() {
     owned_root || return 1
     [[ -f $SRM_ROOT/manager.previous.sh ]] || { err '没有可回滚的脚本版本。'; return 1; }
@@ -48,6 +59,7 @@ usage() {
     cat <<EOF
 srm $SRM_VERSION：sing-box 节点管理（$(proto_labels)）
 用法：srm [命令] [参数]；任何命令加 --help 显示本帮助。
+日常使用只需输入 srm 打开菜单，所有功能都能在菜单里选；下面的命令给进阶用户和自动化脚本。
 
   srm                     打开管理菜单（常驻，做完回到菜单，输入 0 返回或退出）
   srm menu                同上
@@ -78,7 +90,6 @@ srm $SRM_VERSION：sing-box 节点管理（$(proto_labels)）
   srm update              更新脚本和已验证核心
   srm update-script       仅更新脚本
   srm update-core         仅更新已验证核心
-  srm auto-update on|off|status
   srm uninstall [--yes]   卸载（默认需要确认）
   srm render STATE        用 state 文件生成 sing-box 配置（调试用）
   srm version             版本
@@ -133,18 +144,12 @@ main() {
       update) with_lock update_all;;
       update-script) with_lock update_latest;;
       update-core) with_lock update_core;;
-      auto-update)
-        case ${2:-status} in
-          on) with_lock auto_update_on;; off) with_lock auto_update_off;;
-          status) require_linux && auto_update_status;;
-          *) err '用法：srm auto-update [on|off|status]'; return 1;;
-        esac;;
       uninstall)
         case ${2:-} in -y|--yes) assume_yes=1;; '') ;; *) err '用法：srm uninstall [--yes]'; return 1;; esac
         with_lock uninstall;;
       render) [[ -n ${2:-} ]] || { err '用法：srm render STATE'; return 1; }; render_config "$2";;
       version|--version) printf 'srm %s / tested core %s\n' "$SRM_VERSION" "$CORE_VERSION";;
       help) usage;;
-      *) err "未知命令：$1。运行 srm help 查看全部命令。"; return 1;;
+      *) err "未知命令：$1。可用命令见 srm --help。"; return 1;;
     esac
 }

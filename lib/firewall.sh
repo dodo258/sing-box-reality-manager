@@ -144,7 +144,7 @@ firewall_renew() (
         read -r port < "$account/challenge-port" || exit 1
     elif grep -q "^Le_Webroot='alpn'" "$account/${domain}_ecc/$domain.conf" 2>/dev/null; then port=443; fi
     [[ $port == 80 || $port == 443 ]] || { err '证书验证端口记录异常。'; exit 1; }
-    trap 'firewall_sync "$STATE" || err "证书临时端口清理失败，请运行 srm firewall 重试。"' EXIT
+    trap 'firewall_sync "$STATE" || err "证书临时端口清理失败，请在菜单「4. 运行状态」里选「重新同步防火墙端口规则」重试。"' EXIT
     trap 'exit 130' INT TERM HUP
     firewall_sync "$STATE" "$port" || exit 1
     acme_call "$domain" --renew -d "$domain" --ecc

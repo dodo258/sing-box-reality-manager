@@ -37,6 +37,10 @@ echo 'PASS version and protocol list'
     [[ $(main add vless --name x --yes) == "node_add $SRM_SELF vless --name x --yes" ]] || fail 'add dispatch'
     [[ $(main node 1111111111111111 port 20000) == 'node_change 1111111111111111 port 20000' ]] || fail 'node dispatch'
     [[ $(main uninstall --yes) == uninstall ]] || fail 'uninstall dispatch'
-    [[ $(main bbr on) == bbr_enable && $(main auto-update off) == auto_update_off ]] || fail 'subcommand dispatch'
+    [[ $(main bbr on) == bbr_enable && $(main update-core) == update_core && $(main firewall) == "firewall_sync $STATE" ]] || fail 'subcommand dispatch'
 ) || exit 1
 echo 'PASS subcommands pass their arguments to the right handler'
+# Beginners use the menu: user-facing text never tells them to run a command.
+if grep -nE '(运行|执行|输入) *srm [a-z-]' lib/*.sh; then fail 'UI text asks the user to run an srm subcommand'; fi
+if grep -nE 'auto_update|srm-update' lib/*.sh; then fail 'automatic update code present'; fi
+echo 'PASS UI text points to menu items, not commands; no automatic updates'

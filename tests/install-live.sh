@@ -1,22 +1,15 @@
 #!/usr/bin/env bash
-# Only for disposable systemd-based Linux CI, not an existing customer installation.
+# Real install, transaction and uninstall; only for disposable systemd-based Linux CI,
+# never an existing customer installation.
 set -euo pipefail
 cd -- "$(dirname -- "$0")/.."
 source tests/support/guard.sh
 need_ci_root
 [[ ! -e /opt/srm && ! -e /var/lib/srm ]] || exit 1
 bash dist/srm install
-# A test-only unit condition prevents a scheduled check from downloading an older
-# public release before this candidate has itself been released.
-mkdir -p /run/systemd/system/srm-update.service.d
-printf '[Unit]\nConditionPathExists=/run/srm-ci-allow-update\n' > /run/systemd/system/srm-update.service.d/ci.conf
-cleanup() {
-    printf 'y\n' | bash /opt/srm/manager.sh uninstall
-    rm -f /run/systemd/system/srm-update.service.d/ci.conf
-    rmdir /run/systemd/system/srm-update.service.d
-    systemctl daemon-reload
-}
+cleanup() { printf 'y\n' | bash /opt/srm/manager.sh uninstall; }
 trap cleanup EXIT
+systemd-analyze verify /etc/systemd/system/srm.service
 [[ $(readlink /usr/local/sbin/srm) == /opt/srm/manager.sh && $(readlink /usr/local/sbin/vasma) == /opt/srm/manager.sh ]] || exit 1
 srm version | grep -q '^srm ' || exit 1
 echo 'PASS install links srm and vasma to the manager'
@@ -72,20 +65,12 @@ echo 'PASS atomic certificate origin switching and repeated activation'
     ! systemctl is-active --quiet "$SERVICE" || exit 1
 )
 echo 'PASS real Reality configuration transaction rolls back on failure and preserves stopped state'
-bash /opt/srm/manager.sh auto-update on
-systemctl is-enabled --quiet srm-update.timer
-systemctl is-active --quiet srm-update.timer
-systemd-analyze verify /etc/systemd/system/srm-update.service /etc/systemd/system/srm-update.timer
-bash /opt/srm/manager.sh auto-update status
-bash /opt/srm/manager.sh auto-update off
-! systemctl is-active --quiet srm-update.timer || exit 1
-[[ ! -e /etc/systemd/system/srm-update.service ]] || exit 1
-echo 'PASS real systemd timer enable, status and disable'
-# Avoid network updates during this test, then check uninstall cleans the timer.
-bash /opt/srm/manager.sh auto-update on
+# Updates are manual only: installation must not schedule any update job.
+if compgen -G '/etc/systemd/system/srm-update*' > /dev/null; then echo 'FAIL update unit installed'; exit 1; fi
+if crontab -l 2>/dev/null | grep -q srm; then echo 'FAIL update cron job installed'; exit 1; fi
+echo 'PASS no automatic update job is installed'
 cleanup
 trap - EXIT
-[[ ! -e /opt/srm && ! -e /var/lib/srm ]] || exit 1
-[[ ! -e /etc/systemd/system/srm-update.timer ]] || exit 1
+[[ ! -e /opt/srm && ! -e /var/lib/srm && ! -e /etc/systemd/system/srm.service ]] || exit 1
 [[ ! -e /usr/local/sbin/srm && ! -L /usr/local/sbin/vasma ]] || exit 1
-echo 'PASS uninstall removes manager, update timer and both commands'
+echo 'PASS uninstall removes manager, service and both commands'

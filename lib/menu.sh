@@ -12,7 +12,7 @@ node_add() {
         case $1 in
           -y|--yes) assume_yes=1; shift; continue;;
           --name|--host|--port|--sni|--cert|--webroot|--cert-file|--key-file|--email|--bbr) ;;
-          *) err "未知参数：$1（见 srm help）"; return 1;;
+          *) err "未知参数：$1（可用参数见 srm --help）"; return 1;;
         esac
         [[ $# -ge 2 && -n $2 ]] || { err "$1 需要一个值。"; return 1; }
         var=${1#--}; var=opt_${var//-/_}
@@ -64,7 +64,7 @@ node_add() {
         msg "节点 ID：$id"
         msg "节点端口：${port}/${transport}；如仍无法连接，请在服务商控制台的云安全组允许 ${transport} ${port}。"
         printf '%s' "$node" | share_uri
-        msg '完整信息和二维码：主菜单 → 节点管理，或 srm export 节点ID qr。'
+        msg '二维码、详情和客户端配置：在菜单里选「2. 节点管理」。'
         return 0
     fi
     rm -f "$candidate"; return 1
@@ -80,7 +80,7 @@ export_node() {
         link=$(printf '%s' "$node" | share_uri) || return 1
         if command -v qrencode >/dev/null; then
             if use_color; then printf '%s' "$link" | qrencode -t ANSIUTF8; else printf '%s' "$link" | qrencode -t UTF8; fi
-        else msg '未安装 qrencode，只显示链接（可运行 apt-get install qrencode 后再生成二维码）：'; msg "$link"; fi;;
+        else msg '未安装 qrencode，只显示链接：'; msg "$link"; fi;;
       outbound) printf '%s' "$node" | client_outbound;;
       details)
         printf '%s' "$node" | jq "del($(proto_call "$type" secrets))" || return 1
