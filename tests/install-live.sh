@@ -106,7 +106,7 @@ echo 'PASS self-signed TUIC and TCP+UDP Shadowsocks run under the service user'
 (
     source ./srm.sh
     reality_target_check() { return 0; }
-    logs() { journalctl -u srm.service -u 'srm-snell@*' -n 60 --no-pager; ss -ltnp; exit 1; }
+    logs() { systemctl status srm.service --no-pager; journalctl -u srm.service -u 'srm-snell@*' -n 60 --no-pager; ss -ltnp; exit 1; }
     node_add "$PWD/dist/srm" snell --name snell6 --host 127.0.0.1 --yes || logs
     node_add "$PWD/dist/srm" snell --name snell5 --host 127.0.0.1 --proto-version 5 --yes || logs
     systemctl is-active --quiet "$SERVICE" || exit 1
@@ -121,8 +121,11 @@ echo 'PASS self-signed TUIC and TCP+UDP Shadowsocks run under the service user'
         [[ -n $(ss -H -ltn "sport = :$(jq -r .port <<< "$n")") ]] || exit 1
         [[ $(readlink "$DATA/current/sidecar/$id/snell-server") == "/opt/srm/snell/v$(jq -r .snell_version <<< "$n")/snell-server" ]] || exit 1
     done
-    show_logs | grep -q 'snell-server v6\.' && show_logs | grep -q 'snell-server v5\.' || { show_logs; exit 1; }
-    show_status | grep -q "srm-snell@$id.service" || exit 1
+    # Captured first: grep -q closing the pipe early would fail the pipeline.
+    out=$(show_logs)
+    grep -q 'snell-server v6\.' <<< "$out" && grep -q 'snell-server v5\.' <<< "$out" || { printf '%s\n' "$out"; exit 1; }
+    out=$(show_status)
+    grep -q "srm-snell@$id.service" <<< "$out" || exit 1
     node_change "$id" toggle
     ! systemctl is-active --quiet "$unit" && ! systemctl is-enabled --quiet "$unit" || exit 1
     node_change "$id" toggle
