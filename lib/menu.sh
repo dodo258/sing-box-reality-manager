@@ -1,18 +1,19 @@
 # All mutation menu paths execute under with_lock.
 # node_add SELF [TYPE] [--name N] [--host H] [--port P|random] [--sni D] [--cert auto|webroot|import|selfsigned]
 #          [--webroot DIR] [--cert-file F] [--key-file F] [--email E] [--transport tcp|ws|grpc|httpupgrade]
-#          [--bbr enable|keep] [--yes]
+#          [--proto-version V] [--proto-mode M] [--bbr enable|keep] [--yes]
 node_add() {
     local self=$1 type='' name host port sni='' bbr=keep candidate node id tmp transport var assume_yes=0 cert_avoid_port=''
     local opt_name='' opt_host='' opt_port='' opt_sni='' opt_cert='' opt_webroot='' opt_cert_file='' opt_key_file='' opt_email='' opt_bbr='' opt_transport=''
+    local opt_proto_version='' opt_proto_mode=''
     # Protocol prompt hooks fill these.
-    local mode=none email='' webroot='' cert='' key='' stream=''
+    local mode=none email='' webroot='' cert='' key='' stream='' proto_version='' proto_mode=''
     shift
     if [[ -n ${1:-} && $1 != -* ]]; then type=$1; shift; fi
     while (( $# )); do
         case $1 in
           -y|--yes) assume_yes=1; shift; continue;;
-          --name|--host|--port|--sni|--cert|--webroot|--cert-file|--key-file|--email|--transport|--bbr) ;;
+          --name|--host|--port|--sni|--cert|--webroot|--cert-file|--key-file|--email|--transport|--proto-version|--proto-mode|--bbr) ;;
           *) err "未知参数：$1（可用参数见 srm --help）"; return 1;;
         esac
         [[ $# -ge 2 && -n $2 ]] || { err "$1 需要一个值。"; return 1; }
@@ -37,6 +38,7 @@ node_add() {
     proto_call "$type" prompt || return 1
     [[ -z $sni ]] || valid_domain "$sni" || { err '域名不合法，请使用 ASCII/Punycode 域名。'; return 1; }
     [[ -z $opt_transport || -n $stream ]] || { err "--transport 不适用于 $(proto_call "$type" label)。"; return 1; }
+    [[ -z $opt_proto_version$opt_proto_mode || -n $proto_version ]] || { err "--proto-version、--proto-mode 不适用于 $(proto_call "$type" label)。"; return 1; }
     if [[ ! -f $STATE ]]; then
         [[ -n $opt_bbr || $assume_yes == 1 ]] || msg 'BBR：1.内核支持时自动启用（主机级 TCP 设置） 2.保持现状（与现有程序共存时选择）'
         ask_opt "$opt_bbr" 'BBR 设置' 2 || return 1
@@ -73,6 +75,7 @@ node_add() {
         msg "节点 ID：$id"
         msg "节点端口：${port}/${transport}；如仍无法连接，请在服务商控制台的云安全组允许 ${transport} ${port}。"
         printf '%s' "$node" | share_uri
+        printf '%s' "$node" | client_note
         msg '二维码、详情和客户端配置：在菜单里选「2. 节点管理」。'
         return 0
     fi
@@ -115,7 +118,9 @@ export_node() {
         msg "${link:-Surge 不支持此协议。}"
         msg '── Shadowrocket、v2rayN 等：导入原始分享链接或扫二维码 ──'
         link=$(printf '%s' "$node" | jq -r '.cert_sha256 // empty')
-        [[ -z $link ]] || msg "自签证书：以上配置已带证书指纹；只导入链接的客户端会跳过证书校验，客户端能填证书 SHA-256 指纹时填：$link";;
+        [[ -z $link ]] || msg "自签证书：以上配置已带证书指纹；只导入链接的客户端会跳过证书校验，客户端能填证书 SHA-256 指纹时填：$link"
+        link=$(printf '%s' "$node" | client_note) || return 1
+        [[ -z $link ]] || msg "说明：$link";;
       details)
         printf '%s' "$node" | jq "del($(proto_call "$type" secrets))" || return 1
         if [[ $(printf '%s' "$node" | jq -r '.cert_dir // empty') ]]; then
@@ -129,7 +134,7 @@ list_nodes() {
     jq -r '.nodes[]|[.id,.name,.type,(.port|tostring),(if .enabled then "启用" else "停用" end)]|@tsv' "$STATE"
 }
 node_change() {
-    local id=$1 action=$2 value=${3:-} candidate tmp type node dropped='' name
+    local id=$1 action=$2 value=${3:-} candidate tmp type node dropped='' name local_port
     candidate=$(new_candidate) || return 1
     node=$(node_json "$candidate" "$id") || { rm -f "$candidate"; err '节点不存在。'; return 1; }
     type=$(printf '%s' "$node" | jq -r .type)
@@ -138,6 +143,11 @@ node_change() {
       toggle)
         if [[ $(printf '%s' "$node" | jq -r .enabled) == false ]]; then
             port_free "$(printf '%s' "$node" | jq -r .port)" "$id" || { rm -f "$tmp" "$candidate"; err '端口被占用，无法启用。'; return 1; }
+            # A helper's loopback port may have been taken while the node was off.
+            local_port=$(printf '%s' "$node" | jq -r '.local_port // empty')
+            if [[ -n $local_port && -n $(ss -H -ltn "sport = :$local_port") ]]; then
+                rm -f "$tmp" "$candidate"; err "本机端口 $local_port 已被其他程序占用，无法启用；请删除此节点后重新部署。"; return 1
+            fi
             cert_port_ok "$(printf '%s' "$node" | jq -r .port)" "$(proto_call "$type" transport)" || { rm -f "$tmp" "$candidate"; return 1; }
         fi
         jq --arg id "$id" '(.nodes[]|select(.id==$id)|.enabled) |= not' "$candidate" > "$tmp";;

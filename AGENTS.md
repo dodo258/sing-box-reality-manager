@@ -13,7 +13,7 @@
 ## 常用命令
 - 语法检查：`bash -n lib/*.sh build.sh srm.sh install.sh`
 - 构建：`./build.sh`，构建后 `git diff --exit-code dist/` 必须无差异（dist 要提交）。
-- 测试：`for t in tests/*.sh; do bash "$t" || exit 1; done`。需要 root、联网或 systemd 的测试只在 CI（GitHub Actions，ubuntu-latest）跑，本机会打印 SKIP 并退出 0；设置 `TEST_CORE=<sing-box 1.14.1 路径>`（和 macOS 上的 `TEST_OPENSSL=<openssl 3 路径>`）可在本机跑真实核心测试。
+- 测试：`for t in tests/*.sh; do bash "$t" || exit 1; done`。需要 root、联网或 systemd 的测试只在 CI（GitHub Actions，ubuntu-latest）跑，本机会打印 SKIP 并退出 0；设置 `TEST_CORE=<sing-box 1.14.1 路径>`（和 macOS 上的 `TEST_OPENSSL=<openssl 3 路径>`）可在本机跑真实核心测试；`tests/snell-traffic.sh` 还要 `TEST_SNELL_V6`、`TEST_SNELL_V5`（snell-server 只有 Linux 版，CI 用 `snell_download` 下载）。
 - shellcheck：`shellcheck -S warning -s bash dist/srm build.sh srm.sh`（模块之间共用变量，按打包后的整体检查），本机没装就以 CI 为准。
 
 ## 约定

@@ -39,10 +39,10 @@ activate_cert() {
     [[ ! -L $dir/active ]] || old=$(readlink "$dir/active")
     ln -s "$gen" "$dir/.next" && mv -Tf "$dir/.next" "$dir/active" || return 1
     systemctl is-active --quiet "$SERVICE" && active=1
-    if [[ ! -f $STATE ]] || { "$CORE" check -c "$DATA/current/config.json" && { [[ $active == 0 ]] || { systemctl restart "$SERVICE" && service_healthy "$STATE"; }; }; }; then return 0; fi
+    if [[ ! -f $STATE ]] || { "$CORE" check -c "$DATA/current/config.json" && { [[ $active == 0 ]] || { restart_unit "$SERVICE" && service_healthy "$STATE"; }; }; }; then return 0; fi
     if [[ -n $old ]]; then
         ln -s "$old" "$dir/.next" && mv -Tf "$dir/.next" "$dir/active"
-        [[ $active == 0 ]] || systemctl restart "$SERVICE"
+        [[ $active == 0 ]] || restart_unit "$SERVICE"
     else rm -f "$dir/active"; fi
     err '证书应用失败，已恢复原证书。'; return 1
 }

@@ -70,7 +70,7 @@ new_candidate() {
     printf '%s\n' "$tmp"
 }
 service_healthy() {
-    local candidate=$1 tries port kind output
+    local candidate=$1 tries port kind output unit
     for ((tries=0; tries<15; tries++)); do
         if systemctl is-active --quiet "$SERVICE"; then
             local good=1
@@ -79,11 +79,62 @@ service_healthy() {
                 if [[ $kind == udp ]]; then output=$(ss -H -lun "sport = :$port"); else output=$(ss -H -ltn "sport = :$port"); fi
                 [[ -n $output ]] || good=0
             done < <(jq -r ".nodes[]|select(.enabled)|.port as \$p|($(proto_jq_transports))[]|[\$p,.]|@tsv" "$candidate")
+            # Helper services must run and listen on their loopback port as well.
+            while IFS=$'\t' read -r unit port; do
+                [[ -n $unit ]] || continue
+                systemctl is-active --quiet "$unit" && [[ -n $(ss -H -ltn "sport = :$port") ]] || good=0
+            done < <(jq -r "$PROTO_JQ_DEFS .nodes[]|select(.enabled)|($(proto_jq sidecar empty)) as \$u|[\$u,.local_port]|@tsv" "$candidate")
             [[ $good == 1 ]] && return 0
         fi
         sleep 1
     done
     return 1
+}
+# Deliberate restarts are not crash loops: systemd refuses a sixth start within ten
+# seconds (StartLimitBurst), which a few quick node changes reach; reset-failed
+# flushes that counter (systemd.unit, StartLimitIntervalSec=).
+restart_unit() {
+    systemctl reset-failed "$1" 2>/dev/null || true
+    systemctl restart "$1"
+}
+# Helper services (registry hook "sidecar"): unit names of STATE's enabled nodes,
+# or of all its nodes with "true".
+sidecar_units() {
+    [[ -n ${1:-} && -f $1 ]] || return 0
+    jq -r --argjson all "${2:-false}" "$PROTO_JQ_DEFS .nodes[]|select(.enabled or \$all)|$(proto_jq sidecar empty)" "$1"
+}
+# Helper units systemd knows: loaded (running, failed or stopped) or enabled.
+sidecar_known() {
+    { systemctl list-units --all --plain --no-legend --no-pager 'srm-*@*.service' 2>/dev/null || true
+      ls /etc/systemd/system/multi-user.target.wants/ 2>/dev/null || true; } |
+        grep -oE 'srm-[a-z0-9]+@[a-f0-9]{16}\.service' | sort -u
+}
+# Writes the helper files of STATE's enabled nodes into generation GEN.
+sidecar_render() {
+    local node id dir file
+    while IFS= read -r node; do
+        [[ -n $node ]] || continue
+        id=$(jq -r .id <<< "$node") || return 1
+        dir=$2/sidecar/$id
+        install -d -m 750 "$2/sidecar" "$dir" && chgrp srm "$2/sidecar" "$dir" || return 1
+        proto_call "$(jq -r .type <<< "$node")" sidecar_render "$node" "$dir" || return 1
+        for file in "$dir"/*; do
+            [[ -L $file || ! -f $file ]] || { chmod 640 "$file" && chgrp srm "$file"; } || return 1
+        done
+    done < <(jq -c "$PROTO_JQ_DEFS .nodes[]|select(.enabled)|select(($(proto_jq sidecar empty))|length > 0)" "$1")
+}
+# (Re)starts the helper services of STATE's enabled nodes and stops every other one;
+# without a state all of them stop.
+sidecars_sync() {
+    local want unit failures=0
+    want=$(sidecar_units "${1:-}") || return 1
+    for unit in $(sidecar_known); do
+        grep -Fxq "$unit" <<< "$want" || systemctl disable --now "$unit" >/dev/null 2>&1 || failures=1
+    done
+    for unit in $want; do
+        { restart_unit "$unit" && systemctl enable "$unit" >/dev/null 2>&1; } || failures=1
+    done
+    return "$failures"
 }
 switch_generation() {
     local target=$1
@@ -98,9 +149,11 @@ recover_pending() {
     if [[ -n $old ]]; then
         [[ $old == "$DATA/generations/"* && -f $old/state.json ]] || { err '回滚记录异常，需要人工检查。'; return 1; }
         switch_generation "$old" || return 1
-        if [[ $active == 1 ]]; then systemctl restart "$SERVICE" && service_healthy "$STATE" || { err '恢复原配置后服务启动失败。'; return 1; }; else systemctl stop "$SERVICE" || return 1; fi
+        if [[ $active == 1 ]]; then
+            sidecars_sync "$STATE" && restart_unit "$SERVICE" && service_healthy "$STATE" || { err '恢复原配置后服务启动失败。'; return 1; }
+        else systemctl stop "$SERVICE" && sidecars_sync || return 1; fi
     else
-        systemctl stop "$SERVICE" || return 1
+        systemctl stop "$SERVICE" && sidecars_sync || return 1
         rm -f "$DATA/current"
     fi
     firewall_sync "$STATE" || return 1
@@ -117,7 +170,7 @@ apply_state() (
     state_upgrade "$1" > "$candidate" && validate_state "$candidate" || exit 1
     gen=$(mktemp -d "$DATA/generations/g.XXXXXXXX") || exit 1
     chmod 750 "$gen" && chgrp srm "$gen" || exit 1
-    if ! render_config "$candidate" > "$gen/config.json" || ! "$CORE" check -c "$gen/config.json"; then
+    if ! render_config "$candidate" > "$gen/config.json" || ! "$CORE" check -c "$gen/config.json" || ! sidecar_render "$candidate" "$gen"; then
         rm -rf "$gen"; err '核心校验失败，原节点未改动。'; exit 1
     fi
     install -m 600 "$candidate" "$gen/state.json" || exit 1
@@ -131,9 +184,9 @@ apply_state() (
     switch_generation "$gen" || exit 1
     count=$(jq '[.nodes[]|select(.enabled)]|length' "$candidate")
     if [[ $count == 0 ]]; then
-        systemctl stop "$SERVICE" || exit 1
+        systemctl stop "$SERVICE" && sidecars_sync || exit 1
     else
-        if ! systemctl restart "$SERVICE" || ! service_healthy "$candidate"; then err '新配置启动失败，恢复上一份配置。'; exit 1; fi
+        if ! sidecars_sync "$candidate" || ! restart_unit "$SERVICE" || ! service_healthy "$candidate"; then err '新配置启动失败，恢复上一份配置。'; exit 1; fi
         systemctl enable "$SERVICE" >/dev/null || exit 1
     fi
     if ! firewall_sync "$candidate"; then err '端口规则应用失败，恢复上一份节点配置和端口规则。'; exit 1; fi
@@ -157,9 +210,9 @@ update_core() {
     systemctl is-active --quiet "$SERVICE" && old_active=1
     cp -p "$CORE" "$CORE.previous" && mv -f "$tmp" "$CORE" || return 1
     if [[ $old_active == 0 ]]; then msg '核心已更新；服务保持停止状态。'; return 0; fi
-    if systemctl restart "$SERVICE" && service_healthy "$STATE"; then msg "核心已更新到 $CORE_VERSION。"; return 0; fi
+    if restart_unit "$SERVICE" && service_healthy "$STATE"; then msg "核心已更新到 $CORE_VERSION。"; return 0; fi
     mv -f "$CORE.previous" "$CORE"
-    systemctl restart "$SERVICE"
+    restart_unit "$SERVICE"
     err '新核心启动失败，已恢复原核心。'; return 1
 }
 update_script() {
@@ -198,18 +251,32 @@ bbr_restore() {
 }
 show_status() {
     if [[ -f $STATE ]]; then jq -r '.nodes[]|[.id,.name,.type,(.port|tostring),(if .enabled then "启用" else "停用" end)]|@tsv' "$STATE"; else msg '尚无节点。'; fi
-    systemctl --no-pager --full status "$SERVICE" || true
+    # shellcheck disable=SC2046 # unit names have no spaces
+    systemctl --no-pager --full status "$SERVICE" $(sidecar_units "$STATE" true) || true
     msg '节点变更时自动同步 UFW/firewalld 端口规则；云安全组需在服务商控制台放行对应端口。'
+}
+show_logs() {
+    local unit args=(-u "$SERVICE")
+    for unit in $(sidecar_units "$STATE" true); do args+=(-u "$unit"); done
+    journalctl "${args[@]}" -n 50 --no-pager
 }
 uninstall() {
     owned_root || return 1
     msg "删除本脚本服务、续期任务、$SRM_ROOT、$DATA 和快捷命令；节点凭据与本脚本证书会删除。系统依赖、其他服务和防火墙保留。"
     [[ ${assume_yes:-0} == 1 ]] || yesno '已导出需要的节点资料，确认卸载' || return 0
-    systemctl disable --now "$SERVICE" srm-renew.timer 2>/dev/null || true
+    # One unit per call: systemctl stops nothing when any unit in the list is missing
+    # (srm-renew.timer exists only after a certificate was issued).
+    systemctl disable --now "$SERVICE" 2>/dev/null || true
+    systemctl disable --now srm-renew.timer 2>/dev/null || true
+    sidecars_sync || true
     if systemctl is-active --quiet "$SERVICE" || systemctl is-active --quiet srm-renew.service; then err '服务仍在运行，停止卸载。'; return 1; fi
+    local unit
+    for unit in $(sidecar_known); do
+        ! systemctl is-active --quiet "$unit" || { err "$unit 仍在运行，停止卸载。"; return 1; }
+    done
     firewall_clear || { err '端口规则清理失败，保留数据以便重试卸载。'; return 1; }
     bbr_restore || return 1
-    rm -f "/etc/systemd/system/$SERVICE" /etc/systemd/system/srm-renew.service /etc/systemd/system/srm-renew.timer
+    rm -f "/etc/systemd/system/$SERVICE" /etc/systemd/system/srm-renew.service /etc/systemd/system/srm-renew.timer /etc/systemd/system/srm-*@.service
     [[ $(readlink /usr/local/sbin/srm) != "$SRM_ROOT/manager.sh" ]] || rm -f /usr/local/sbin/srm
     [[ $(readlink /usr/local/sbin/vasma) != "$SRM_ROOT/manager.sh" ]] || rm -f /usr/local/sbin/vasma
     rm -rf "$SRM_ROOT" "$DATA"

@@ -18,7 +18,7 @@ STATE=$DATA/current/state.json
 mkdir -p "$SRM_ROOT" "$DATA/current"
 touch "$SRM_ROOT/.srm-owned" "$DATA/.srm-owned"
 
-[[ $PROTOCOLS == 'vless anytls hysteria2 shadowsocks tuic vlesstls trojan vmess naive hysteria' ]] || fail "registered: $PROTOCOLS"
+[[ $PROTOCOLS == 'vless anytls hysteria2 snell shadowsocks tuic vlesstls trojan vmess naive hysteria' ]] || fail "registered: $PROTOCOLS"
 echo 'PASS Shadowsocks 2022, TUIC v5, VLESS TLS, Trojan, VMess, Naive and Hysteria v1 are registered'
 
 uuid=0f2a6c1e-3b4d-4e5f-8a9b-0c1d2e3f4a5b
@@ -125,7 +125,7 @@ echo 'PASS server inbounds for every protocol and VLESS transport'
 # checks expand them per port.
 [[ $(jq -r ".nodes[]|.port as \$p|($(proto_jq_transports))[]|\"\(\$p)/\(.)\"" "$work/state.json" | tr '\n' ' ') == \
    '20001/tcp 20001/udp 20002/udp 20003/udp 20004/tcp 20005/tcp 20006/tcp 20007/tcp 20008/tcp 20009/tcp 20010/tcp 20011/udp 20012/udp 20013/udp 20014/tcp 20015/tcp ' ]] || fail 'transports'
-[[ $(bash srm.sh protocols | cut -f1,3 | tr '\t\n' ': ') == 'vless:tcp anytls:tcp hysteria2:udp shadowsocks:tcp udp tuic:udp vlesstls:tcp trojan:tcp vmess:tcp naive:tcp hysteria:udp ' ]] || fail 'protocol list'
+[[ $(bash srm.sh protocols | cut -f1,3 | tr '\t\n' ': ') == 'vless:tcp anytls:tcp hysteria2:udp snell:tcp shadowsocks:tcp udp tuic:udp vlesstls:tcp trojan:tcp vmess:tcp naive:tcp hysteria:udp ' ]] || fail 'protocol list'
 echo 'PASS transports per protocol; Shadowsocks needs both TCP and UDP'
 
 # Validation of the new fields.
@@ -227,7 +227,7 @@ echo 'PASS VLESS TLS (4 transports), VMess, Naive and Trojan deploy non-interact
 
 # The menu: TUIC on a server without a domain proposes the self-signed certificate.
 jq '.nodes=[]' "$work/state.json" > "$STATE"
-node_add self <<< $'5\n\n192.0.2.1\n\n\ny' > "$work/out" 2>&1 || { cat "$work/out"; fail 'menu deploy'; }
+node_add self <<< $'6\n\n192.0.2.1\n\n\ny' > "$work/out" 2>&1 || { cat "$work/out"; fail 'menu deploy'; }
 grep -q '4.自签证书' "$work/out" && grep -q '证书方式 \[4\]' "$work/out" || { cat "$work/out"; fail 'self-signed not the default without a domain'; }
 last | jq -e '.type=="tuic" and .cert_sha256' >/dev/null || fail 'menu deployed tuic self-signed'
 echo 'PASS the menu offers a self-signed certificate as the default for TUIC without a domain'

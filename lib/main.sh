@@ -44,7 +44,7 @@ status_menu() {
     msg $'\n1.查看最近 50 行日志（分享前请检查敏感信息）\n2.重启本脚本节点（连接会断开几秒）\n3.重新同步防火墙端口规则\n0.返回'
     ask '请选择' || return 0
     case $REPLY in
-      1) journalctl -u "$SERVICE" -n 50 --no-pager;;
+      1) show_logs;;
       2) yesno '重启会断开所有连接几秒，确认重启' && with_lock restart_nodes;;
       3) with_lock firewall_sync "$STATE";;
       *) err '无效选项。';;
@@ -69,6 +69,7 @@ srm $SRM_VERSION：sing-box 节点管理（$(proto_labels)）
                             --cert auto|webroot|import|selfsigned（自签只用于客户端能校验证书指纹的协议）
                             --webroot 目录  --cert-file 文件  --key-file 文件  --email 邮箱
                             --transport tcp|ws|grpc|httpupgrade（只用于能选传输方式的协议）
+                            --proto-version 6|5  --proto-mode default|unshaped（只用于 Snell：版本和 v6 模式）
                             --bbr enable|keep  --yes（不提问，未给的选项用默认值）
   srm list                列出节点：ID、名称、协议、端口、状态
   srm nodes               节点管理菜单：原始链接、二维码、启停、改端口、重置凭据
@@ -137,7 +138,7 @@ main() {
       renew) with_lock renew_certificates;;
       firewall) with_lock firewall_sync "$STATE";;
       status) require_linux && show_status;;
-      logs) require_linux && journalctl -u "$SERVICE" -n 50 --no-pager;;
+      logs) require_linux && show_logs;;
       restart) with_lock restart_nodes;;
       rollback) with_lock rollback_config;;
       rollback-script) with_lock rollback_script;;

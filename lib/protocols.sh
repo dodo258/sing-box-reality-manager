@@ -11,7 +11,11 @@
 #   create           generate credentials after confirmation; REPLY = JSON fields
 #   rotate           new credentials; REPLY = JSON fields to merge into the node
 # Optional: clash (jq object: Clash Meta / mihomo proxy), surge (jq string: Surge proxy line),
-# retarget_label / retarget_select / retarget (change a Reality handshake target).
+# note (jq string shown with the client snippets), retarget_label / retarget_select /
+# retarget (change a TLS handshake target), and the sidecar pair for a protocol served
+# by its own program next to sing-box: sidecar (jq string: systemd unit of the node,
+# which listens on 127.0.0.1:.local_port) and sidecar_render NODE DIR (writes the
+# node's files into the generation, so switching generations switches them too).
 PROTO_HOOKS='label transport validate render_inbound share_uri client_outbound secrets prompt create rotate'
 PROTOCOLS=''
 PROTO_JQ_DEFS='
@@ -37,6 +41,9 @@ proto_register() {
     local optional=0
     for hook in retarget retarget_select retarget_label; do declare -F "proto_${type}_$hook" >/dev/null && optional=$((optional+1)); done
     (( optional == 0 || optional == 3 )) || { err "协议 $type 的 retarget 钩子不完整，未注册。"; return 1; }
+    optional=0
+    for hook in sidecar sidecar_render; do declare -F "proto_${type}_$hook" >/dev/null && optional=$((optional+1)); done
+    (( optional == 0 || optional == 2 )) || { err "协议 $type 的 sidecar 钩子不完整，未注册。"; return 1; }
     proto_known "$type" || PROTOCOLS="${PROTOCOLS:+$PROTOCOLS }$type"
 }
 proto_known() { [[ $1 =~ ^[a-z][a-z0-9]*$ && " $PROTOCOLS " == *" $1 "* ]]; }
@@ -109,13 +116,7 @@ proto_vless_clash() {
       "reality-opts":{"public-key":.public_key,"short-id":.short_id},"client-fingerprint":"chrome"}'
 }
 proto_vless_secrets() { printf '%s' '.uuid,.private_key,.public_key,.short_id'; }
-proto_vless_prompt() {
-    if [[ -n ${opt_sni:-} ]]; then
-        reality_target_allowed "$opt_sni" || return 1
-        sni=$opt_sni
-    elif [[ ${assume_yes:-0} == 1 ]]; then sni=${REALITY_TARGETS%% *}
-    else reality_target_select || return 1; sni=$REPLY; fi
-}
+proto_vless_prompt() { handshake_target_prompt; }
 proto_vless_create() {
     local pair private public uuid short
     reality_target_check "$sni" || return 1
@@ -135,7 +136,16 @@ proto_vless_rotate() {
 proto_vless_retarget_label() { printf '切换 Reality 目标（携程 / 西瓜视频）'; }
 proto_vless_retarget_select() { reality_target_select; }
 # REPLY = JSON fields to merge, or empty when the node already uses the target.
-proto_vless_retarget() {
+proto_vless_retarget() { handshake_retarget "$@"; }
+# Reality and ShadowTLS borrow the TLS 1.3 handshake of the same vetted sites.
+handshake_target_prompt() {
+    if [[ -n ${opt_sni:-} ]]; then
+        reality_target_allowed "$opt_sni" || return 1
+        sni=$opt_sni
+    elif [[ ${assume_yes:-0} == 1 ]]; then sni=${REALITY_TARGETS%% *}
+    else reality_target_select || return 1; sni=$REPLY; fi
+}
+handshake_retarget() {
     local node=$1 target=$2
     reality_target_allowed "$target" || return 1
     if [[ $(printf '%s' "$node" | jq -r .sni) == "$target" ]]; then
@@ -145,10 +155,10 @@ proto_vless_retarget() {
     REPLY=$(jq -nc --arg sni "$target" '{sni:$sni}')
 }
 reality_target_allowed() {
-    [[ " $REALITY_TARGETS " == *" $1 "* ]] || { err "Reality 目标只能选择：$REALITY_TARGETS"; return 1; }
+    [[ " $REALITY_TARGETS " == *" $1 "* ]] || { err "握手目标只能选择：$REALITY_TARGETS"; return 1; }
 }
 reality_target_select() {
-    msg $'Reality 握手目标（无需拥有该域名或申请证书）：\n1. 携程：www.ctrip.com\n2. 西瓜视频：www.ixigua.com'
+    msg $'握手目标（无需拥有该域名或申请证书）：\n1. 携程：www.ctrip.com\n2. 西瓜视频：www.ixigua.com'
     ask '选择目标（0 返回）' 1 || return 1
     case $REPLY in
       1) REPLY=www.ctrip.com;;
@@ -160,7 +170,7 @@ reality_target_check() {
     local domain=$1 output rc=0
     valid_domain "$domain" || return 1
     output=$(mktemp) || return 1
-    msg "检查 Reality 目标 ${domain} 的 TLS 1.3、证书和 HTTP/2…"
+    msg "检查握手目标 ${domain} 的 TLS 1.3、证书和 HTTP/2…"
     timeout 15 openssl s_client -connect "$domain:443" -servername "$domain" \
         -tls1_3 -alpn h2 -verify_hostname "$domain" -verify_return_error \
         </dev/null > "$output" 2>&1 || rc=$?
@@ -293,6 +303,179 @@ proto_hysteria2_secrets() { printf '%s' '.password'; }
 proto_hysteria2_prompt() { tls_prompt selfsigned; }
 proto_hysteria2_create() { tls_create && with_password; }
 proto_hysteria2_rotate() { REPLY=''; with_password; }
+
+# --- Snell v6 / v5 + ShadowTLS v3 --------------------------------------------
+# The official snell-server runs as its own service srm-snell@<node id> and listens
+# only on 127.0.0.1:.local_port. Clients reach it through sing-box: the shadowtls
+# inbound answers on the node port and hands the stream (detour) to a direct inbound
+# whose override_address/override_port point at snell-server, so the front end goes
+# through sing-box check, the generation switch and rollback like any other node.
+# Routing rules do not apply: snell-server makes its own outbound connections.
+# Server binaries are pinned by the SHA-256 of the official zip (the vendor publishes
+# no checksums): https://dl.nssurge.com/snell/snell-server-v<version>-linux-<arch>.zip,
+# versions from kb.nssurge.com/surge-knowledge-base/release-notes/snell (2026-10-10:
+# v6.0.0rc2 is the newest v6, v5.0.1 the newest v5).
+SNELL_V6=6.0.0rc2
+SNELL_V5=5.0.1
+snell_download() {
+    local major=$1 target=$2 version arch hash tmp
+    case $major in 6) version=$SNELL_V6;; 5) version=$SNELL_V5;; *) err 'Snell 版本只能是 6 或 5。'; return 1;; esac
+    case $(uname -m) in x86_64) arch=amd64;; aarch64|arm64) arch=aarch64;; *) err 'Snell 只支持 amd64/arm64。'; return 1;; esac
+    case $version-$arch in
+      6.0.0rc2-amd64) hash=8a9c4463ca87cfa5eaa37c6af0d37ab93ea275aa12391985bb2a375ca3abd7f2;;
+      6.0.0rc2-aarch64) hash=a0b2915cbc77dc3baf8fa069e741c20808d8a10c3a8a93e709a0a580645c3bd7;;
+      5.0.1-amd64) hash=9bea1c2b9e35b73b31634856c04d18c393072b9e5dcde6a32781d8b8f908c539;;
+      5.0.1-aarch64) hash=2f178bf5ac468ce1a130454efa40a0603fbbe4e47ecc4880a989f4abc7f824cf;;
+      *) return 1;;
+    esac
+    tmp=$(mktemp -d) || return 1
+    # `snell-server -v` prints "snell-server v6.0.0 (…)" for 6.0.0rc2, so only the
+    # major version is compared; running it also proves the binary loads here.
+    if fetch "https://dl.nssurge.com/snell/snell-server-v$version-linux-$arch.zip" "$tmp/snell.zip" &&
+       [[ $(sha256 "$tmp/snell.zip") == "$hash" ]] &&
+       unzip -p "$tmp/snell.zip" snell-server > "$tmp/snell-server" && chmod 755 "$tmp/snell-server" &&
+       "$tmp/snell-server" -v 2>&1 | grep -q "snell-server v$major\." &&
+       install -m 755 "$tmp/snell-server" "$target"; then
+        rm -rf "$tmp"; return 0
+    fi
+    rm -rf "$tmp"; err "Snell v$major 下载、SHA256 校验或试运行失败。"; return 1
+}
+# Under the lock while deploying: the binary of this major version, and the unit.
+# The unit starts whatever the current generation links for the node, so switching
+# or rolling back a generation also switches the configuration and the version.
+snell_install() {
+    local major=$1 unit=/etc/systemd/system/srm-snell@.service tmp
+    if [[ ! -x $SRM_ROOT/snell/v$major/snell-server ]]; then
+        if ! command -v unzip >/dev/null; then
+            msg '安装 Snell 需要的 unzip…'
+            { apt-get update && DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l apt-get install -y --no-install-recommends unzip; } || return 1
+        fi
+        install -d -m 755 "$SRM_ROOT/snell" "$SRM_ROOT/snell/v$major" && snell_download "$major" "$SRM_ROOT/snell/v$major/snell-server" || return 1
+    fi
+    tmp=$(mktemp) || return 1
+    cat > "$tmp" <<UNIT
+[Unit]
+Description=srm Snell server of node %i
+After=network-online.target
+Wants=network-online.target
+[Service]
+User=srm
+Group=srm
+ExecStart=$DATA/current/sidecar/%i/snell-server -c $DATA/current/sidecar/%i/snell.conf
+Restart=on-failure
+RestartSec=3
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+RestrictSUIDSGID=true
+CapabilityBoundingSet=
+LimitNOFILE=65536
+[Install]
+WantedBy=multi-user.target
+UNIT
+    if cmp -s "$tmp" "$unit"; then rm -f "$tmp"; return 0; fi
+    install -m 644 "$tmp" "$unit" && rm -f "$tmp" && systemctl daemon-reload
+}
+proto_snell_label() { printf 'Snell + ShadowTLS（Surge）'; }
+proto_snell_transport() { printf 'tcp'; }
+proto_snell_validate() {
+    printf '%s' '(.sni|text) and (.psk|test("^[a-f0-9]{32}$")) and (.shadowtls_password|test("^[a-f0-9]{32}$")) and
+      (.local_port|type == "number" and floor == . and . >= 1 and . <= 65535) and
+      ((.snell_version == 6 and (.snell_mode == "default" or .snell_mode == "unshaped")) or (.snell_version == 5 and .snell_mode == null))'
+}
+# sing-box docs: shadowtls inbound (version 3, users, handshake, strict_mode), listen
+# field "detour", direct inbound override_address/override_port. The direct inbound
+# always opens a listener of its own; it is pinned to loopback.
+proto_snell_render_inbound() {
+    printf '%s' '[base_inbound + {type:"shadowtls",version:3,users:[{name:.id,password:.shadowtls_password}],
+        handshake:{server:.sni,server_port:443},strict_mode:true,detour:(.id+"-snell")},
+      {type:"direct",tag:(.id+"-snell"),listen:"127.0.0.1",network:"tcp",override_address:"127.0.0.1",override_port:.local_port}]'
+}
+# Surge proxy line (manual.nssurge.com/policies/snell.html and tls.html#shadow-tls):
+# version must be explicit (Surge assumes v1), mode is v6 only and must match the
+# server, reuse applies to v4 and later; ShadowTLS defaults to version 2, so
+# shadow-tls-version=3 and shadow-tls-sni are written out.
+proto_snell_surge() {
+    printf '%s' '"\(surge_head("snell")), psk=\(.psk), version=\(.snell_version)\(if .snell_version == 6 then ", mode=\(.snell_mode)" else "" end), reuse=true, shadow-tls-password=\(.shadowtls_password), shadow-tls-sni=\(.sni), shadow-tls-version=3"'
+}
+# Snell has no common share link; the Surge line is what its users paste.
+proto_snell_share_uri() { proto_snell_surge; }
+# sing-box 1.14 snell outbound speaks v4 and v6 (v5 is refused); a v5 server accepts
+# v4 clients (kb.nssurge.com release notes). Two outbounds: snell dials through shadowtls.
+proto_snell_client_outbound() {
+    printf '%s' '[base_outbound + {type:"snell",version:(if .snell_version == 6 then 6 else 4 end),psk:.psk,reuse:true,detour:(.name+"-shadowtls")}
+        + (if .snell_version == 6 then {mode:.snell_mode} else {} end),
+      {type:"shadowtls",tag:(.name+"-shadowtls"),server:.host,server_port:.port,version:3,password:.shadowtls_password,tls:{enabled:true,server_name:.sni}}]'
+}
+# mihomo (wiki.metacubex.one/config/proxies/snell): versions 1–5, v5 is sent as v4,
+# v6 is rejected (adapter/outbound/snell.go); ShadowTLS goes in obfs-opts, whose
+# version defaults to 2.
+proto_snell_clash() {
+    printf '%s' 'if .snell_version == 5 then clash_base + {type:"snell",psk:.psk,version:5,udp:true,
+      "obfs-opts":{mode:"shadow-tls",host:.sni,password:.shadowtls_password,version:3}} else empty end'
+}
+proto_snell_note() {
+    printf '%s' '"Snell 没有通用的分享链接，「原始分享链接」和二维码给的是 Surge 配置行；Snell 流量由 snell-server 直接发出，不经过流媒体分流规则。"
+      + (if .snell_version == 6 then "Clash Meta (mihomo) 不支持 Snell v6，要用 Clash Meta 请另部署一个 v5 节点。sing-box 客户端需要 1.14 及以上。"
+         else "v5 的 QUIC 代理模式需要 UDP，经 ShadowTLS 只转发 TCP，QUIC 流量会回落到 TCP。" end)'
+}
+proto_snell_secrets() { printf '%s' '.psk,.shadowtls_password'; }
+# Sets proto_version and proto_mode (locals of node_add) and the handshake target.
+proto_snell_prompt() {
+    [[ -n ${opt_proto_version:-} || ${assume_yes:-0} == 1 ]] ||
+        msg 'Snell 版本：1.v6（推荐；Surge iOS 5.20 / Mac 6.7 起支持） 2.v5（客户端还不支持 v6 时选；Clash Meta 只能用 v5）'
+    ask_opt "${opt_proto_version:-}" 'Snell 版本' 1 || return 1
+    # Menu numbers count only in the menu; the command line takes 6 or 5.
+    case ${opt_proto_version:+cli}$REPLY in 1|6|v6|cli6) proto_version=6;; 2|5|v5|cli5) proto_version=5;; *) err 'Snell 版本只能是 6 或 5。'; return 1;; esac
+    proto_mode=''
+    if [[ $proto_version == 6 ]]; then
+        [[ -n ${opt_proto_mode:-} || ${assume_yes:-0} == 1 ]] ||
+            msg 'Snell v6 模式（客户端要选同一个）：1.default（流量整形 + 加密，推荐） 2.unshaped（只加密，吞吐约高 10%）'
+        ask_opt "${opt_proto_mode:-}" 'Snell 模式' 1 || return 1
+        case ${opt_proto_mode:+cli}$REPLY in 1|default|clidefault) proto_mode=default;; 2|unshaped|cliunshaped) proto_mode=unshaped;; *) err 'Snell 模式只能是 default 或 unshaped。'; return 1;; esac
+    elif [[ -n ${opt_proto_mode:-} ]]; then err '--proto-mode 只适用于 Snell v6。'; return 1; fi
+    msg 'ShadowTLS 借用下面网站的 TLS 1.3 握手：'
+    handshake_target_prompt
+}
+proto_snell_create() {
+    local psk password local_port
+    reality_target_check "$sni" && snell_install "$proto_version" || return 1
+    psk=$(random_hex 16) && password=$(random_hex 16) || return 1
+    # snell-server listens on its own loopback port, never the node port ($port of node_add),
+    # and below Linux's default ephemeral range (32768–60999): a source port of a live
+    # connection could otherwise block snell-server from binding it again on restart.
+    local tries
+    for ((tries=0; tries<100; tries++)); do
+        local_port=$(choose_port) || return 1
+        (( local_port < 32768 )) && [[ $local_port != "$port" ]] && break
+    done
+    (( tries < 100 )) || { err '未找到空闲的本机端口。'; return 1; }
+    REPLY=$(jq -nc --argjson v "$proto_version" --arg m "$proto_mode" --arg psk "$psk" --arg pw "$password" --argjson lp "$local_port" \
+        '{snell_version:$v} + (if $v == 6 then {snell_mode:$m} else {} end) + {psk:$psk,shadowtls_password:$pw,local_port:$lp}')
+}
+proto_snell_rotate() {
+    local psk password
+    psk=$(random_hex 16) && password=$(random_hex 16) || return 1
+    REPLY=$(jq -nc --arg psk "$psk" --arg pw "$password" '{psk:$psk,shadowtls_password:$pw}')
+}
+proto_snell_retarget_label() { printf '切换 ShadowTLS 握手目标（携程 / 西瓜视频）'; }
+proto_snell_retarget_select() { reality_target_select; }
+proto_snell_retarget() { handshake_retarget "$@"; }
+proto_snell_sidecar() { printf '%s' '"srm-snell@\(.id).service"'; }
+# Server configuration as written by `snell-server --wizard` of each version, with
+# listen moved to loopback (v6 `--help` lists listen, psk, mode, dns,
+# dns-ip-preference, ipv6 (deprecated) and egress-interface; the v5 wizard writes
+# listen, psk and ipv6 = false).
+proto_snell_sidecar_render() {
+    local node=$1 dir=$2 major
+    major=$(jq -r .snell_version <<< "$node") || return 1
+    [[ -x $SRM_ROOT/snell/v$major/snell-server ]] || { err "缺少 Snell v$major 服务端程序，请删除此节点后重新部署。"; return 1; }
+    ln -s "$SRM_ROOT/snell/v$major/snell-server" "$dir/snell-server" &&
+    jq -r '"[snell-server]", "listen = 127.0.0.1:\(.local_port)", "psk = \(.psk)",
+      if .snell_version == 6 then "mode = \(.snell_mode)", "dns-ip-preference = default" else "ipv6 = false" end' <<< "$node" > "$dir/snell.conf"
+}
 
 # --- Shadowsocks 2022 --------------------------------------------------------
 # One method; its key is 16 random bytes in base64. TCP and UDP share the port.
@@ -499,6 +682,7 @@ proto_hysteria_rotate() { REPLY=''; with_password; }
 proto_register vless
 proto_register anytls
 proto_register hysteria2
+proto_register snell
 proto_register shadowsocks
 proto_register tuic
 proto_register vlesstls

@@ -14,7 +14,7 @@ done
 echo "PASS srm --help lists all $(printf '%s\n' "$commands" | wc -l | tr -d ' ') subcommands"
 [[ $(bash srm.sh help) == "$help" && $(bash srm.sh add --help) == "$help" && $(bash srm.sh node x -h) == "$help" ]] || fail 'help variants'
 [[ $(bash dist/srm --help) == "$help" ]] || fail 'bundle help differs; run ./build.sh'
-grep -q 'vless anytls hysteria2 shadowsocks tuic vlesstls trojan vmess naive hysteria' <<< "$help" || fail 'help lists registry protocols'
+grep -q 'vless anytls hysteria2 snell shadowsocks tuic vlesstls trojan vmess naive hysteria' <<< "$help" || fail 'help lists registry protocols'
 if grep -q $'\033' <<< "$help"; then fail 'color codes in redirected output'; fi
 echo 'PASS help, -h and the bundle agree; no color codes when not a terminal'
 if bash srm.sh no-such-command > /dev/null 2> "$(mktemp)"; then fail 'unknown command exit 0'; fi
@@ -25,7 +25,7 @@ if bash srm.sh node > /dev/null 2>&1; then fail 'node without ID exit 0'; fi
 echo 'PASS unknown commands and bad arguments exit non-zero'
 source lib/common.sh
 [[ $(bash dist/srm version) == "srm $SRM_VERSION / tested core $CORE_VERSION" ]] || fail version
-[[ $(bash srm.sh protocols | cut -f1,3 | tr '\t\n' ': ') == 'vless:tcp anytls:tcp hysteria2:udp shadowsocks:tcp udp tuic:udp vlesstls:tcp trojan:tcp vmess:tcp naive:tcp hysteria:udp ' ]] || fail protocols
+[[ $(bash srm.sh protocols | cut -f1,3 | tr '\t\n' ': ') == 'vless:tcp anytls:tcp hysteria2:udp snell:tcp shadowsocks:tcp udp tuic:udp vlesstls:tcp trojan:tcp vmess:tcp naive:tcp hysteria:udp ' ]] || fail protocols
 echo 'PASS version and protocol list'
 # main() passes the remaining arguments to each handler unchanged.
 (
