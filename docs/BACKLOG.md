@@ -6,9 +6,7 @@
 
 从上往下做。正在做的条目后面标「（进行中：分支名 时间）」。
 
-- [ ] v4 Hysteria2 端口跳跃（可选）—— 来源：2026-10-10 对比 mack-a/v2ray-agent（提交 5c5e2b7，下称 M，行号指其 install.sh）。国内运营商常对单一 UDP 端口限速或阻断（M issue #1328），M 用 iptables DNAT 或 firewalld 端口转发实现端口跳跃（3222-3290）。要做：Hysteria2 部署时多一个选项「端口跳跃（运营商限制 UDP 时用）」，默认关；开启后选一段端口范围，用 nftables/iptables 把范围内 UDP 转到节点端口，规则带 srm 注释，删节点和卸载时撤掉；分享链接和各客户端片段带上端口范围（按 Hysteria2 官方规范的 `端口,起-止` 写法，客户端不支持的写明）。验收：测试断言开启时生成转发规则、关闭和删节点时撤掉；链接格式有单元测试；CI 全绿。（进行中：agent/1011-hy2-port-hopping 2026-10-11）
-
-- [ ] v4 iptables 规则开机自动补回（没有 netfilter-persistent 的系统）—— 来源：2026-10-10 iptables 后端审查（PR #13）。没装 netfilter-persistent 时，srm 加的 iptables 规则重启后就没了，而系统自己的 REJECT 可能由别的方式恢复，节点要等下次改节点或手动同步才通；现在只打印提示。要做：srm.service 启动前（如 ExecStartPre 或单独的 oneshot）按当前 state 同步一次防火墙端口规则，失败不阻止服务启动。验收：测试断言单元里有这一步、规则缺失时启动后补回；install-live 里真实 systemd 跑通；CI 全绿。
+- [ ] v4 iptables 规则开机自动补回（没有 netfilter-persistent 的系统）—— 来源：2026-10-10 iptables 后端审查（PR #13）。没装 netfilter-persistent 时，srm 加的 iptables 规则重启后就没了，而系统自己的 REJECT 可能由别的方式恢复，节点要等下次改节点或手动同步才通；现在只打印提示。要做：srm.service 启动前（如 ExecStartPre 或单独的 oneshot）按当前 state 同步一次防火墙端口规则，失败不阻止服务启动。验收：测试断言单元里有这一步、规则缺失时启动后补回；install-live 里真实 systemd 跑通；CI 全绿。提示：srm.service 已有 `ExecStartPre=-+/opt/srm/manager.sh hop-sync`（2392455，端口跳跃用，不占 srm 主锁、只读当前那一代的 state），可以把它扩展成同步全部防火墙规则，旧单元的补写机制见 `service_unit_write`。
 
 ## 等主人拍板
 
@@ -28,6 +26,14 @@
 
 ## 已完成
 
+- [x] v4 Hysteria2 端口跳跃 —— 2026-10-11 合并，提交 2392455（PR #16）。
+  - 部署 Hysteria2 时多一问「端口跳跃（运营商限制 UDP、单个端口被限速时用）」：回车 / 1 = 不开，2 = 20000 起第一段空闲的 1000 个端口，3 = 自己填；之后问端口，节点名用默认值。命令行 `srm add hysteria2 --hop off|auto|起-止`。
+  - 服务器把范围内发给本机的 UDP 转到节点端口：有 iptables 用 iptables / ip6tables nat（注释 `srm-hop`），否则 nftables 表 `inet srm_hop`；停用节点、关闭跳跃、删节点、卸载都撤掉；srm.service 每次启动（含重启服务器）先 `hop-sync` 补回。
+  - 客户端：分享链接带 `&mport=起-止`，Surge `port-hopping`、Clash Meta `ports`、sing-box `server_ports` 都带上（完整配置导出也是）；「说明：」给出 Hysteria2 官方 `端口,起-止` 写法的链接。部署完成页提醒云安全组放行跳跃范围。
+  - 节点管理：Hysteria2 节点多「10.端口跳跃」（开 / 关 / 改范围），列表显示「端口 N（跳跃 起–止）」；`srm node ID hop off|auto|起-止`。
+  - 替主人定了：分享链接没用待办写的官方 `端口,起-止`，改用 `mport`（v2rayN 解析不了官方写法会整条导入失败；mack-a、Xboard 给 Shadowrocket 的订阅都用 mport），官方写法放进「说明」；只转发发给本机的包；有 iptables 优先用 iptables，没有才用 nftables；客户端跳跃的端口集合含节点端口本身。理由见 DECISIONS.md「2026-10-11 Hysteria2 端口跳跃」。
+  - 验收：在 GitHub 打开 PR #16，CI「verify」全绿，日志里有 tests/hop.sh 的 14 条 PASS（「share links keep the node port and carry the range in mport …」「enabling port hopping adds an srm-hop REDIRECT rule …」「disabling the node or turning hopping off removes its rule …」「changing the range replaces the rule; deleting the node and uninstalling remove it」等），firewall-live 的「real iptables: UDP to the hop range (IPv4 and IPv6) reaches the node port …」「real nftables: …」，install-live 的「port hopping with real systemd: … the redirect comes back when the service starts …」。菜单样子见 `docs/menu-preview.txt`「Hysteria2（问了端口跳跃和端口…）」和「Hysteria2 节点（…）」两段。服务器上试：Lisa 更新到最新开发版后，菜单「2. 节点管理 → 选 test-hy2 → 10 → 2」，到服务商安全组放行 UDP 20000-20999，`iptables -t nat -S PREROUTING | grep srm-hop` 应有一条；用 Shadowrocket 扫新二维码（看节点详情里端口跳跃是否带上），在中国移动网络下测速；再选「10 → 1」关闭，那条规则应消失。
+  - 没验证：运营商限速下的实际效果；Shadowrocket 读 `mport` 只有面板做法作依据（没有官方说明）、Surge 只做了格式断言。已装好的开发版服务器第一次开启跳跃时会重写 srm.service 单元（补 hop-sync 这行），应用时服务照常重启。
 - [x] v4 部署结果提示与客户端细节 —— 2026-10-11 合并，提交 d10dc10（PR #15）。
   - ① Reality 节点（以及同样用 Vision 流控的 VLESS TLS tcp）的部署结果、「2. 节点管理 → 选节点 → 4. 客户端配置」和 `srm add --json` 的 note 末尾多一句「说明：Shadowrocket 走这个节点时 UDP 不可用，需要 UDP 请用 Hysteria2 / TUIC / AnyTLS（在菜单里选「1. 添加节点」部署）。原因：…网页会自动改走 TCP 照常打开，游戏、语音通话等纯 UDP 应用不通。」ws / grpc / httpupgrade 没有流控，不加。
   - ② 生成配置时用 `ip -6 route get 2606:4700:4700::1111` 查本机有没有 IPv6 路由（只查路由表，不联网；WARP / wg-quick 策略路由补的 IPv6 也算）。没有时 `route.default_domain_resolver` 和流媒体分流 socks 出站的 `domain_resolver` 写成 `{"server":"local","strategy":"ipv4_only"}`；有 IPv6 或没有 ip 命令时保持 `"local"`。
