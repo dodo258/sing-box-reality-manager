@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Optional Linux test: contacts the two public targets, binds only loopback,
+# Optional Linux test: contacts the built-in public targets, binds only loopback,
 # and never changes services, system configuration or firewall rules.
 set -euo pipefail
 [[ ${TEST_REALITY_LIVE:-} == 1 && -n ${TEST_CORE:-} ]] || { echo 'SKIP reality-live.sh：联网测试，设置 TEST_REALITY_LIVE=1 和 TEST_CORE 后运行'; exit 0; }
@@ -18,7 +18,10 @@ pair=$("$CORE" generate reality-keypair)
 private=$(printf '%s\n' "$pair" | awk '/PrivateKey:/{print $2}')
 public=$(printf '%s\n' "$pair" | awk '/PublicKey:/{print $2}')
 uuid=$("$CORE" generate uuid)
-for domain in www.ctrip.com www.ixigua.com; do
+# The two fastest built-in targets from here.
+targets=$(reality_targets_rank | head -n 2 | awk '{print $2}')
+[[ $(wc -w <<< "$targets") == *2 ]] || { echo "FAIL fewer than two built-in targets pass: $targets"; exit 1; }
+for domain in $targets; do
     reality_target_check "$domain"
     jq -n --arg sni "$domain" --arg private "$private" --arg public "$public" --arg uuid "$uuid" \
       --argjson port "$server_port" '{schema:2,policies:[],unlock_dns:null,egress:null,nodes:[

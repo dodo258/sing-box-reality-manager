@@ -6,7 +6,7 @@
 
 从上往下做。正在做的条目后面标「（进行中：分支名 时间）」。
 
-- [ ] v4 Reality 伪装目标不能写死国内网站（实测连不上）—— 2026-10-10 在 Lisa（洛杉矶）实测：同一台服务器、同一个 sing-box 1.14.3、同一部手机（中国移动网络，Shadowrocket），伪装目标 `www.ctrip.com` 时手机的每个连接都在服务端报 `REALITY: processed invalid connection`，完全打不开；只把目标换成 `www.seagate.com` 立刻正常（31 个连接成功转发）。在服务器本机用 sing-box 客户端连 ctrip 版是通的，所以问题出在国内网络到海外 IP 这一段，用国内网站当伪装目标会被干扰。现在 `lib/` 把目标写死成只能选 `www.ctrip.com`、`www.ixigua.com`（继承自 dodo-sbox），`srm add --sni` 和 `srm node … retarget` 也只接受这两个。
+- [ ] v4 Reality 伪装目标不能写死国内网站（实测连不上）—— 2026-10-10 在 Lisa（洛杉矶）实测：同一台服务器、同一个 sing-box 1.14.3、同一部手机（中国移动网络，Shadowrocket），伪装目标 `www.ctrip.com` 时手机的每个连接都在服务端报 `REALITY: processed invalid connection`，完全打不开；只把目标换成 `www.seagate.com` 立刻正常（31 个连接成功转发）。在服务器本机用 sing-box 客户端连 ctrip 版是通的，所以问题出在国内网络到海外 IP 这一段，用国内网站当伪装目标会被干扰。现在 `lib/` 把目标写死成只能选 `www.ctrip.com`、`www.ixigua.com`（继承自 dodo-sbox），`srm add --sni` 和 `srm node … retarget` 也只接受这两个。（进行中：agent/1010-reality-targets 2026-10-10 23:03）
   要做：
   - 内置一份**海外**候选目标列表，作为默认来源（主人在用的节点里实际可用的有 www.seagate.com、www.sennheiser.com、www.jetbrains.com、www.umich.edu），不要再用国内网站。
   - 部署时从服务器上逐个检测候选目标：TLS 1.3、HTTP/2、证书有效、握手耗时；自动选一个耗时低的，回车即用。

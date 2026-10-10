@@ -211,8 +211,13 @@ for line in '  1. 是，先看看能迁移哪些' '  0. 否（以后在菜单「
     grep -qxF -- "$line" "$work/out" || fail "menu lacks: $line"
     grep -qxF -- "$line" docs/menu-preview.txt || fail "docs/menu-preview.txt is out of date: $line"
 done
+# The node keeps its v3 target, though it is not a built-in one, and it is not checked again.
+reality_target_check() { printf '%s\n' "$1" >> "$work/target-checks"; return 1; }
 main <<< $'0\n0\n9\n1\n0' > "$work/out" 2>&1 || fail 'menu item 9 run'
 jq -e '.nodes[0].type == "vless" and .nodes[0].port == 30443' "$STATE" >/dev/null || { cat "$work/out"; fail 'item 9 did not migrate'; }
+[[ " $REALITY_TARGETS " != *' www.example.com '* ]] && jq -e '.nodes[0].sni == "www.example.com"' "$STATE" >/dev/null || fail 'migration changed the Reality target'
+[[ ! -e $work/target-checks ]] || fail 'migration checked or replaced the target'
+unset -f reality_target_check
 # Nothing that can move: shown once, then the menu stops asking.
 load_fixture reality
 rm "$work/v3/sing-box/conf/config/07_VLESS_vision_reality_inbounds.json"
@@ -222,7 +227,7 @@ grep -q '没有可以迁移的节点' "$work/out" || { cat "$work/out"; fail 'no
 main <<< $'0\n0' > "$work/out" 2>&1
 if grep -q '发现旧版节点' "$work/out"; then fail 'offered again with nothing to move'; fi
 grep -q '  9. 迁移旧版节点' "$work/out" || fail 'item 9 gone after a preview with nothing to move'
-echo 'PASS Enter at 确认 / 返回 changes nothing; menu item 9 migrates later; nothing movable is asked once, item 9 stays; docs/menu-preview.txt shows these screens'
+echo 'PASS Enter at 确认 / 返回 changes nothing; menu item 9 migrates later (the Reality target stays as in v3); nothing movable is asked once, item 9 stays; docs/menu-preview.txt shows these screens'
 
 # A failed takeover (health check, sing-box check) brings v3 back as it was.
 load_fixture snell

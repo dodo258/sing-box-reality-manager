@@ -39,13 +39,13 @@ wait_port() {
 
 # The handshake site: TLS 1.3 with a test certificate for the node's target name.
 openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -keyout "$work/key.pem" -out "$work/cert.pem" -days 2 \
-    -subj /CN=www.ctrip.com -addext subjectAltName=DNS:www.ctrip.com > /dev/null 2>&1
+    -subj /CN=www.python.org -addext subjectAltName=DNS:www.python.org > /dev/null 2>&1
 openssl s_server -quiet -accept 18443 -tls1_3 -cert "$work/cert.pem" -key "$work/key.pem" -www > "$work/handshake.log" 2>&1 & pids+=("$!")
 python3 -m http.server 18399 --bind 127.0.0.1 --directory "$work/www" > "$work/http.log" 2>&1 & pids+=("$!")
 
 jq -n --arg a "$(random_hex 16)" --arg b "$(random_hex 16)" --arg c "$(random_hex 16)" --arg d "$(random_hex 16)" '
   def node($id; $name; $port; $lp; $psk; $pw): {id:$id,name:$name,type:"snell",enabled:true,host:"127.0.0.1",port:$port,
-    sni:"www.ctrip.com",psk:$psk,shadowtls_password:$pw,local_port:$lp};
+    sni:"www.python.org",psk:$psk,shadowtls_password:$pw,local_port:$lp};
   {schema:2,policies:[],unlock_dns:null,egress:null,nodes:[
     node("5000000000000001"; "snell-v6"; 18301; 18311; $a; $b) + {snell_version:6,snell_mode:"default"},
     node("5000000000000002"; "snell-v6-unshaped"; 18302; 18312; $c; $b) + {snell_version:6,snell_mode:"unshaped"},
@@ -73,9 +73,9 @@ echo 'PASS snell-server v6 (default, unshaped) and v5 start from the generation 
 for port in 18301 18302 18303 18399 18443; do wait_port "$port" || { cat "$work/server.log"; fail "port $port not listening"; }; done
 # Without the ShadowTLS password the port is the handshake site: a plain TLS client
 # completes TLS 1.3 and sees the site's certificate.
-openssl s_client -connect 127.0.0.1:18301 -servername www.ctrip.com -tls1_3 -verify_return_error -CAfile "$work/cert.pem" < /dev/null > "$work/probe.log" 2>&1 ||
+openssl s_client -connect 127.0.0.1:18301 -servername www.python.org -tls1_3 -verify_return_error -CAfile "$work/cert.pem" < /dev/null > "$work/probe.log" 2>&1 ||
     { cat "$work/probe.log"; fail 'TLS handshake on the ShadowTLS port'; }
-grep -qE '^subject= ?CN ?= ?www.ctrip.com' "$work/probe.log" && grep -q 'TLSv1.3' "$work/probe.log" || { cat "$work/probe.log"; fail 'handshake site certificate'; }
+grep -qE '^subject= ?CN ?= ?www.python.org' "$work/probe.log" && grep -q 'TLSv1.3' "$work/probe.log" || { cat "$work/probe.log"; fail 'handshake site certificate'; }
 echo 'PASS a TLS 1.3 handshake on the ShadowTLS port completes with the handshake site certificate'
 
 fetch_via() { curl --noproxy '' --silent --show-error --fail --max-time 10 --socks5-hostname "$1" http://127.0.0.1:18399/ 2>&1; }

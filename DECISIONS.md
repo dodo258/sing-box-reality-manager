@@ -192,3 +192,24 @@
   - Hysteria2 链接继续带 `alpn=h3`。规范里没有这个参数，v2rayN 和 mihomo 的 alpn 本来就默认 h3。
 - 没验证：Surge iOS 界面上字段的实际叫法（没有官方文档，也没有设备）；AnyTLS 和 TUIC 链接没有在 Shadowrocket 里实测；TUIC 规范要求 `udp_relay_mode`，但 v2rayN 导入时会忽略这个参数。
 - 拍板人：Claude
+
+## 2026-10-10 Reality / ShadowTLS 伪装目标改成海外候选，部署时检测并选最快的
+- 实测结论（2026-10-10，洛杉矶的一台 VPS）：同一台服务器、同一个 sing-box 1.14.3、同一部手机（中国移动网络，Shadowrocket）。伪装目标是 `www.ctrip.com` 时，手机的每个连接在服务端都报 `REALITY: processed invalid connection`，完全打不开；只把目标换成 `www.seagate.com`，立刻正常（31 个连接成功转发）。在服务器本机用 sing-box 客户端连 ctrip 版是通的，所以问题出在国内网络到海外 IP 这一段：国内网站的 SNI 发往海外 IP 会被干扰。结论：内置候选不能用国内网站。
+- 决定：
+  - `lib/protocols.sh` 的 `REALITY_TARGETS` 换成 14 个海外网站（www.jetbrains.com、www.mozilla.org、addons.mozilla.org、www.python.org、www.cisco.com、www.mysql.com、www.oracle.com、www.adobe.com、www.mongodb.com、www.toyota.com、www.harvard.edu、www.stanford.edu、www.tesla.com、www.sony.com）。入选条件：2026-10-10 检查时 TLS 1.3、HTTP/2、证书有效，首页不跳转，`/cdn-cgi/trace` 没有 Cloudflare 的回答，并且分布在 Akamai、CloudFront、Fastly 等不同网络上。没选首页跳到中文站、或走 `cn.edgekey` 的（如 xbox、intel、sap），也没选在国内被封或 SNI 会被阻断的（Google、Wikipedia、Dropbox）。
+  - 检测（`reality_target_check`）：openssl 检查 TLS 1.3、HTTP/2（ALPN h2）和证书，限时 10 秒；再用 curl 请求 `https://<目标>/cdn-cgi/trace`（最长 8 秒），同一个请求的 `time_appconnect` 就是握手耗时（DNS、TCP、TLS 合计）。回答里有 `visit_scheme=` 就说明经 Cloudflare 代理（mack-a 的 `checkRealityDest` 也这么判断）。
+  - 部署时并行检测全部候选（总等待时间约等于一次检测），自动选握手最快的。快速部署不多问问题，仍然是两个问题、回车即可，结果页前会显示「伪装目标：自动选用 X（握手 N ms）」。
+  - 菜单「2. 节点管理 → 选节点 → 10. 更换伪装目标」：列出通过检测的候选（按耗时排序，回车选最快的），也可以自己填域名（同样要通过检测）。换完重新显示分享链接、二维码和各客户端配置。ShadowTLS（Snell 节点）和 Reality 用同一份列表、同一个菜单。
+  - `--sni` 和 `retarget` 接受任何通过检测的域名，不再限定在列表里。
+  - **Cloudflare 的处理和待办写法不完全一样**：内置候选里经 Cloudflare 的网站不会被选中（按待办要求）。但用户自己填的域名如果经 Cloudflare，不拒绝，只给提示后照用。原因：主人实际在用、并且能连通的 4 个目标里，www.seagate.com、www.sennheiser.com、www.umich.edu 这 3 个都经 Cloudflare（2026-10-10 用 Google DNS 按洛杉矶网段查：都解析到 104.18/172.64/162.159 段，`/cdn-cgi/trace` 也有回答）。seagate 已经实测能用，拒绝它会挡住已经证明可用的选择。
+  - 迁移 v3 节点时，伪装目标原样保留，不检测也不替换（`tests/migrate.sh` 断言了这一点）。
+- 备选/被否决的方案：
+  - 列表里直接放主人那 4 个：其中 3 个经 Cloudflare，自动检测会把它们排除，放进去也选不上。
+  - 像 mack-a 那样随机选一个：随机选到的不一定是离服务器近的，按握手耗时选更好。
+  - 快速部署时多问一题「选哪个目标」：违反「快速部署最多两个带默认值的问题」，自动选最快的已经够用，以后想换在节点管理里一键换。
+  - 自定义域名经 Cloudflare 时也拒绝：见上，会挡住已经实测可用的 seagate。
+- 没验证：
+  - 新候选还没在中国移动网络下实测；只能确认它们满足技术条件，而且都是海外网站。
+  - 本机检测走的是本地代理，耗时数字没有参考价值；真实 VPS 上的排序只在单元测试里用模拟数据验证过。
+  - 自定义的国内网站（比如 ctrip）能通过技术检测，脚本识别不出它是国内网站，只能靠内置列表不用它们。
+- 拍板人：Claude

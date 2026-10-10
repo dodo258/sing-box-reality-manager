@@ -15,36 +15,44 @@ uuid=$("$CORE" generate uuid)
 jq -n --arg private "$private" --arg public "$public" --arg uuid "$uuid" \
  '{schema:2,nodes:[{id:"1111111111111111",name:"test",type:"vless",enabled:true,host:"127.0.0.1",port:18101,sni:"www.microsoft.com",uuid:$uuid,private_key:$private,public_key:$public,short_id:"0123456789abcdef"}],policies:[],unlock_dns:null,egress:null}' > "$STATE"
 cp "$STATE" "$work/original.json"
-reality_target_check() { [[ ${probe_failure:-0} == 0 ]]; }
+# 2: passes, but the site is behind Cloudflare.
+reality_target_check() { [[ ${probe_failure:-0} == 0 ]] || return 1; [[ $1 != cf.example.org ]] || return 2; }
 apply_state() {
     render_config "$1" > "$work/config.json" && "$CORE" check -c "$work/config.json" || return 1
     [[ ${apply_failure:-0} == 0 ]] || return 1
     cp "$1" "$STATE"
 }
-node_change 1111111111111111 retarget www.ctrip.com
-jq -e '.nodes[0].sni=="www.ctrip.com"' "$STATE" >/dev/null
+node_change 1111111111111111 retarget www.python.org
+jq -e '.nodes[0].sni=="www.python.org"' "$STATE" >/dev/null
 [[ $(jq -c 'del(.nodes[0].sni)' "$STATE") == "$(jq -c 'del(.nodes[0].sni)' "$work/original.json")" ]] || exit 1
-jq -e '.inbounds[0].tls.server_name=="www.ctrip.com" and .inbounds[0].tls.reality.handshake.server=="www.ctrip.com"' "$work/config.json" >/dev/null
-node_json "$STATE" 1111111111111111 | share_uri | grep -q 'sni=www.ctrip.com'
-node_change 1111111111111111 retarget www.ixigua.com
-node_json "$STATE" 1111111111111111 | share_uri | grep -q 'sni=www.ixigua.com'
+jq -e '.inbounds[0].tls.server_name=="www.python.org" and .inbounds[0].tls.reality.handshake.server=="www.python.org"' "$work/config.json" >/dev/null
+node_json "$STATE" 1111111111111111 | share_uri | grep -q 'sni=www.python.org'
+node_change 1111111111111111 retarget www.mozilla.org
+node_json "$STATE" 1111111111111111 | share_uri | grep -q 'sni=www.mozilla.org'
 echo 'PASS Reality switch updates handshake, SNI and raw URI while preserving credentials and port'
 before=$(sha256 "$STATE")
 probe_failure=1
-! node_change 1111111111111111 retarget www.ctrip.com || exit 1
+! node_change 1111111111111111 retarget www.python.org || exit 1
 [[ $(sha256 "$STATE") == "$before" ]] || exit 1
 probe_failure=0; apply_failure=1
-! node_change 1111111111111111 retarget www.ctrip.com || exit 1
+! node_change 1111111111111111 retarget www.python.org || exit 1
 [[ $(sha256 "$STATE") == "$before" ]] || exit 1
-node_change 1111111111111111 retarget www.ixigua.com >/dev/null
+node_change 1111111111111111 retarget www.mozilla.org >/dev/null
 [[ $(sha256 "$STATE") == "$before" ]] || exit 1
-! node_change 1111111111111111 retarget custom.example.com 2>/dev/null || exit 1
-[[ $(sha256 "$STATE") == "$before" ]] || exit 1
-echo 'PASS failed target check, failed apply, same target and unsupported target do not change state'
+echo 'PASS failed target check, failed apply and the same target do not change state'
+# Any domain outside the built-in list that passes the check is taken; one behind
+# Cloudflare with a warning.
+apply_failure=0
+node_change 1111111111111111 retarget custom.example.org >/dev/null
+jq -e '.nodes[0].sni=="custom.example.org"' "$STATE" >/dev/null
+node_change 1111111111111111 retarget cf.example.org > "$work/out"
+jq -e '.nodes[0].sni=="cf.example.org"' "$STATE" >/dev/null
+grep -q '提示：cf.example.org 经 Cloudflare 代理' "$work/out"
+echo 'PASS a target outside the built-in list that passes the check is accepted; a Cloudflare one with a warning'
 apply_failure=0
 jq '.nodes[0].type="anytls"' "$STATE" > "$work/anytls.json"
 cp "$work/anytls.json" "$STATE"
-! node_change 1111111111111111 retarget www.ctrip.com 2>/dev/null || exit 1
+! node_change 1111111111111111 retarget www.python.org 2>/dev/null || exit 1
 cmp "$STATE" "$work/anytls.json"
 echo 'PASS non-Reality nodes reject a Reality target switch'
 cp "$work/original.json" "$STATE"

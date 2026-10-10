@@ -42,7 +42,7 @@ jq -n --arg uuid "$uuid" --arg pin "$pin" '
    node("100000000000000c"; "hy1-self"; "hysteria"; 20012) + self + {password:"pw"},
    node("100000000000000d"; "hy2-self"; "hysteria2"; 20013) + self + {password:"pw"},
    node("100000000000000e"; "anytls"; "anytls"; 20014) + cert + {password:"pw"},
-   node("100000000000000f"; "reality"; "vless"; 20015) + {sni:"www.ctrip.com",uuid:$uuid,private_key:"priv",public_key:"pub",short_id:"0123456789abcdef"},
+   node("100000000000000f"; "reality"; "vless"; 20015) + {sni:"www.python.org",uuid:$uuid,private_key:"priv",public_key:"pub",short_id:"0123456789abcdef"},
    node("1000000000000010"; "hy2"; "hysteria2"; 20016) + cert + {password:"pw/1"}
   ]}' > "$work/state.json"
 validate_state "$work/state.json" || fail 'fixture state rejected'
@@ -71,7 +71,7 @@ expect 100000000000000c uri 'hysteria://192.0.2.1:20012?protocol=udp&auth=pw&pee
 expect 100000000000000d uri "hysteria2://pw@192.0.2.1:20013/?sni=www.bing.com&insecure=1&pinSHA256=$pin#hy2-self"
 expect 1000000000000010 uri 'hysteria2://pw%2F1@192.0.2.1:20016/?sni=test.example.com#hy2'
 expect 100000000000000e uri 'anytls://pw@192.0.2.1:20014/?sni=test.example.com#anytls'
-expect 100000000000000f uri "vless://$uuid@192.0.2.1:20015?encryption=none&security=reality&type=tcp&flow=xtls-rprx-vision&fp=chrome&sni=www.ctrip.com&pbk=pub&sid=0123456789abcdef#reality"
+expect 100000000000000f uri "vless://$uuid@192.0.2.1:20015?encryption=none&security=reality&type=tcp&flow=xtls-rprx-vision&fp=chrome&sni=www.python.org&pbk=pub&sid=0123456789abcdef#reality"
 # VMess: v2rayN's base64 JSON with string values.
 link=$(node 1000000000000009 | share_uri)
 [[ $link == vmess://* ]] || fail 'vmess scheme'
@@ -142,7 +142,7 @@ expect 1000000000000006 clash '- {"name":"v-grpc","server":"192.0.2.1","port":20
 expect 1000000000000007 clash '- {"name":"v-hu","server":"192.0.2.1","port":20007,"type":"vless","uuid":"'"$uuid"'","tls":true,"servername":"test.example.com","client-fingerprint":"chrome","udp":true,"network":"ws","ws-opts":{"path":"/e5f6","headers":{"Host":"test.example.com"},"v2ray-http-upgrade":true}}'
 expect 1000000000000009 clash '- {"name":"vmess","server":"192.0.2.1","port":20009,"type":"vmess","uuid":"'"$uuid"'","alterId":0,"cipher":"auto","tls":true,"servername":"test.example.com","udp":true,"network":"ws","ws-opts":{"path":"/a7b8","headers":{"Host":"test.example.com"}}}'
 expect 100000000000000c clash '- {"name":"hy1-self","server":"192.0.2.1","port":20012,"type":"hysteria","auth-str":"pw","up":"30 Mbps","down":"100 Mbps","protocol":"udp","sni":"www.bing.com","alpn":["hysteria"],"fingerprint":"'"$pin"'"}'
-expect 100000000000000f clash '- {"name":"reality","server":"192.0.2.1","port":20015,"type":"vless","uuid":"'"$uuid"'","network":"tcp","tls":true,"udp":true,"flow":"xtls-rprx-vision","servername":"www.ctrip.com","reality-opts":{"public-key":"pub","short-id":"0123456789abcdef"},"client-fingerprint":"chrome"}'
+expect 100000000000000f clash '- {"name":"reality","server":"192.0.2.1","port":20015,"type":"vless","uuid":"'"$uuid"'","network":"tcp","tls":true,"udp":true,"flow":"xtls-rprx-vision","servername":"www.python.org","reality-opts":{"public-key":"pub","short-id":"0123456789abcdef"},"client-fingerprint":"chrome"}'
 expect 100000000000000a clash ''
 echo 'PASS Clash Meta snippets, with the certificate fingerprint for self-signed nodes; none for Naive'
 

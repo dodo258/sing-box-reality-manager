@@ -34,10 +34,10 @@ ss() { return 0; }
 sysctl() { return 1; }
 chgrp() { :; }
 apply_state() { validate_state "$1" && mkdir -p "$DATA/current" && cp "$1" "$STATE"; }
-# This server: 192.0.2.10 in Japan. Only www.ixigua.com passes the handshake check,
+# This server: 192.0.2.10 in Japan. Only www.mozilla.org passes the target check,
 # so the automatic pick has to skip the first built-in target.
 detect_public_ip() { PUBLIC_IP=192.0.2.10; PUBLIC_LOC=JP; }
-reality_target_check() { printf '%s\n' "$1" >> "$work/checked"; [[ $1 == www.ixigua.com ]]; }
+reality_target_check() { printf '%s\n' "$1" >> "$work/checked"; [[ $1 == www.mozilla.org ]] && REPLY=35; }
 issue_certificate() { printf 'ISSUE %s %s\n' "$1" "$2"; printf '%s\n' "$1" >> "$work/issued"; }
 cert_auto_mode() { printf 'http\n'; }
 snell_install() { :; }
@@ -52,10 +52,11 @@ questions() { perl -CSD -Mutf8 -ne 'while (/([^：\n]*? \[[^\]]*\]：)/g) { prin
 rm -f "$STATE"
 main <<< $'\n\n\n\n0' > "$work/out" 2>&1 || { cat "$work/out"; fail 'menu exit code'; }
 [[ $(jq '.nodes|length' "$STATE") == 1 ]] || { cat "$work/out"; fail 'no node deployed'; }
-last | jq -e '.type=="vless" and .name=="vless-JP" and .host=="192.0.2.10" and .sni=="www.ixigua.com" and .port >= 10000 and .port <= 50000' >/dev/null ||
+last | jq -e '.type=="vless" and .name=="vless-JP" and .host=="192.0.2.10" and .sni=="www.mozilla.org" and .port >= 10000 and .port <= 50000' >/dev/null ||
     { last; fail 'Reality node fields'; }
 [[ $(questions "$work/out" | tr '\n' '|') == '端口（1–65535，回车随机选一个空闲端口） [随机]：|节点名称 [vless-JP]：|' ]] || { questions "$work/out" | od -c | head; fail "questions asked"; }
-[[ $(cat "$work/checked" | tr '\n' ' ') == 'www.ctrip.com www.ixigua.com ' ]] || fail 'handshake target not picked automatically'
+[[ $(sort "$work/checked" | tr '\n' ' ') == "$(tr ' ' '\n' <<< "$REALITY_TARGETS" | sort | tr '\n' ' ')" ]] || fail 'not every built-in target checked'
+grep -qxF '伪装目标：自动选用 www.mozilla.org（握手 35 ms；以后可以在「2. 节点管理」里更换）' "$work/out" || fail 'picked target not shown'
 [[ ! -e $work/network-calls ]] || { cat "$work/network-calls"; fail 'network access outside the stubs'; }
 echo 'PASS a fresh server deploys VLESS Reality from the menu with Enter only; the target is picked and checked automatically'
 
@@ -69,6 +70,25 @@ if grep -q '已有节点的连接会断开几秒' "$work/out"; then fail 'restar
 # Summary first, menu after it: the deploy output is not scrolled into the menu loop.
 [[ $(grep -n '部署完成' "$work/out" | cut -d: -f1) -lt $(grep -n '1. 添加节点 · 快速部署' "$work/out" | head -n 1 | cut -d: -f1) ]] || fail 'summary order'
 echo 'PASS the summary shows address, cloud firewall ports, link, local QR code and Clash Meta / sing-box / Shadowrocket / v2rayN, without Surge'
+
+# Node management item 10: the checked targets, Enter takes the fastest; the node
+# switches and its link, QR code and client configurations come again.
+reality_target_check() { case $1 in www.mozilla.org) REPLY=35;; www.python.org) REPLY=20;; *) return 1;; esac; }
+id=$(last | jq -r .id)
+main <<< $'2\n1\n10\n\n0' > "$work/out" 2>&1 || { cat "$work/out"; fail 'retarget from the menu'; }
+last | jq -e --arg id "$id" '.id==$id and .sni=="www.python.org"' >/dev/null || { cat "$work/out"; fail 'target not switched'; }
+for want in '10.更换伪装目标（Reality 借用握手的网站）' '  当前：www.mozilla.org' '  1. www.python.org         握手 20 ms（最快）' \
+            '  2. www.mozilla.org        握手 35 ms' '  3. 自己填一个网站域名（同样要通过检测）' '新的客户端配置：' 'sni=www.python.org' '[QR -t UTF8]' '── Shadowrocket：'; do
+    grep -qF -- "$want" "$work/out" || { cat "$work/out"; fail "retarget screen lacks: $want"; }
+done
+# Picking the current target changes nothing and shows no new configuration.
+before=$(sha256 "$STATE")
+main <<< $'2\n1\n10\n\n0' > "$work/out2" 2>&1 || fail 'retarget to the current target'
+[[ $(sha256 "$STATE") == "$before" ]] && grep -q '当前已经使用此目标，无需修改。' "$work/out2" || { cat "$work/out2"; fail 'current target'; }
+if grep -q '新的客户端配置' "$work/out2"; then fail 'configuration shown again without a change'; fi
+line=$(grep -F -m 1 '10.更换伪装目标' "$work/out")
+grep -qxF -- "$line" docs/menu-preview.txt || fail "docs/menu-preview.txt is out of date: $line"
+echo 'PASS node management switches the target with Enter (fastest checked one) and shows the new link, QR code and configurations'
 
 # With nodes the menu no longer jumps into quick deploy; item 1 opens it.
 main <<< $'0' > "$work/out" 2>&1 || fail 'menu with nodes'
