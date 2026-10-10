@@ -127,6 +127,14 @@ done
 grep -q '客户端只能是：clash sing-box surge' "$work/err" || fail 'unknown client message'
 profile_render surge "$STATE" 100000000000000a > /dev/null 2> "$work/err" || true
 grep -q 'Surge 都不支持' "$work/err" || fail 'unsupported node message'
+# A node named like another node's helper outbound: the helper is renamed, its node follows.
+jq '.nodes += [{id:"1000000000000016",name:"snell6-shadowtls",type:"trojan",enabled:true,host:"192.0.2.1",port:20022,
+  sni:"test.example.com",cert_dir:"/c",password:"pw"},{id:"1000000000000017",name:"Direct",type:"trojan",enabled:true,host:"192.0.2.1",port:20023,
+  sni:"test.example.com",cert_dir:"/c",password:"pw"}]' "$STATE" > "$work/helper.json"
+profile_render sing-box "$work/helper.json" > "$work/helper-profile.json" || fail 'helper name clash'
+jq -e '([.outbounds[].tag]|length == (unique|length)) and any(.outbounds[]; .tag == "snell6" and .detour == "snell6-shadowtls (2)")
+  and any(.outbounds[]; .tag == "snell6-shadowtls (2)" and .type == "shadowtls") and any(.outbounds[]; .tag == "snell6-shadowtls" and .type == "trojan")
+  and any(.outbounds[]; .tag == "Direct (2)")' "$work/helper-profile.json" >/dev/null || { jq -c '[.outbounds[]|[.tag,.detour]]' "$work/helper-profile.json"; fail 'helper renamed'; }
 echo 'PASS a single node can be exported; a disabled, unknown or unsupported node, or an unknown app, fails without output'
 
 # One-tap import links, each in the form its app documents or implements:
@@ -268,6 +276,7 @@ echo 'PASS srm profile prints the profile; srm profile-link rejects bad options 
 [[ -n ${TEST_CORE:-} && -n ${TEST_MIHOMO:-} ]] || skip_or_fail "${0##*/}：sing-box check / mihomo -t 需要 TEST_CORE 和 TEST_MIHOMO（CI 会下载）"
 "$TEST_CORE" check -c "$work/sing-box.json" || fail 'sing-box check rejected the profile'
 profile_render sing-box "$STATE" 1000000000000011 > "$work/one.json" && "$TEST_CORE" check -c "$work/one.json" || fail 'sing-box check rejected the single-node profile'
+"$TEST_CORE" check -c "$work/helper-profile.json" || fail 'sing-box check rejected the profile with a renamed helper'
 echo 'PASS sing-box check accepts the whole sing-box profile (every protocol) and a single-node one'
 mkdir -p "$work/mihomo"
 # mihomo loads the geo data GEOSITE / GEOIP need (downloads it on first use, as the apps ship it).

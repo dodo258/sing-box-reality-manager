@@ -32,10 +32,11 @@ profile_nodes() {
     fi
     nodes=$(jq -c --arg id "$id" --arg group "$PROFILE_GROUP" '
       [.nodes[]|select(.enabled and ($id == "" or .id == $id))] |
-      reduce .[] as $n ({out:[],seen:["DIRECT","REJECT","REJECT-DROP","PASS","COMPATIBLE","GLOBAL","direct",$group]};
+      # Compared without case: built-in policies of mihomo, Surge and sing-box.
+      reduce .[] as $n ({out:[],seen:["direct","reject","reject-drop","reject-tinygif","reject-no-drop","pass","compatible","global",$group]};
         .seen as $s |
-        ([range(1; 1000)|(if . == 1 then $n.name else "\($n.name) (\(.))" end) as $c|select(any($s[]; . == $c)|not)|$c][0]) as $name |
-        .out += [$n + {name:$name}] | .seen += [$name]) | .out' "$state") || return 1
+        ([range(1; 1000)|(if . == 1 then $n.name else "\($n.name) (\(.))" end) as $c|select(any($s[]; . == ($c|ascii_downcase))|not)|$c][0]) as $name |
+        .out += [$n + {name:$name}] | .seen += [$name|ascii_downcase]) | .out' "$state") || return 1
     [[ $(jq length <<< "$nodes") -gt 0 ]] || { err '没有启用的节点。'; return 1; }
     printf '%s\n' "$nodes"
 }
@@ -90,7 +91,12 @@ profile_render_sing_box() {
       def rule_set($tag; $repo): {type:"remote",tag:$tag,format:"binary",
         url:"https://raw.githubusercontent.com/SagerNet/\($repo)/rule-set/\($tag).srs",download_detour:$group};
       # A node may need helper outbounds after its own (one dialing through another).
-      [.[]|('"$(proto_jq client_outbound 'error("不支持的协议：\(.type)")')"')|if type == "array" then . else [.] end] as $outs |
+      [.[]|('"$(proto_jq client_outbound 'error("不支持的协议：\(.type)")')"')|if type == "array" then . else [.] end] as $nodes |
+      # A helper named like another node gets " (2)"; its node dials the new name.
+      [$nodes[][0].tag] as $mains |
+      [$nodes[]|. as $o|reduce ([$o[1:][].tag|select(. as $t|any($mains[]; . == $t))][]) as $t ($o;
+        [range(0; length) as $i|.[$i]|(if $i > 0 and .tag == $t then .tag = "\($t) (2)" else . end)
+          |(if .detour == $t then .detour = "\($t) (2)" else . end)])] as $outs |
       {
         log: {level:"warn",timestamp:true},
         dns: {
@@ -180,8 +186,7 @@ body = open(name, "rb").read()
 done = False
 class Handler(http.server.BaseHTTPRequestHandler):
     timeout = 10
-    server_version = "srm"
-    sys_version = ""
+    def version_string(self): return ""
     def log_message(self, *args): pass
     def head(self):
         if self.path != path:
@@ -241,7 +246,7 @@ profile_link() (
     file=$(profile_file "$client")
     profile_python || { err '没有 python3，无法开启临时下载服务；可以改用「导出完整配置」复制文本。'; exit 1; }
     dir=$(mktemp -d) || exit 1
-    trap '[[ -z $server ]] || kill "$server" 2>/dev/null; firewall_sync "$STATE" > /dev/null || err "临时端口没有撤掉，请在菜单「4. 运行状态」里选「重新同步防火墙端口规则」。"; rm -rf "$dir"' EXIT
+    trap 'trap "" INT TERM HUP; [[ -z $server ]] || kill "$server" 2>/dev/null; firewall_sync "$STATE" > /dev/null || err "临时端口没有撤掉，请在菜单「4. 运行状态」里选「重新同步防火墙端口规则」。"; rm -rf "$dir"' EXIT
     trap 'exit 130' INT TERM HUP
     profile_render "$client" "$STATE" "$id" > "$dir/$file" || exit 1
     if [[ -z $port ]]; then port=$(choose_port) || exit 1
