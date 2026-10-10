@@ -15,11 +15,23 @@
   - 迁移 v3 节点时保留原来的目标（例如 seagate），不要强改。
   - 把这次的实测结论写进 DECISIONS。
   验收：`grep` 证明 lib/ 里不再有 ctrip、ixigua 作为默认或唯一选项；测试覆盖「候选检测失败的目标不会被选中」「自定义域名要先通过检测」「retarget 接受列表外但检测通过的域名」；CI 全绿。
+  2026-10-10 对比 mack-a/v2ray-agent（提交 5c5e2b7）补充：
+  - Snell 的 ShadowTLS 也用同一份 `REALITY_TARGETS` 和 `reality_target_select`（`lib/protocols.sh`），菜单文案「携程 / 西瓜视频」也写死了，要一起改；
+  - mack-a 内置 30 多个海外站，回车随机选一个（`install.sh` 9950-10014），并用 `checkRealityDest` 排除走 Cloudflare 代理的目标；我们的候选检测也加这一条：请求 `https://<目标>/cdn-cgi/trace`，有 `visit_scheme=` 就排除。
+  补充验收：模拟 trace 有返回时该候选不被选中；`grep` 证明 ShadowTLS 的目标选择也不再出现 ctrip。
 - [ ] v4 客户端导入修正：分享链接格式与 Surge 导入 —— 2026-10-10 主人在 Lisa 测试机（v4 开发版）实测发现：（进行中：agent/1010-client-import 2026-10-10 22:37）
   1. Hysteria2 分享链接 `hysteria2://密码@IP:端口?sni=…&alpn=h3&insecure=1&pinSHA256=…` 用复制链接的方式导入 Shadowrocket，既不报错也没加上；改成官方规范（https://v2.hysteria.network/docs/developers/URI-Scheme/）的 `端口/?…`、去掉 `alpn` 后，用二维码导入成功（带 pinSHA256 和不带的两个版本都能加进去）。所有协议的分享链接都要对照各自的官方或事实标准规范逐一核对（Hysteria2 / TUIC / VLESS / Trojan / VMess / SS2022 / Hysteria v1），规范里没有的参数不加，在代码注释里写明依据的规范链接。
   2. 手机版 Surge 不能直接粘贴整行配置，主人只能逐项手填 Snell 的 9 个字段。要查清 Surge 官方支持的导入方式（URL scheme、扫码、托管配置等，只用官方文档里写明的），给出新手能一步完成的办法；确实没有就把 Surge 的输出改成逐项列表，字段名和 Surge 新建代理界面的叫法一致，并保留整行写法给 Mac 版和文本编辑用户。
   3. Hysteria2、TUIC 这类只走 UDP 的节点，部署完的提示里加一句：Shadowrocket 等客户端的 TCP 延迟测试对它们显示不出延迟，属于正常；连不上多半是本地网络限制了 UDP，可以换 TCP 类协议（Reality、AnyTLS）。
   验收：每种协议的分享链接都有单元测试，断言与规范格式一致；Hysteria2 链接含 `/?` 且不含 `alpn`；Surge 输出的方案在 DECISIONS 写明依据（官方文档链接）；CI 全绿。
+
+- [ ] v4 防火墙支持 iptables（无 UFW / firewalld 的系统）—— 来源：2026-10-10 对比 mack-a/v2ray-agent（提交 5c5e2b7，下称 M，行号指其 install.sh）。`lib/firewall.sh` 检测不到 UFW / firewalld 时只打印提示，甲骨文这类预装 iptables REJECT 规则的镜像会直接连不上；M 的 `allowPort`（883-892）在 netfilter-persistent 系统插 iptables ACCEPT 并保存。要做：加 iptables / ip6tables 后端，规则插在 REJECT 之前、带 `srm` 注释，用 netfilter-persistent 保存（没有就提示）；删节点、卸载时按注释撤掉，不碰别人的规则。验收：测试用 netfilter-persistent 的模拟环境，断言加节点插入带注释的规则、删节点撤掉、已有规则不变；CI 全绿。
+
+- [ ] v4 完整客户端配置与一键导入（替代旧订阅）—— 来源：2026-10-10 对比 mack-a/v2ray-agent（提交 5c5e2b7，下称 M，行号指其 install.sh）。新手用 Clash Verge、sing-box 官方 App（SFI/SFA）、手机版 Surge 时，光有一段节点片段导入不了；M 靠订阅给出完整配置（`clashMetaConfig` 9216、sing-box 合并 `documents/sing-box.json` 9613 起）。要做：在菜单「节点管理」里加「导出完整配置」，生成可直接导入的完整 mihomo 配置和完整 sing-box 客户端配置（含所选节点、基本分流、DNS），可选全部或单个节点；再加「临时导入链接」：srm 起一个只在随机路径上服务的临时 HTTP 端口，默认 10 分钟或首次下载后自动关闭并撤掉防火墙规则，给出二维码和各 App 的一键导入链接（`sing-box://import-remote-profile?url=` 已在官方文档核实；`clash://install-config?url=`、Surge 的 `install-config` 先查官方文档，查不到的不放）。如果「客户端导入修正」已经确定了 Surge 的导入方式就复用。没有域名只能走 HTTP 时，界面要提示「链接里带节点密码，用完即关」。验收：生成的 mihomo 配置能被 mihomo `-t` 校验、sing-box 配置能被 `sing-box check` 校验；临时链接在超时或下载一次后关闭且防火墙规则被撤掉（测试断言）；一键导入链接的格式有单元测试并注明官方出处；CI 全绿。
+
+- [ ] v4 部署结果提示与客户端细节 —— 来源：2026-10-10 对比 mack-a/v2ray-agent（提交 5c5e2b7，下称 M，行号指其 install.sh）。四件小事一起做：① Shadowrocket 连 VLESS Vision 节点时 UDP 请求不带 flow，sing-box 服务端按规则拒绝（sing-vmess `vless/service.go` 的 flow 必须一致，Lisa 实测日志大量 `flow mismatch`），网页会回落 TCP 照常用，游戏/语音等纯 UDP 不通；Reality 节点的部署结果和导出说明里写一句「Shadowrocket 走这个节点时 UDP 不可用，需要 UDP 请用 Hysteria2 / TUIC / AnyTLS」。② 服务器没有 IPv6 时，sing-box 配置的 `default_domain_resolver` 加 `strategy: ipv4_only`（M 3537 的做法），减少 network unreachable。③ AnyTLS 的 Clash Meta 片段补 `client-fingerprint: chrome` 和 alpn（对照 M 的输出和 mihomo 文档）。④ Naive 链接是否需要 `padding=true` 查客户端文档后决定。验收：测试断言 Reality 节点提示里有这句 UDP 说明；无 IPv6 的模拟环境生成的配置带 ipv4_only、有 IPv6 时不带；AnyTLS Clash 片段含 client-fingerprint；CI 全绿。
+
+- [ ] v4 Hysteria2 端口跳跃（可选）—— 来源：2026-10-10 对比 mack-a/v2ray-agent（提交 5c5e2b7，下称 M，行号指其 install.sh）。国内运营商常对单一 UDP 端口限速或阻断（M issue #1328），M 用 iptables DNAT 或 firewalld 端口转发实现端口跳跃（3222-3290）。要做：Hysteria2 部署时多一个选项「端口跳跃（运营商限制 UDP 时用）」，默认关；开启后选一段端口范围，用 nftables/iptables 把范围内 UDP 转到节点端口，规则带 srm 注释，删节点和卸载时撤掉；分享链接和各客户端片段带上端口范围（按 Hysteria2 官方规范的 `端口,起-止` 写法，客户端不支持的写明）。验收：测试断言开启时生成转发规则、关闭和删节点时撤掉；链接格式有单元测试；CI 全绿。
 
 ## 等主人拍板
 
@@ -34,6 +46,8 @@
   需要主人决定：是否发布。推荐：前面 7 条验收通过后发布。注意：这会改变 main 分支 `install.sh` 的行为，影响所有新安装的人，必须等主人确认。
 
 ## 以后再说
+
+- [ ] 证书支持 DNS API（Cloudflare / 阿里云）和通配符证书 —— 来源：对比 mack-a（M 2050 起，可选 CA 1998）。80 和 443 都被挡的用户现在只能手动导入证书。新手用得少，先不做。
 
 ## 已完成
 
