@@ -2691,7 +2691,7 @@ node_change() {
 }
 node_menu() {
     [[ -f $STATE ]] || { msg '尚无节点。'; return 0; }
-    local count index=0 id name type port status
+    local count index=0 id name type port status current
     count=$(jq '.nodes|length' "$STATE") || return 1
     (( count > 0 )) || { msg '尚无节点，请先部署。'; return 0; }
     msg $'\n已部署节点：'
@@ -2717,7 +2717,9 @@ node_menu() {
       9) yesno '确认删除此节点' && with_lock node_change "$id" delete;;
       10)
         proto_has "$type" retarget_select || { err '此协议的节点不支持切换握手目标。'; return 1; }
-        proto_call "$type" retarget_select "$(node_json "$STATE" "$id" | jq -r '.sni // empty')" || return 0
+        current=$(node_json "$STATE" "$id" | jq -r '.sni // empty')
+        proto_call "$type" retarget_select "$current" || return 0
+        [[ $REPLY != "$current" ]] || { msg '当前已经使用此目标，无需修改。'; return 0; }
         msg '更换后客户端要重新导入（或把 SNI 改成新目标）；端口和凭据不变，应用时节点会断开几秒。'
         if with_lock node_change "$id" retarget "$REPLY"; then
             msg $'\n新的客户端配置：'; node_json "$STATE" "$id" | client_snippets qr

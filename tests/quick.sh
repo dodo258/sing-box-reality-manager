@@ -81,6 +81,11 @@ for want in '10.更换伪装目标（Reality 借用握手的网站）' '  当前
             '  2. www.mozilla.org        握手 35 ms' '  3. 自己填一个网站域名（同样要通过检测）' '新的客户端配置：' 'sni=www.python.org' '[QR -t UTF8]' '── Shadowrocket：'; do
     grep -qF -- "$want" "$work/out" || { cat "$work/out"; fail "retarget screen lacks: $want"; }
 done
+# Picking the current target changes nothing and shows no new configuration.
+before=$(sha256 "$STATE")
+main <<< $'2\n1\n10\n\n0' > "$work/out2" 2>&1 || fail 'retarget to the current target'
+[[ $(sha256 "$STATE") == "$before" ]] && grep -q '当前已经使用此目标，无需修改。' "$work/out2" || { cat "$work/out2"; fail 'current target'; }
+if grep -q '新的客户端配置' "$work/out2"; then fail 'configuration shown again without a change'; fi
 line=$(grep -F -m 1 '10.更换伪装目标' "$work/out")
 grep -qxF -- "$line" docs/menu-preview.txt || fail "docs/menu-preview.txt is out of date: $line"
 echo 'PASS node management switches the target with Enter (fastest checked one) and shows the new link, QR code and configurations'
