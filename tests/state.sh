@@ -185,6 +185,8 @@ done
 printf '#!/usr/bin/env bash\ncase $2 in reality-keypair) printf "PrivateKey: priv%%s\\nPublicKey: pub%%s\\n" $RANDOM $RANDOM;; uuid) printf "%%s\\n" 0f2a6c1e-3b4d-4e5f-8a9b-$(openssl rand -hex 6);; esac\n' > "$work/core"
 ensure_dependencies() { return 0; }
 reality_target_check() { return 0; }
+# Certificate domains resolve to the node's address.
+resolve_domain() { printf '192.0.2.1\n'; }
 ss() { return 0; }
 sysctl() { return 1; }
 cp "$work/v2.json" "$STATE"

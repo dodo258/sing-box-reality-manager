@@ -7,11 +7,16 @@
 #   share_uri        jq string: raw share link (Shadowrocket, v2rayN and others import it)
 #   client_outbound  jq object: sing-box client outbound
 #   secrets          jq paths hidden from node details
-#   prompt           ask protocol options; sets sni (empty when unused) plus its own option variables
+#   domain           none | optional | required: whether the protocol needs a domain for a
+#                    certificate (optional: a self-signed certificate without one)
+#   link_clients     apps that import the raw share link (Shadowrocket v2rayN), empty for none
+#   prompt           set protocol options from node_add's opt_* variables or their defaults
+#                    (no questions); sets sni (empty when unused or picked at create)
 #   create           generate credentials after confirmation; REPLY = JSON fields
 #   rotate           new credentials; REPLY = JSON fields to merge into the node
 # Optional: clash (jq object: Clash Meta / mihomo proxy), surge (jq string: Surge proxy line),
-# note (jq string shown with the client snippets), retarget_label / retarget_select /
+# note (jq string shown with the client snippets), hint (text in the quick-deploy list),
+# variant (the protocol's one menu question; sets node_add's opt_* variables), retarget_label / retarget_select /
 # retarget (change a TLS handshake target), and the sidecar pair for a protocol served
 # by its own program next to sing-box: sidecar (jq string: systemd unit of the node,
 # which listens on 127.0.0.1:.local_port) and sidecar_render NODE DIR (writes the
@@ -21,8 +26,10 @@
 # (jq string: the program variant a node runs, e.g. "v6"), program_path KEY,
 # program_current KEY (installed version), program_latest KEY… (one network lookup;
 # prints KEY<TAB>VERSION lines) and program_fetch KEY VERSION TARGET (download and verify).
-PROTO_HOOKS='label transport validate render_inbound share_uri client_outbound secrets prompt create rotate'
+PROTO_HOOKS='label transport domain link_clients validate render_inbound share_uri client_outbound secrets prompt create rotate'
 PROTOCOLS=''
+# First page of the quick-deploy list, in this order; the rest are under 「更多协议」.
+QUICK_PROTOCOLS='vless hysteria2 snell anytls'
 PROTO_JQ_DEFS='
   def base_inbound: {tag:.id,listen:(.listen // "::"),listen_port:.port};
   def base_outbound: {tag:.name,server:.host,server_port:.port};
@@ -107,6 +114,9 @@ proto_labels() {
 REALITY_TARGETS='www.ctrip.com www.ixigua.com'
 proto_vless_label() { printf 'VLESS Reality'; }
 proto_vless_transport() { printf 'tcp'; }
+proto_vless_domain() { printf 'none'; }
+proto_vless_link_clients() { printf 'Shadowrocket v2rayN'; }
+proto_vless_hint() { printf '推荐 · 不需要域名 · 回车即可'; }
 proto_vless_validate() {
     printf '%s' '(.sni|text) and (.uuid|test("^[a-f0-9-]{36}$")) and (.private_key|text) and (.public_key|text) and (.short_id|test("^[a-f0-9]{16}$"))'
 }
@@ -127,7 +137,7 @@ proto_vless_secrets() { printf '%s' '.uuid,.private_key,.public_key,.short_id'; 
 proto_vless_prompt() { handshake_target_prompt; }
 proto_vless_create() {
     local pair private public uuid short
-    reality_target_check "$sni" || return 1
+    handshake_target_ready || return 1
     pair=$("$CORE" generate reality-keypair) || return 1
     private=$(printf '%s\n' "$pair" | awk '/PrivateKey:/{print $2}')
     public=$(printf '%s\n' "$pair" | awk '/PublicKey:/{print $2}')
@@ -146,12 +156,22 @@ proto_vless_retarget_select() { reality_target_select; }
 # REPLY = JSON fields to merge, or empty when the node already uses the target.
 proto_vless_retarget() { handshake_retarget "$@"; }
 # Reality and ShadowTLS borrow the TLS 1.3 handshake of the same vetted sites.
+# Without --sni the target is picked at create time (handshake_target_ready).
 handshake_target_prompt() {
-    if [[ -n ${opt_sni:-} ]]; then
-        reality_target_allowed "$opt_sni" || return 1
-        sni=$opt_sni
-    elif [[ ${assume_yes:-0} == 1 ]]; then sni=${REALITY_TARGETS%% *}
-    else reality_target_select || return 1; sni=$REPLY; fi
+    sni=''
+    [[ -n ${opt_sni:-} ]] || return 0
+    reality_target_allowed "$opt_sni" || return 1
+    sni=$opt_sni
+}
+# At create, with dependencies installed: checks the chosen target, or takes the
+# first built-in one that passes the check, so users never have to find one.
+handshake_target_ready() {
+    local target
+    if [[ -n $sni ]]; then reality_target_check "$sni"; return; fi
+    for target in $REALITY_TARGETS; do
+        if reality_target_check "$target" 2>/dev/null; then sni=$target; return 0; fi
+    done
+    err '内置的握手目标都没有通过检查，请检查本机 DNS / 网络 / 系统时间后重试。'; return 1
 }
 handshake_retarget() {
     local node=$1 target=$2
@@ -196,38 +216,34 @@ reality_target_check() {
 # A protocol whose clients can pin a certificate passes "selfsigned": it then also
 # offers a self-signed certificate, the default when the server has no domain.
 SELF_SIGNED_SNI=www.bing.com
+# No questions: node_add has asked for the domain already. The method comes from
+# --cert, else a self-signed certificate when allowed and there is no domain, else
+# Let's Encrypt with automatic validation (node_add offers the other methods in
+# the menu when 80 and 443 are both taken).
 tls_prompt() {
-    local allow=${1:-} default=1 domain=''
+    local allow=${1:-} default=auto domain=''
     # valid_domain also accepts dotted IPv4 addresses, which cannot get a certificate.
     if [[ ! $host =~ ^[0-9.]+$ ]] && valid_domain "$host"; then domain=$host; fi
-    # Without any domain (no domain host, no --sni) the self-signed certificate is the default.
-    [[ $allow != selfsigned || -n $domain || -n ${opt_sni:-} ]] || default=4
-    if [[ -z ${opt_cert:-} && ${assume_yes:-0} != 1 ]]; then
-        msg 'Lets Encrypt 免费证书：1.自动验证（使用空闲 80 或 443） 2.现有网站目录验证（网站保持运行） 3.导入已有证书'
-        [[ $allow != selfsigned ]] || msg '不用域名：4.自签证书（客户端按证书指纹校验）'
-    fi
-    ask_opt "${opt_cert:-}" '证书方式' "$default" || return 1
-    case $REPLY in
-      1|auto) mode=auto;;
-      2|webroot) mode=webroot;;
-      3|import) mode=import;;
-      4|selfsigned)
+    [[ $allow != selfsigned || -n $domain || -n ${opt_sni:-} ]] || default=selfsigned
+    case ${opt_cert:-$default} in
+      auto) mode=auto;;
+      webroot) mode=webroot;;
+      import) mode=import;;
+      selfsigned)
         [[ $allow == selfsigned ]] || { err '此协议需要域名证书，不支持自签证书。'; return 1; }
         mode=selfsigned; sni=${opt_sni:-$SELF_SIGNED_SNI}; return 0;;
-      *) err '证书方式无效。'; return 1;;
+      *) err '证书方式只能是 auto、webroot、import 或 selfsigned。'; return 1;;
     esac
-    ask_opt "${opt_sni:-}" '证书域名（需解析到本机）' "$domain" || return 1; sni=$REPLY
+    sni=${opt_sni:-$domain}
+    [[ -n $sni ]] || { err '非交互模式缺少参数：证书域名（--domain）'; return 1; }
     case $mode in
       webroot) ask_opt "${opt_webroot:-}" '现有网站根目录绝对路径' || return 1; webroot=$REPLY;;
       import)
         ask_opt "${opt_cert_file:-}" '完整证书链绝对路径' || return 1; cert=$REPLY
         ask_opt "${opt_key_file:-}" '私钥绝对路径' || return 1; key=$REPLY;;
     esac
-    if [[ $mode != import ]]; then
-        ask_opt "${opt_email:-}" '证书联系邮箱（可留空）' '' 1 || return 1; email=$REPLY
-        [[ -z $email || $email == *@*.* ]] || { err '邮箱格式不正确。'; return 1; }
-        msg '自动申请使用 Lets Encrypt；继续表示同意该机构的服务条款。'
-    fi
+    email=${opt_email:-}
+    [[ -z $email || $email == *@*.* ]] || { err '邮箱格式不正确。'; return 1; }
 }
 # REPLY = certificate fields of the node: cert_dir, plus the pins of a self-signed one.
 tls_create() {
@@ -279,6 +295,9 @@ UUID_VALID='(.uuid|test("^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-
 # --- AnyTLS ------------------------------------------------------------------
 proto_anytls_label() { printf 'AnyTLS'; }
 proto_anytls_transport() { printf 'tcp'; }
+proto_anytls_domain() { printf 'required'; }
+proto_anytls_link_clients() { printf 'Shadowrocket v2rayN'; }
+proto_anytls_hint() { printf '需要域名'; }
 proto_anytls_validate() { printf '%s and (.password|text)' "$(tls_validate)"; }
 proto_anytls_render_inbound() {
     printf '%s' '[base_inbound + {type:"anytls",users:[{name:.id,password:.password}],tls:({enabled:true,server_name:.sni} + tls_files)}]'
@@ -295,6 +314,9 @@ proto_anytls_rotate() { REPLY=''; with_password; }
 # --- Hysteria2 ---------------------------------------------------------------
 proto_hysteria2_label() { printf 'Hysteria2'; }
 proto_hysteria2_transport() { printf 'udp'; }
+proto_hysteria2_domain() { printf 'optional'; }
+proto_hysteria2_link_clients() { printf 'Shadowrocket v2rayN'; }
+proto_hysteria2_hint() { printf '弱网/丢包环境 · 不需要域名'; }
 proto_hysteria2_validate() { proto_anytls_validate; }
 proto_hysteria2_render_inbound() {
     printf '%s' '[base_inbound + {type:"hysteria2",users:[{name:.id,password:.password}],tls:({enabled:true,server_name:.sni,alpn:["h3"]} + tls_files)}]'
@@ -409,6 +431,10 @@ UNIT
 }
 proto_snell_label() { printf 'Snell + ShadowTLS（Surge）'; }
 proto_snell_transport() { printf 'tcp'; }
+proto_snell_domain() { printf 'none'; }
+# Shadowrocket and v2rayN cannot import the Surge line.
+proto_snell_link_clients() { :; }
+proto_snell_hint() { printf 'Surge 用户 · 不需要域名'; }
 proto_snell_validate() {
     printf '%s' '(.sni|text) and (.psk|test("^[a-f0-9]{32}$")) and (.shadowtls_password|test("^[a-f0-9]{32}$")) and
       (.local_port|type == "number" and floor == . and . >= 1 and . <= 65535) and
@@ -453,24 +479,30 @@ proto_snell_note() {
 proto_snell_secrets() { printf '%s' '.psk,.shadowtls_password'; }
 # Sets proto_version and proto_mode (locals of node_add) and the handshake target.
 proto_snell_prompt() {
-    [[ -n ${opt_proto_version:-} || ${assume_yes:-0} == 1 ]] ||
-        msg 'Snell 版本：1.v6（推荐；Surge iOS 5.20 / Mac 6.7 起支持） 2.v5（客户端还不支持 v6 时选；Clash Meta 只能用 v5）'
-    ask_opt "${opt_proto_version:-}" 'Snell 版本' 1 || return 1
-    # Menu numbers count only in the menu; the command line takes 6 or 5.
-    case ${opt_proto_version:+cli}$REPLY in 1|6|v6|cli6) proto_version=6;; 2|5|v5|cli5) proto_version=5;; *) err 'Snell 版本只能是 6 或 5。'; return 1;; esac
+    case ${opt_proto_version:-6} in 6|v6) proto_version=6;; 5|v5) proto_version=5;; *) err 'Snell 版本只能是 6 或 5。'; return 1;; esac
     proto_mode=''
     if [[ $proto_version == 6 ]]; then
-        [[ -n ${opt_proto_mode:-} || ${assume_yes:-0} == 1 ]] ||
-            msg 'Snell v6 模式（客户端要选同一个）：1.default（流量整形 + 加密，推荐） 2.unshaped（只加密，吞吐约高 10%）'
-        ask_opt "${opt_proto_mode:-}" 'Snell 模式' 1 || return 1
-        case ${opt_proto_mode:+cli}$REPLY in 1|default|clidefault) proto_mode=default;; 2|unshaped|cliunshaped) proto_mode=unshaped;; *) err 'Snell 模式只能是 default 或 unshaped。'; return 1;; esac
+        case ${opt_proto_mode:-default} in default|unshaped) proto_mode=${opt_proto_mode:-default};; *) err 'Snell 模式只能是 default 或 unshaped。'; return 1;; esac
     elif [[ -n ${opt_proto_mode:-} ]]; then err '--proto-mode 只适用于 Snell v6。'; return 1; fi
-    msg 'ShadowTLS 借用下面网站的 TLS 1.3 握手：'
     handshake_target_prompt
+}
+# The one menu question: version and v6 mode together.
+proto_snell_variant() {
+    msg $'Snell 版本（客户端要选同一个）：\n  1. v6 · default 模式（推荐；Surge iOS 5.20 / Mac 6.7 起支持）\n  2. v6 · unshaped 模式（只加密，吞吐约高 10%）\n  3. v5（客户端还不支持 v6 时选；Clash Meta 只能用 v5）'
+    while :; do
+        ask 'Snell 版本' 1 || return 1
+        case $REPLY in
+          1) opt_proto_version=6; opt_proto_mode=default;;
+          2) opt_proto_version=6; opt_proto_mode=unshaped;;
+          3) opt_proto_version=5; opt_proto_mode='';;
+          *) err '请选择 1–3。'; continue;;
+        esac
+        return 0
+    done
 }
 proto_snell_create() {
     local psk password local_port
-    reality_target_check "$sni" && snell_install "$proto_version" || return 1
+    handshake_target_ready && snell_install "$proto_version" || return 1
     psk=$(random_hex 16) && password=$(random_hex 16) || return 1
     # snell-server listens on its own loopback port, never the node port ($port of node_add),
     # and below Linux's default ephemeral range (32768–60999): a source port of a live
@@ -531,6 +563,8 @@ proto_snell_sidecar_render() {
 SS_METHOD=2022-blake3-aes-128-gcm
 proto_shadowsocks_label() { printf 'Shadowsocks 2022'; }
 proto_shadowsocks_transport() { printf 'tcp udp'; }
+proto_shadowsocks_domain() { printf 'none'; }
+proto_shadowsocks_link_clients() { printf 'Shadowrocket v2rayN'; }
 proto_shadowsocks_validate() {
     printf '%s' '.sni == null and .method == "'"$SS_METHOD"'" and (.password|test("^[A-Za-z0-9+/]{22}==$"))'
 }
@@ -554,6 +588,8 @@ proto_shadowsocks_rotate() {
 # --- TUIC v5 -----------------------------------------------------------------
 proto_tuic_label() { printf 'TUIC v5'; }
 proto_tuic_transport() { printf 'udp'; }
+proto_tuic_domain() { printf 'optional'; }
+proto_tuic_link_clients() { printf 'Shadowrocket v2rayN'; }
 proto_tuic_validate() { printf '%s and %s and (.password|text)' "$(tls_validate)" "$UUID_VALID"; }
 proto_tuic_render_inbound() {
     printf '%s' '[base_inbound + {type:"tuic",users:[{name:.id,uuid:.uuid,password:.password}],congestion_control:"bbr",tls:({enabled:true,server_name:.sni,alpn:["h3"]} + tls_files)}]'
@@ -579,6 +615,8 @@ proto_tuic_rotate() { REPLY=''; with_uuid && with_password; }
 # path, grpc a random service name. ws and httpupgrade can sit behind a CDN.
 proto_vlesstls_label() { printf 'VLESS TLS'; }
 proto_vlesstls_transport() { printf 'tcp'; }
+proto_vlesstls_domain() { printf 'required'; }
+proto_vlesstls_link_clients() { printf 'Shadowrocket v2rayN'; }
 proto_vlesstls_validate() {
     printf '%s and %s and %s' "$(tls_validate)" "$UUID_VALID" '(
       (.transport == "tcp") or
@@ -616,16 +654,24 @@ proto_vlesstls_clash() {
     printf '%s' 'clash_base + {type:"vless",uuid:.uuid,tls:true,servername:.sni,"client-fingerprint":"chrome",udp:true} + stream_clash'
 }
 proto_vlesstls_secrets() { printf '%s' '.uuid'; }
-# Sets stream (a local of node_add) from --transport or the menu.
+# Sets stream (a local of node_add) from --transport; tcp by default.
 proto_vlesstls_prompt() {
     tls_prompt || return 1
-    [[ -n ${opt_transport:-} || ${assume_yes:-0} == 1 ]] ||
-        msg '传输方式：1.tcp（Vision，直连最快） 2.ws（可套 CDN） 3.grpc 4.httpupgrade（可套 CDN）'
-    ask_opt "${opt_transport:-}" '传输方式' 1 || return 1
-    case $REPLY in
-      1|tcp) stream=tcp;; 2|ws) stream=ws;; 3|grpc) stream=grpc;; 4|httpupgrade) stream=httpupgrade;;
+    case ${opt_transport:-tcp} in
+      tcp|ws|grpc|httpupgrade) stream=${opt_transport:-tcp};;
       *) err '传输方式只能是 tcp、ws、grpc 或 httpupgrade。'; return 1;;
     esac
+}
+proto_vlesstls_variant() {
+    msg $'传输方式：\n  1. tcp（Vision，直连最快）\n  2. ws（可套 CDN）\n  3. grpc\n  4. httpupgrade（可套 CDN）'
+    while :; do
+        ask '传输方式' 1 || return 1
+        case $REPLY in
+          1) opt_transport=tcp;; 2) opt_transport=ws;; 3) opt_transport=grpc;; 4) opt_transport=httpupgrade;;
+          *) err '请选择 1–4。'; continue;;
+        esac
+        return 0
+    done
 }
 proto_vlesstls_create() {
     local route
@@ -638,6 +684,8 @@ proto_vlesstls_rotate() { REPLY=''; with_uuid; }
 # --- Trojan ------------------------------------------------------------------
 proto_trojan_label() { printf 'Trojan'; }
 proto_trojan_transport() { printf 'tcp'; }
+proto_trojan_domain() { printf 'required'; }
+proto_trojan_link_clients() { printf 'Shadowrocket v2rayN'; }
 proto_trojan_validate() { proto_anytls_validate; }
 proto_trojan_render_inbound() {
     printf '%s' '[base_inbound + {type:"trojan",users:[{name:.id,password:.password}],tls:({enabled:true,server_name:.sni} + tls_files)}]'
@@ -655,6 +703,8 @@ proto_trojan_rotate() { REPLY=''; with_password; }
 # alterId 0: VMess AEAD only. Kept for older clients.
 proto_vmess_label() { printf 'VMess TLS+ws'; }
 proto_vmess_transport() { printf 'tcp'; }
+proto_vmess_domain() { printf 'required'; }
+proto_vmess_link_clients() { printf 'Shadowrocket v2rayN'; }
 proto_vmess_validate() { printf '%s and %s and %s' "$(tls_validate)" "$UUID_VALID" '(.path|test("^/[A-Za-z0-9_-]+$"))'; }
 proto_vmess_render_inbound() {
     printf '%s' '[base_inbound + {type:"vmess",users:[{name:.id,uuid:.uuid,alterId:0}],
@@ -689,6 +739,8 @@ proto_vmess_rotate() { REPLY=''; with_uuid; }
 # so the link uses sni as its host. Clash Meta and Surge have no naive client.
 proto_naive_label() { printf 'Naive'; }
 proto_naive_transport() { printf 'tcp'; }
+proto_naive_domain() { printf 'required'; }
+proto_naive_link_clients() { printf 'v2rayN'; }
 proto_naive_validate() { printf '%s and (.username|test("^[a-f0-9]{12}$")) and (.password|text)' "$(tls_validate)"; }
 proto_naive_render_inbound() {
     printf '%s' '[base_inbound + {type:"naive",network:"tcp",users:[{username:.username,password:.password}],tls:({enabled:true,server_name:.sni} + tls_files)}]'
@@ -709,6 +761,9 @@ proto_naive_rotate() { REPLY=''; with_password; }
 # 100 Mbps down, which users can raise in their client.
 proto_hysteria_label() { printf 'Hysteria v1（兼容老客户端）'; }
 proto_hysteria_transport() { printf 'udp'; }
+proto_hysteria_domain() { printf 'optional'; }
+proto_hysteria_link_clients() { printf 'Shadowrocket'; }
+proto_hysteria_hint() { printf '兼容老客户端 · 不需要域名'; }
 proto_hysteria_validate() { proto_anytls_validate; }
 proto_hysteria_render_inbound() {
     printf '%s' '[base_inbound + {type:"hysteria",up_mbps:1000,down_mbps:1000,users:[{name:.id,auth_str:.password}],

@@ -125,3 +125,20 @@
 - 理由：主人定的「后台只查、菜单提示、手动更新」；`/releases/latest` 一次只下 300 多 KB，列表接口一页 10 条就 3.5MB；只查在用的大版本避免没有 Snell 的用户每天访问第三方网站。
 - 备选/被否决的方案：拉 Release 列表自行挑稳定版（体积大，翻页才能保证找到）；Snell 新构建要求固定 SHA256（每出一个构建都要发新脚本，等于不能跟进）；timer 命名 `srm-update-*`（和「不自动更新」的守护测试冲突，也容易误解为自动更新）。
 - 拍板人：Claude
+
+## 2026-10-10 快速部署流程与客户端配置片段
+- 决定：
+  - 菜单「1. 添加节点 · 快速部署」、没有节点时打开 `srm` 直接进入的列表、`srm add`（不带 `--yes`）共用同一套流程：先选协议（1 VLESS Reality 回车即选；2 Hysteria2；3 Snell + ShadowTLS；4 AnyTLS；5 更多协议，不需要域名的排前面），之后只问：需要证书的协议的域名（唯一手填的内容），再加最多 2 个带默认值的问题，按「协议自己的一个问题 → 端口 → 节点名」取前两个。所以 Reality / Hysteria2 / AnyTLS 等问端口和节点名；Snell 问「版本+模式」（v6 default / v6 unshaped / v5 合成一题）和端口，节点名用默认值（节点管理里能改）；VLESS TLS 问传输方式和端口。
+  - 不再提问的：服务器地址（部署时访问 `https://www.cloudflare.com/cdn-cgi/trace` 取公网 IP 和国家代码，先 IPv4 后 IPv6，各 8 秒超时，写进 state；查不到时菜单里让用户填，`--yes` 报错要 `--host`）；Reality / ShadowTLS 握手目标（按内置列表依次做 TLS 1.3 + h2 + 证书链检查，取第一个通过的）；证书方式（无域名且协议能用自签时自签，否则 Let's Encrypt 自动验证；80 和 443 都被占时菜单里才给「网站目录验证 / 导入证书」两个选项）；BBR（默认保持现状，在菜单 6 里开）；部署前的 y/N 确认（只用数字和回车，任一步输入 0 返回）。
+  - 节点名默认「协议-国家代码」，如 `vless-JP`，重名自动编号；查不到国家时用协议名。
+  - 域名先检查再申请证书：`getent ahosts` 的结果要包含本机地址（节点地址、检测到的公网 IP、本机网卡地址之一）。菜单里当场提示，并给「1 重新检查 / 2 换一个域名 / 3 没有域名，换一个协议 / 4 仍然申请（开了 CDN 代理时）/ 0 返回」；域名那一步直接回车也等于「没有域名，换一个协议」。命令行解析不对就报错退出，开了 CDN 的用户改用 `--cert webroot` 或 `--cert import`（这两种方式和已有有效证书时不检查解析）。
+  - 部署完一屏给全：服务器和端口、云安全组要放行的 TCP/UDP 端口、分享链接和本地二维码，以及 Surge / Clash Meta / sing-box / Shadowrocket / v2rayN 里该协议支持的几段；不支持的客户端不出现。节点管理「4. 客户端配置」用同一个函数。`srm add … --json` 输出同样的内容（`share_link`、`firewall`、`clients.{surge,clash_meta,sing_box,shadowrocket,v2rayn}`，没有的键不出现；Snell 没有 `share_link`），进度信息写到 stderr。
+  - 注册表新增必需钩子 `domain`（none / optional / required）和 `link_clients`（能导入分享链接的客户端），可选钩子 `hint`（列表说明）和 `variant`（协议自己的那一个问题）；第一页的协议和顺序是 `QUICK_PROTOCOLS`。新协议注册后自动出现在「更多协议」里。
+  - 能导入分享链接的客户端：v2rayN 按它的源码（`ServiceLib/Enums/EConfigType.cs` 和 `Handler/Fmt/`，7.25.4）支持 VMess、Shadowsocks、VLESS、Trojan、Hysteria2、TUIC、AnyTLS、Naive，不支持 Hysteria v1 和 Snell。Shadowrocket 没有公开的协议清单：AnyTLS 按 App Store 版本说明（2.2.64 起）；VLESS Reality、Hysteria v1/v2、TUIC、Trojan、VMess、SS2022 按社区普遍用法；Naive 查不到可靠来源，不列；Snell 的分享内容是 Surge 配置行，两者都不能导入。
+  - `srm add` 新增 `--domain`（证书域名，不需要域名的协议拒绝）和 `--json`；`--host` 改为可选。`--cert` 只接受 auto/webroot/import/selfsigned（菜单不再问证书方式，数字写法去掉了）。
+  - `srm install` 在终端里运行完会直接打开菜单（没有节点就是快速部署）；非终端（自动化、CI）不进菜单。
+  - 已有启用的节点时，添加节点前显示一句「应用新配置会重启服务，已有节点的连接会断开几秒」，不再二次确认（方案「更新」一节）。
+- 理由：方案「交互原则」「部署流程」；主人要新手只用选、不用填。
+- 备选/被否决的方案：每个协议都问端口和节点名、Snell 版本另问（Snell 会有 3 个问题，超过方案的上限）；用第三方 GeoIP 接口查地区（多一个请求，Cloudflare trace 一次就带国家代码）；域名解析不对直接拒绝（开了 CDN 代理的用户也能用 http-01 申请证书，所以菜单留「仍然申请」，命令行留 webroot/import）；Shadowrocket 按协议全部列出（没有官方清单，不确定的宁可不列）。
+- 没验证：Shadowrocket、v2rayN 的实际导入（没有 iOS/Windows 环境，只按源码和链接格式）；真实 Cloudflare trace 和 `getent` 只在代码里调用，测试里用替身；真实 Let's Encrypt 申请仍没有在测试里跑。
+- 拍板人：Claude

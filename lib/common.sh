@@ -142,6 +142,43 @@ core_download() {
     msg "改为安装本脚本测试过的 sing-box $CORE_VERSION。"
     core_fetch "$1" "$CORE_VERSION" "$(core_pinned_hash)"
 }
+# Public address of this server as the internet sees it (IPv4 first) and its country
+# code, looked up once when deploying; viewing nodes never needs it again.
+PUBLIC_IP=''
+PUBLIC_LOC=''
+detect_public_ip() {
+    [[ -z $PUBLIC_IP ]] || return 0
+    local family out ip
+    for family in 4 6; do
+        out=$(curl "-$family" --proto '=https' --fail --silent --connect-timeout 5 --max-time 8 https://www.cloudflare.com/cdn-cgi/trace 2>/dev/null) || continue
+        ip=$(sed -n 's/^ip=//p' <<< "$out" | head -n 1)
+        valid_ip "$ip" || continue
+        PUBLIC_IP=$ip
+        PUBLIC_LOC=$(sed -n 's/^loc=//p' <<< "$out" | head -n 1)
+        # XX: unknown, T1: Tor.
+        [[ $PUBLIC_LOC =~ ^[A-Z]{2}$ && $PUBLIC_LOC != XX && $PUBLIC_LOC != T1 ]] || PUBLIC_LOC=''
+        return 0
+    done
+    return 1
+}
+resolve_domain() { getent ahosts "$1" 2>/dev/null | awk '{print $1}' | sort -u; }
+# Checked before any certificate request, so a wrong DNS record is reported at once
+# instead of as a failed Let's Encrypt validation. HOST is the node's address.
+domain_resolves_here() {
+    local domain=$1 host=$2 addresses mine address
+    msg "检查域名 $domain 的解析…"
+    addresses=$(resolve_domain "$domain") || addresses=''
+    [[ $host =~ ^[0-9.]+$ || $host == *:* ]] || { detect_public_ip || true; host=$PUBLIC_IP; }
+    if [[ -z $addresses ]]; then
+        err "域名 $domain 还没有解析记录：请在域名服务商添加 A 记录指向本机 ${host:-公网 IP}，生效后再试。"; return 1
+    fi
+    mine=$(printf '%s\n' "$host" "$PUBLIC_IP"; ip -o addr show 2>/dev/null | awk '{sub(/\/.*/, "", $4); print $4}')
+    while IFS= read -r address; do
+        grep -Fxq -- "$address" <<< "$mine" && return 0
+    done <<< "$addresses"
+    err "域名 $domain 解析到 $(paste -sd ' ' - <<< "$addresses")，不是本机 ${host:-公网 IP}：请把 A 记录改成本机 IP（Cloudflare 要关掉代理，设为「仅 DNS」），生效后再试。"
+    return 1
+}
 port_free() {
     local port=$1 exclude=${2:-} output
     valid_port "$port" || return 1

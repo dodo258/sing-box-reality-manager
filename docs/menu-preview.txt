@@ -1,0 +1,136 @@
+srm v4 菜单预览（由 lib/ 的实际输出整理；tests/quick.sh 会核对菜单行和这里一致）
+用户只用数字和回车，唯一要手填的是域名（只有需要证书的协议才问）。
+示例里的 IP、UUID、密钥都是占位值。
+
+══ 第一次打开 srm（还没有节点）：直接进入快速部署 ══
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  sing-box-reality-manager (srm)  v4.0.0-dev
+  VLESS Reality · AnyTLS · Hysteria2 等 11 种协议
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  服务：已安装，服务未运行    节点：0 / 0（启用 / 总数）
+  分流：未启用    证书续期：未配置
+
+
+快速部署（任一步输入 0 返回；同一协议可以部署多个节点）
+  1. VLESS Reality      推荐 · 不需要域名 · 回车即可
+  2. Hysteria2          弱网/丢包环境 · 不需要域名
+  3. Snell + ShadowTLS  Surge 用户 · 不需要域名
+  4. AnyTLS             需要域名
+  5. 更多协议…          Shadowsocks 2022、TUIC v5、Hysteria v1、VLESS TLS、Trojan、VMess TLS+ws、Naive
+请选择 [1]：                                          ← 回车
+检测本机公网 IP…
+本机公网 IP：192.0.2.10
+端口（1–65535，回车随机选一个空闲端口） [随机]：      ← 回车
+节点名称 [vless-JP]：                                 ← 回车
+部署：vless-JP / VLESS Reality / 192.0.2.10:随机端口
+检查握手目标 www.ctrip.com 的 TLS 1.3、证书和 HTTP/2…
+配置已应用，服务和监听正常；外部客户端连通仍需验证。
+
+━━━━━━━━ 部署完成：vless-JP（VLESS Reality）━━━━━━━━
+服务器：192.0.2.10    端口：44279/TCP    节点 ID：69916ba9073ff99f
+云服务器安全组：连不上时，到服务商控制台的安全组（云防火墙）放行入站 TCP 44279；本机的 UFW / firewalld 已自动放行。
+
+── 分享链接 ──
+vless://<UUID>@192.0.2.10:44279?encryption=none&security=reality&type=tcp&flow=xtls-rprx-vision&fp=chrome&sni=www.ctrip.com&pbk=<公钥>&sid=<shortId>#vless-JP
+（这里显示本地生成的二维码）
+
+── Clash Meta (mihomo)：放进 proxies: 列表 ──
+- {"name":"vless-JP","server":"192.0.2.10","port":44279,"type":"vless","uuid":"<UUID>","network":"tcp","tls":true,"udp":true,"flow":"xtls-rprx-vision","servername":"www.ctrip.com","reality-opts":{"public-key":"<公钥>","short-id":"<shortId>"},"client-fingerprint":"chrome"}
+
+── sing-box：放进 outbounds 列表 ──
+{
+  "tag": "vless-JP",
+  "server": "192.0.2.10",
+  "server_port": 44279,
+  "type": "vless",
+  "uuid": "<UUID>",
+  "flow": "xtls-rprx-vision",
+  "tls": { "enabled": true, "server_name": "www.ctrip.com", "utls": { "enabled": true, "fingerprint": "chrome" },
+           "reality": { "enabled": true, "public_key": "<公钥>", "short_id": "<shortId>" } }
+}
+
+── Shadowrocket：扫上面的二维码，或复制分享链接后打开 Shadowrocket，会提示从剪贴板添加 ──
+
+── v2rayN：复制分享链接，在 v2rayN 主界面按 Ctrl+V（从剪贴板导入分享链接）──
+以后在菜单里选「2. 节点管理」可以再次查看链接、二维码和这些配置。
+按回车返回菜单                                        ← 回车
+
+（Surge 不支持 VLESS，所以没有 Surge 段；支持的协议会多一段「── Surge：放进配置的 [Proxy] 段 ──」。
+ Snell 没有分享链接，只给 Surge 和 sing-box 两段；v5 节点另有 Clash Meta。）
+
+══ 已有节点时的主菜单 ══
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  sing-box-reality-manager (srm)  v4.0.0-dev
+  VLESS Reality · AnyTLS · Hysteria2 等 11 种协议
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  服务：运行中    节点：1 / 1（启用 / 总数）
+  分流：未启用    证书续期：未配置
+
+  1. 添加节点 · 快速部署
+  2. 节点管理 · 原始链接 / 二维码
+  3. 流媒体分流 · 解锁 DNS / 代理出口
+  4. 运行状态 · 日志 / 重启 / 防火墙
+  5. 更新 · 新版本检查 / 回滚
+  6. BBR 与系统检测
+  7. 卸载
+  8. 证书管理 · 到期时间 / 自动续期
+
+  0. 退出
+
+请选择：
+
+「2. 节点管理 → 选节点」：
+1.详情 2.原始分享链接 3.二维码 4.客户端配置（Surge / Clash Meta / sing-box / Shadowrocket / v2rayN）
+5.启用/停用 6.修改端口 7.重置凭据 8.修改名称 9.删除
+10.切换 Reality 目标（携程 / 西瓜视频）
+
+══ 快速部署 → 5. 更多协议… ══
+
+更多协议：
+  1. Shadowsocks 2022   不需要域名
+  2. TUIC v5            不需要域名
+  3. Hysteria v1        兼容老客户端 · 不需要域名
+  4. VLESS TLS          需要域名
+  5. Trojan             需要域名
+  6. VMess TLS+ws       需要域名
+  7. Naive              需要域名
+请选择 [1]：
+
+══ 协议自己的那一个问题（每个协议最多 2 个带默认值的问题）══
+
+Snell + ShadowTLS（问了版本和端口，节点名用默认值，以后可在节点管理里改）：
+Snell 版本（客户端要选同一个）：
+  1. v6 · default 模式（推荐；Surge iOS 5.20 / Mac 6.7 起支持）
+  2. v6 · unshaped 模式（只加密，吞吐约高 10%）
+  3. v5（客户端还不支持 v6 时选；Clash Meta 只能用 v5）
+Snell 版本 [1]：
+端口（1–65535，回车随机选一个空闲端口） [随机]：
+
+VLESS TLS：
+传输方式：
+  1. tcp（Vision，直连最快）
+  2. ws（可套 CDN）
+  3. grpc
+  4. httpupgrade（可套 CDN）
+传输方式 [1]：
+端口（1–65535，回车随机选一个空闲端口） [随机]：
+
+══ 需要域名的协议：先检查解析，再申请证书 ══
+
+AnyTLS 需要一个已经解析到本机（192.0.2.10）的域名，用来申请免费证书。
+域名（没有域名直接回车，换一个协议）：vpn.example.com
+检查域名 vpn.example.com 的解析…
+错误：域名 vpn.example.com 解析到 198.51.100.7，不是本机 192.0.2.10：请把 A 记录改成本机 IP（Cloudflare 要关掉代理，设为「仅 DNS」），生效后再试。
+  1. 重新检查（刚改好解析的话，等一两分钟再选）
+  2. 换一个域名
+  3. 没有域名，换一个协议
+  4. 仍然申请证书（域名开了 CDN 代理时选）
+  0. 返回
+请选择 [1]：
+
+80 和 443 都被其他程序占用时（Let's Encrypt 没法自动验证），会再给两个选项：
+  1. 用现有网站目录验证（网站保持运行）
+  2. 导入已有证书
+  0. 返回

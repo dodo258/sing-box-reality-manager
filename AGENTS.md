@@ -25,6 +25,7 @@
 - 失败时退出码非 0；输出不是终端或设置了 `NO_COLOR` 时不带颜色。
 - 发正式 release、打 tag、改根目录 `install.sh` 的行为都要等主人确认。
 - 协议相关的逻辑只写在 `lib/protocols.sh` 的注册表里，其他模块通过 `proto_call`、`proto_jq` 分派；`tests/protocols.sh` 会检查别处不出现协议类型名。
+- 改菜单或快速部署的文字时同步 `docs/menu-preview.txt`（`tests/quick.sh` 会核对菜单行）。
 - 测试断言写成 `cmd || fail`、`if cmd; then fail; fi` 或 `[[ … ]] || exit 1`：`! cmd` 失败时不会触发 `set -e`，macOS 自带的 bash 3.2 里失败的 `[[ ]]` 也不会。
 
 ## 进度与决定
