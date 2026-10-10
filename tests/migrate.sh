@@ -208,8 +208,9 @@ cp tests/fixtures/v3/multi/etc-v2ray-agent/sing-box/conf/config/20_socks5_inboun
 main <<< $'\n0\n0' > "$work/out" 2>&1 || fail 'menu with nothing to move'
 grep -q '没有可以迁移的节点' "$work/out" || { cat "$work/out"; fail 'nothing-to-move message'; }
 main <<< $'0\n0' > "$work/out" 2>&1
-if grep -q '发现旧版节点\|9. 迁移旧版节点' "$work/out"; then fail 'offered again with nothing to move'; fi
-echo 'PASS Enter at 确认 / 返回 changes nothing; menu item 9 migrates later; nothing movable is offered once; docs/menu-preview.txt shows these screens'
+if grep -q '发现旧版节点' "$work/out"; then fail 'offered again with nothing to move'; fi
+grep -q '  9. 迁移旧版节点' "$work/out" || fail 'item 9 gone after a preview with nothing to move'
+echo 'PASS Enter at 确认 / 返回 changes nothing; menu item 9 migrates later; nothing movable is asked once, item 9 stays; docs/menu-preview.txt shows these screens'
 
 # A failed takeover (health check, sing-box check) brings v3 back as it was.
 load_fixture snell

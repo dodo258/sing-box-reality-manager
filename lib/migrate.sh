@@ -11,12 +11,15 @@ V3_CRON_JOBS='RenewTLS UpdateGeo'
 MIGRATE_MARK='# srm 迁移后停用：'
 # Settings-only fragments of v3 that need nothing in srm.
 V3_PLAIN_FILES='log.json sniff.json'
-# Offered when v3 is there and nothing has been moved yet; no network, no root files
-# beyond a directory listing.
+# Menu item while v3 is there and nothing has been moved yet; no network, no root
+# files beyond a directory listing.
 migrate_pending() {
     [[ -d $V3_ROOT && ! -f $DATA/migrated-v3.json ]] || return 1
     compgen -G "$V3_ROOT/sing-box/conf/config/*.json" >/dev/null || compgen -G "$V3_ROOT/*/nodes/*.env" >/dev/null
 }
+# The first-screen question, unless a preview found nothing that can move (the item
+# stays, for after the user fixed a reason shown there).
+migrate_offered() { migrate_pending && [[ ! -f $DATA/migrate-v3-nothing ]]; }
 # Reads V3_ROOT into the plan file $1: {nodes:[{node,label,cert,units,note}],skipped:[{label,reason}],units:[]}.
 # Nodes get their final id here; host is set when applying.
 migrate_scan() {
@@ -182,8 +185,8 @@ migrate_show() {
     msg "  - $V3_ROOT 里的文件一个字节都不改"
 }
 # Whether a certificate request could validate on 80 or 443 once the nodes moved: the
-# port is not used by any TCP node (srm's or moving) and nothing else listens on it.
-# v3's own listeners there are either taken over by a moving node or stop with v3.
+# port is not used by any TCP node (srm's or moving) and nothing listens on it now.
+# Cautious: a v3 node that stops with its service still counts as a listener.
 migrate_renewable() {
     local taken port
     taken=" $({ [[ ! -f $STATE ]] || jq -r ".nodes[]|select(any(($(proto_jq_transports))[]; . == \"tcp\"))|.port" "$STATE"
@@ -202,8 +205,8 @@ migrate_menu() {
         msg $'\n  1. 确认迁移（服务会重启，连接断开几秒）\n  0. 返回'
         ask '请选择' 0 && [[ $REPLY == 1 ]] && { with_lock migrate_apply "$SRM_SELF" || rc=1; }
     elif [[ $rc == 0 && -d $DATA ]]; then
-        # Nothing can move: recorded, so the menu stops offering it.
-        jq -n --arg at "$(date '+%F %T')" '{checked_at:$at,nodes:[]}' > "$DATA/migrated-v3.json" || true
+        # Nothing can move: the first screen stops asking; item 9 stays.
+        date '+%F %T' > "$DATA/migrate-v3-nothing" || true
     fi
     rm -f "$plan"
     return "$rc"

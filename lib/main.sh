@@ -26,7 +26,7 @@ main_menu() {
     # Leaving quick deploy without a node is fine here; `srm add` treats it as a failure.
     local IN_MENU=1
     # A v3 installation whose nodes have not moved: offered before anything else.
-    if migrate_pending; then menu_header; migrate_offer; fi
+    if migrate_offered; then menu_header; migrate_offer; fi
     # No node yet: straight into quick deploy; 0 there shows the menu.
     if [[ ! -f $STATE ]] || ! jq -e '.nodes|length > 0' "$STATE" >/dev/null 2>&1; then
         menu_header
