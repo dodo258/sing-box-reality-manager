@@ -153,9 +153,18 @@ for want in '能迁移的节点' '1. VLESS Reality（端口 31443，07_VLESS_vis
 done
 [[ ! -e $STATE && ! -e $work/systemctl.log && $(tree_hash) == "$before" && ! -e $DATA/certs ]] || fail 'preview changed something'
 [[ ! -e $work/network-calls ]] || fail 'preview reached the network'
+grep -q '注意：继续运行的旧版网站 / Xray 用的证书' "$work/out" && grep -q '到期前 30 天自动向 Let'"'"'s Encrypt 重新申请（用 80 或 443' "$work/out" || fail 'certificate notes'
+# Nothing of v3 keeps running on its certificates: no such note. 80 and 443 both taken
+# after moving (nginx here): no promise of automatic renewal.
+load_fixture tls
+ss() { case "$*" in *':80'|*':443') printf 'LISTEN 0 511 *:%s *:*\n' "${*##*:}";; esac; }
+main migrate > "$work/out" 2>&1
+if grep -q '注意：继续运行的旧版网站' "$work/out"; then fail 'website note without a website'; fi
+grep -q '迁移后 80 和 443 端口都被占用，srm 没法自动给迁移过来的证书重新申请' "$work/out" || { cat "$work/out"; fail 'renewal warning'; }
+ss() { return 0; }
 (V3_ROOT=$work/none; if main migrate > "$work/out" 2>&1; then fail 'preview without v3 exited 0'; fi) || exit 1
 grep -q '没有找到旧版安装' "$work/out" || fail 'no v3 message'
-echo 'PASS srm migrate lists what moves and what does not (Xray nodes, website, subscriptions) and changes nothing; without v3 it fails'
+echo 'PASS srm migrate lists what moves and what does not (Xray nodes, website, subscriptions), warns about certificates nobody renews, changes nothing; without v3 it fails'
 
 # The menu alone: a fresh srm on a v3 server offers the migration first; Enter shows
 # the lists, 1 confirms; the nodes then run in srm and the menu stops offering it.
@@ -192,7 +201,15 @@ for line in '  1. 是，先看看能迁移哪些' '  0. 否（以后在菜单「
 done
 main <<< $'0\n0\n9\n1\n0' > "$work/out" 2>&1 || fail 'menu item 9 run'
 jq -e '.nodes[0].type == "vless" and .nodes[0].port == 30443' "$STATE" >/dev/null || { cat "$work/out"; fail 'item 9 did not migrate'; }
-echo 'PASS Enter at 确认 / 返回 changes nothing; menu item 9 migrates later; docs/menu-preview.txt shows these screens'
+# Nothing that can move: shown once, then the menu stops asking.
+load_fixture reality
+rm "$work/v3/sing-box/conf/config/07_VLESS_vision_reality_inbounds.json"
+cp tests/fixtures/v3/multi/etc-v2ray-agent/sing-box/conf/config/20_socks5_inbounds.json "$work/v3/sing-box/conf/config/"
+main <<< $'\n0\n0' > "$work/out" 2>&1 || fail 'menu with nothing to move'
+grep -q '没有可以迁移的节点' "$work/out" || { cat "$work/out"; fail 'nothing-to-move message'; }
+main <<< $'0\n0' > "$work/out" 2>&1
+if grep -q '发现旧版节点\|9. 迁移旧版节点' "$work/out"; then fail 'offered again with nothing to move'; fi
+echo 'PASS Enter at 确认 / 返回 changes nothing; menu item 9 migrates later; nothing movable is offered once; docs/menu-preview.txt shows these screens'
 
 # A failed takeover (health check, sing-box check) brings v3 back as it was.
 load_fixture snell
@@ -214,7 +231,7 @@ apply_state() { validate_state "$1" && mkdir -p "$DATA/current" && cp "$1" "$STA
 load_fixture reality
 echo 1 > "$work/core-check"
 if main migrate --apply --yes > "$work/out" 2>&1; then fail 'apply despite sing-box check failure'; fi
-grep -q '没有通过 sing-box 校验，旧服务没有停止' "$work/out" && [[ ! -e $STATE && -e $work/units/dodo258-sing-box.service.active ]] || { cat "$work/out"; fail 'check failure'; }
+grep -q '没有通过校验（节点数据或 sing-box check），旧服务没有停止' "$work/out" && [[ ! -e $STATE && -e $work/units/dodo258-sing-box.service.active ]] || { cat "$work/out"; fail 'check failure'; }
 if grep -qs 'disable' "$work/systemctl.log"; then fail 'units touched before the check passed'; fi
 echo 'PASS --apply that fails restores the old services (running and enabled), crontab and state; a failed sing-box check stops nothing'
 
@@ -242,6 +259,12 @@ jq -n '{schema:2,policies:[],unlock_dns:null,egress:null,nodes:[
 renew_certificates > "$work/out" 2>&1 || { cat "$work/out"; fail 'renew'; }
 [[ $(cat "$work/issued") == 'old.example.com auto   force' ]] || { cat "$work/issued"; fail 'v3 certificate renewal'; }
 [[ $(certificate_source old.example.com) == v3 ]] || fail 'v3 origin'
+certificate_status > "$work/out" 2>&1
+grep -q '从旧版迁移：到期前 30 天自动向' "$work/out" || { cat "$work/out"; fail 'v3 certificate status'; }
+ss() { case "$*" in *':80'|*':443') printf 'LISTEN 0 511 *:%s *:*\n' "${*##*:}";; esac; }
+certificate_status > "$work/out" 2>&1
+grep -q '从旧版迁移：80 和 443 端口都被占用，没法自动重新申请' "$work/out" || { cat "$work/out"; fail 'v3 certificate status without free ports'; }
+ss() { return 0; }
 echo 'PASS certificates moved from v3 get a new Let'"'"'s Encrypt certificate within 30 days of expiry, not before'
 
 # With a real core: every sample's migrated configuration passes `sing-box check`, and

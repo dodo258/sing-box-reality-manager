@@ -233,7 +233,9 @@ certificate_status() {
         case $source in
           acme) source="Let's Encrypt 自动续期";;
           import) source='外部导入：由原工具续期后重新导入';;
-          v3) source="从旧版迁移：到期前 30 天自动向 Let's Encrypt 重新申请";;
+          v3)
+            if cert_auto_mode >/dev/null; then source="从旧版迁移：到期前 30 天自动向 Let's Encrypt 重新申请"
+            else source='从旧版迁移：80 和 443 端口都被占用，没法自动重新申请；到期前请空出 80 端口，再选「2. 立即检查续期」'; fi;;
           *) source='来源标记异常：暂不自动续期';;
         esac
         printf '\n域名：%s（%s 个节点共用）\n来源：%s\n' "$domain" "$count" "$source"

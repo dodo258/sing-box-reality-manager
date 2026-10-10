@@ -1941,7 +1941,9 @@ certificate_status() {
         case $source in
           acme) source="Let's Encrypt 自动续期";;
           import) source='外部导入：由原工具续期后重新导入';;
-          v3) source="从旧版迁移：到期前 30 天自动向 Let's Encrypt 重新申请";;
+          v3)
+            if cert_auto_mode >/dev/null; then source="从旧版迁移：到期前 30 天自动向 Let's Encrypt 重新申请"
+            else source='从旧版迁移：80 和 443 端口都被占用，没法自动重新申请；到期前请空出 80 端口，再选「2. 立即检查续期」'; fi;;
           *) source='来源标记异常：暂不自动续期';;
         esac
         printf '\n域名：%s（%s 个节点共用）\n来源：%s\n' "$domain" "$count" "$source"
@@ -2938,10 +2940,10 @@ migrate_scan() {
     for file in "$V3_ROOT"/xray/conf/*.json; do
         [[ -f $file ]] || continue
         while IFS=$'\t' read -r type i; do
-            migrate_skip "$plan" "Xray $type（端口 $i）" 'v4 只用 sing-box；旧 Xray 服务继续运行，迁移不会停掉它'
+            migrate_skip "$plan" "Xray $type（端口 $i）" 'v4 只用 sing-box；旧 Xray 服务继续运行，迁移不会停掉它' runs
         done < <(jq -r '.inbounds[]?|select(.port != null and (.listen // "") != "127.0.0.1")|[.protocol,(.port|tostring)]|@tsv' "$file" 2>/dev/null)
     done
-    [[ ! -d $V3_ROOT/website-manager ]] || migrate_skip "$plan" '网站' 'v4 不管理网站；nginx 和网站文件保持原样'
+    [[ ! -d $V3_ROOT/website-manager ]] || migrate_skip "$plan" '网站' 'v4 不管理网站；nginx 和网站文件保持原样' runs
     if compgen -G "$V3_ROOT/subscribe*" >/dev/null; then
         migrate_skip "$plan" '订阅链接' 'v4 不提供订阅；已导入的节点照常可用，新设备请用菜单「2. 节点管理」里的分享链接'
     fi
@@ -2949,12 +2951,13 @@ migrate_scan() {
     tmp=$(mktemp) || return 1
     jq --args '.units = ([$ARGS.positional[], .nodes[].units[]]|unique)' ${units[@]+"${units[@]}"} < "$plan" > "$tmp" && mv "$tmp" "$plan"
 }
-# migrate_skip PLAN LABEL REASON [stops]: "stops" marks a node of v3's sing-box service,
-# which stops with the service when other nodes move.
+# migrate_skip PLAN LABEL REASON [stops|runs]: "stops" marks a node of v3's sing-box
+# service, which stops with the service when other nodes move; "runs" something of v3
+# that keeps running (Xray, the website) on v3's certificates and geo data.
 migrate_skip() {
     local tmp
     tmp=$(mktemp) || return 1
-    jq --arg l "$2" --arg r "$3" --arg s "${4:-}" '.skipped += [{label:$l,reason:$r} + (if $s == "" then {} else {stops:true} end)]' "$1" > "$tmp" && mv "$tmp" "$1"
+    jq --arg l "$2" --arg r "$3" --arg k "${4:-}" '.skipped += [{label:$l,reason:$r} + (if $k == "" then {} else {($k):true} end)]' "$1" > "$tmp" && mv "$tmp" "$1"
 }
 # A node from a v3_scan line or from an inbound; checks what every node needs and adds it.
 migrate_add() {
@@ -2963,9 +2966,10 @@ migrate_add() {
     [[ $unit_list != '[]' ]] || stops=stops
     port=$(jq -r .port <<< "$node")
     valid_port "$port" || { migrate_skip "$plan" "$label" '端口无效' $stops; return 0; }
-    taken=$({ [[ ! -f $STATE ]] || jq -r --argjson p "$port" '.nodes[]|select(.port == $p or .local_port == $p)|.name' "$STATE"
-              jq -r --argjson p "$port" '.nodes[].node|select(.port == $p or .local_port == $p)|.name' "$plan"; } | head -n 1)
+    taken=$([[ ! -f $STATE ]] || jq -r --argjson p "$port" '.nodes[]|select(.port == $p or .local_port == $p)|.name' "$STATE" | head -n 1)
     [[ -z $taken ]] || { migrate_skip "$plan" "$label" "端口 $port 已被 srm 的节点「$taken」使用" $stops; return 0; }
+    taken=$(jq -r --argjson p "$port" '.nodes[].node|select(.port == $p or .local_port == $p)|.name' "$plan" | head -n 1)
+    [[ -z $taken ]] || { migrate_skip "$plan" "$label" "端口 $port 和要迁移的节点「$taken」重复" $stops; return 0; }
     id=$(random_hex 8) || return 1
     node=$(jq -c --arg id "$id" --arg name "$(jq -r .type <<< "$node")-$port" '{id:$id,name:$name} + . + {enabled:true}' <<< "$node") || return 1
     if [[ $cert != null ]]; then node=$(jq -c --argjson c "$cert" --arg dir "$(migrate_cert_dir "$cert" "$id")" '. + {cert_dir:$dir} + ($c.pins // {})' <<< "$node") || return 1; fi
@@ -3054,10 +3058,29 @@ migrate_show() {
     msg "  - 停止并停用旧服务：$(jq -r '.units|join("、")' "$plan")$(jq -r 'if any(.skipped[]; .stops) and any(.units[]; test("sing-box")) then "；上面不能迁移的旧 sing-box 节点随之停止" else "" end' "$plan")"
     msg '  - 由 srm 在原端口启动这些节点；启动或健康检查失败就恢复旧服务'
     msg "  - 注释掉旧版定时任务（${V3_CRON_JOBS// /、}），行首加 #，不删除"
+    if jq -e 'any(.skipped[]; .runs)' "$plan" >/dev/null; then
+        msg "    注意：继续运行的旧版网站 / Xray 用的证书（$V3_ROOT/tls）从此不再自动续期，Xray 的 geo 数据也不再更新，请在证书到期前自行处理"
+    fi
     if jq -e 'any(.nodes[]; .cert.kind == "ca")' "$plan" >/dev/null; then
-        msg "  - 证书改由 srm 续期：到期前 30 天自动向 Let's Encrypt 重新申请"
+        if migrate_renewable "$plan"; then
+            msg "  - 证书改由 srm 续期：到期前 30 天自动向 Let's Encrypt 重新申请（用 80 或 443 端口验证）"
+        else
+            msg "  - 注意：迁移后 80 和 443 端口都被占用，srm 没法自动给迁移过来的证书重新申请；到期前请空出 80 端口，再在菜单「8. 证书管理」里选「立即检查续期」"
+        fi
     fi
     msg "  - $V3_ROOT 里的文件一个字节都不改"
+}
+# Whether a certificate request could validate on 80 or 443 once the nodes moved: the
+# port is not used by any TCP node (srm's or moving) and nothing else listens on it.
+# v3's own listeners there are either taken over by a moving node or stop with v3.
+migrate_renewable() {
+    local taken port
+    taken=" $({ [[ ! -f $STATE ]] || jq -r ".nodes[]|select(any(($(proto_jq_transports))[]; . == \"tcp\"))|.port" "$STATE"
+               jq -r ".nodes[].node|select(any(($(proto_jq_transports))[]; . == \"tcp\"))|.port" "$1"; } | tr '\n' ' ') "
+    for port in 80 443; do
+        [[ $taken != *" $port "* && -z $(ss -H -ltn "sport = :$port" 2>/dev/null) ]] && return 0
+    done
+    return 1
 }
 # Menu: preview, then 「确认 / 返回」 (Enter = back).
 migrate_menu() {
@@ -3067,6 +3090,9 @@ migrate_menu() {
     if [[ $rc == 0 ]] && jq -e '.nodes|length > 0' "$plan" >/dev/null; then
         msg $'\n  1. 确认迁移（服务会重启，连接断开几秒）\n  0. 返回'
         ask '请选择' 0 && [[ $REPLY == 1 ]] && { with_lock migrate_apply "$SRM_SELF" || rc=1; }
+    elif [[ $rc == 0 && -d $DATA ]]; then
+        # Nothing can move: recorded, so the menu stops offering it.
+        jq -n --arg at "$(date '+%F %T')" '{checked_at:$at,nodes:[]}' > "$DATA/migrated-v3.json" || true
     fi
     rm -f "$plan"
     return "$rc"
@@ -3149,7 +3175,7 @@ migrate_apply() {
     fi
     # The whole configuration must pass before any old service stops.
     if [[ $rc == 0 ]] && ! { validate_state "$candidate" && render_config "$candidate" > "$config" && "$CORE" check -c "$config"; }; then
-        err '迁移后的配置没有通过 sing-box 校验，旧服务没有停止。'; rc=1
+        err '迁移后的配置没有通过校验（节点数据或 sing-box check），旧服务没有停止。'; rc=1
     fi
     if [[ $rc != 0 ]]; then
         rm -rf "$plan" "$candidate" "$config" ${created[@]+"${created[@]}"}
