@@ -7,6 +7,8 @@ SERVICE=srm.service
 STATE=$DATA/current/state.json
 CORE=$SRM_ROOT/core/sing-box
 ACME=$SRM_ROOT/acme/acme.sh
+# Color only for an interactive terminal; NO_COLOR or redirected output disables it.
+use_color() { [[ -t 1 && -z ${NO_COLOR:-} && ${TERM:-dumb} != dumb ]]; }
 err() { printf '错误：%s\n' "$*" >&2; }
 msg() { printf '%s\n' "$*"; }
 ask() {

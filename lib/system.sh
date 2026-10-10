@@ -20,6 +20,11 @@ setup() {
     # Must be a bundled distribution, not the development loader.
     grep -q '^# SRM_BUNDLE$' "$self" || { err '请先运行 bash build.sh，再使用 dist/srm。'; return 1; }
     if [[ $(readlink -f "$self") != "$SRM_ROOT/manager.sh" ]]; then install -m 755 "$self" "$SRM_ROOT/manager.sh" || return 1; fi
+    local existing
+    existing=$(command -v srm 2>/dev/null) || existing=''
+    if [[ -n $existing && $existing != /usr/local/sbin/srm ]]; then
+        msg "注意：系统已有 srm 命令（${existing}，可能是 secure-delete），本脚本的 srm 会优先；原命令请用完整路径。"
+    fi
     ln -sfn "$SRM_ROOT/manager.sh" /usr/local/sbin/srm || return 1
     link_vasma
     cat > "/etc/systemd/system/$SERVICE" <<UNIT

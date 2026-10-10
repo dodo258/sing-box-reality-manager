@@ -11,6 +11,8 @@ SERVICE=srm.service
 STATE=$DATA/current/state.json
 CORE=$SRM_ROOT/core/sing-box
 ACME=$SRM_ROOT/acme/acme.sh
+# Color only for an interactive terminal; NO_COLOR or redirected output disables it.
+use_color() { [[ -t 1 && -z ${NO_COLOR:-} && ${TERM:-dumb} != dumb ]]; }
 err() { printf '错误：%s\n' "$*" >&2; }
 msg() { printf '%s\n' "$*"; }
 ask() {
@@ -209,7 +211,7 @@ share_uri() { jq -r "$PROTO_JQ_DEFS $(proto_jq share_uri 'error("不支持的协
 #   prompt           ask protocol options; sets sni plus its own option variables
 #   create           generate credentials after confirmation; REPLY = JSON fields
 #   rotate           new credentials; REPLY = JSON fields to merge into the node
-# Optional: retarget_select / retarget (change a Reality handshake target).
+# Optional: retarget_label / retarget_select / retarget (change a Reality handshake target).
 PROTO_HOOKS='label transport validate render_inbound share_uri client_outbound secrets prompt create rotate'
 PROTOCOLS=''
 PROTO_JQ_DEFS='
@@ -307,6 +309,7 @@ proto_vless_rotate() {
     uuid=$("$CORE" generate uuid) || return 1
     REPLY=$(jq -nc --arg v "$uuid" '{uuid:$v}')
 }
+proto_vless_retarget_label() { printf '切换 Reality 目标（携程 / 西瓜视频）'; }
 proto_vless_retarget_select() { reality_target_select; }
 # REPLY = JSON fields to merge, or empty when the node already uses the target.
 proto_vless_retarget() {
@@ -442,6 +445,11 @@ setup() {
     # Must be a bundled distribution, not the development loader.
     grep -q '^# SRM_BUNDLE$' "$self" || { err '请先运行 bash build.sh，再使用 dist/srm。'; return 1; }
     if [[ $(readlink -f "$self") != "$SRM_ROOT/manager.sh" ]]; then install -m 755 "$self" "$SRM_ROOT/manager.sh" || return 1; fi
+    local existing
+    existing=$(command -v srm 2>/dev/null) || existing=''
+    if [[ -n $existing && $existing != /usr/local/sbin/srm ]]; then
+        msg "注意：系统已有 srm 命令（${existing}，可能是 secure-delete），本脚本的 srm 会优先；原命令请用完整路径。"
+    fi
     ln -sfn "$SRM_ROOT/manager.sh" /usr/local/sbin/srm || return 1
     link_vasma
     cat > "/etc/systemd/system/$SERVICE" <<UNIT
@@ -1050,39 +1058,72 @@ routing_menu() {
     msg '解锁 DNS 需要客户端把域名或 DNS 查询交给本服务器；仅发送已解析 IP 时，SNI 嗅探不会自动重写该 IP。指定代理出口可按可识别的域名分流。'
     msg '流媒体分流：1.查看 2.设置解锁 DNS 3.设置代理出口（SOCKS5） 4.添加/替换平台规则 5.删除平台规则'
     ask '操作' 1 || return 0
-    local op=$REPLY candidate tmp host port user pass name mode domains input
-    [[ $op != 1 ]] || { routing_show; return; }
-    candidate=$(new_candidate) || return 1
-    tmp=$(mktemp) || return 1
-    case $op in
-      2)
-        ask '解锁 DNS 的 IP 地址' || { rm -f "$tmp" "$candidate"; return 0; }; host=$REPLY
-        [[ $host =~ ^[0-9.]+$ || $host =~ ^[0-9a-fA-F:]+$ ]] || { err '解锁 DNS 请输入 IP。'; rm -f "$tmp" "$candidate"; return 1; }
-        jq --arg host "$host" '.unlock_dns=$host' "$candidate" > "$tmp";;
+    local host port user name mode domains
+    case $REPLY in
+      1) routing_show;;
+      2) ask '解锁 DNS 的 IP 地址' || return 0; routing_change dns "$REPLY";;
       3)
         msg '只把命中平台的流量送到此 SOCKS5 出口。出口需支持 UDP 才能承载 QUIC；不会自动回落本机。'
-        ask '出口 IP/域名' || { rm -f "$tmp" "$candidate"; return 0; }; host=$REPLY
-        valid_host "$host" || { err '出口地址无效。'; rm -f "$tmp" "$candidate"; return 1; }
-        ask '出口端口' 1080 || { rm -f "$tmp" "$candidate"; return 0; }; port=$REPLY
-        [[ $port =~ ^[1-9][0-9]{0,4}$ ]] && ((port <= 65535)) || { err '出口端口无效。'; rm -f "$tmp" "$candidate"; return 1; }
-        ask '用户名（无认证则留空）' || { rm -f "$tmp" "$candidate"; return 0; }; user=$REPLY
-        printf '密码（不回显，无认证则留空）：' >&2; IFS= read -rs pass || { rm -f "$tmp" "$candidate"; return 0; }; printf '\n' >&2
-        jq --arg host "$host" --argjson port "$port" --arg user "$user" --arg pass "$pass" '.egress={type:"socks",version:"5",server:$host,server_port:$port} + (if $user!="" then {username:$user,password:$pass} else {} end)' "$candidate" > "$tmp";;
+        ask '出口 IP/域名' || return 0; host=$REPLY
+        ask '出口端口' 1080 || return 0; port=$REPLY
+        ask '用户名（无认证则留空）' || return 0; user=$REPLY
+        routing_change egress "$host" "$port" "$user";;
       4)
-        ask '平台：netflix / disney / youtube / 自定义名称' netflix || { rm -f "$tmp" "$candidate"; return 0; }; name=$REPLY
+        ask '平台：netflix / disney / youtube / 自定义名称' netflix || return 0; name=$REPLY
         domains=$(platform_domains "$name") || domains=''
-        ask '匹配域名后缀，空格分隔（会显示完整范围）' "$domains" || { rm -f "$tmp" "$candidate"; return 0; }; input=$REPLY
-        ask '方式：dns 或 proxy' dns || { rm -f "$tmp" "$candidate"; return 0; }; mode=$REPLY
-        domains=$(printf '%s' "$input" | jq -Rc 'split(" ")|map(select(length>0)|ascii_downcase)|unique') || return 1
-        jq --arg name "$name" --arg mode "$mode" --argjson domains "$domains" '.policies=(.policies|map(select(.name!=$name)))+[{name:$name,mode:$mode,domains:$domains}]' "$candidate" > "$tmp" || { rm -f "$tmp" "$candidate"; return 1; }
-        routing_check_conflicts "$tmp" "$name" || { rm -f "$tmp" "$candidate"; return 1; };;
-      5)
-        ask '要删除的规则名称' || { rm -f "$tmp" "$candidate"; return 0; }; name=$REPLY
-        jq --arg name "$name" '.policies|=map(select(.name!=$name))' "$candidate" > "$tmp";;
-      *) rm -f "$tmp" "$candidate"; err '无效选项。'; return 1;;
+        ask '匹配域名后缀，空格分隔（会显示完整范围）' "$domains" || return 0; domains=$REPLY
+        ask '方式：dns 或 proxy' dns || return 0; mode=$REPLY
+        routing_change add "$name" "$mode" "$domains";;
+      5) ask '要删除的规则名称' || return 0; routing_change del "$REPLY";;
+      *) err '无效选项。'; return 1;;
     esac
-    local rc=1
-    if mv "$tmp" "$candidate" && apply_state "$candidate"; then rc=0; fi
+}
+# Non-interactive routing changes, shared with the menu:
+#   dns IP | egress HOST PORT [USER] (password read from stdin) | add NAME dns|proxy DOMAIN… | del NAME
+# Domain arguments may also hold several space-separated suffixes.
+routing_change() {
+    local op=${1:-} candidate tmp host port user pass='' name mode domains rc=1
+    [[ -f $STATE ]] || { err '请先部署节点。'; return 1; }
+    shift
+    candidate=$(new_candidate) || return 1
+    tmp=$(mktemp) || { rm -f "$candidate"; return 1; }
+    case $op in
+      dns)
+        host=${1:-}
+        if [[ $host =~ ^[0-9.]+$ || $host =~ ^[0-9a-fA-F:]+$ ]] && valid_ip "$host"; then
+            jq --arg host "$host" '.unlock_dns=$host' "$candidate" > "$tmp" && rc=0
+        else err '解锁 DNS 请输入 IP。'; fi;;
+      egress)
+        host=${1:-} port=${2:-1080} user=${3:-}
+        if ! valid_host "$host"; then err '出口地址无效。'
+        elif ! [[ $port =~ ^[1-9][0-9]{0,4}$ ]] || ((port > 65535)); then err '出口端口无效。'
+        else
+            if [[ -n $user ]]; then
+                printf '密码（不回显，无认证则留空）：' >&2; IFS= read -rs pass || pass=''; printf '\n' >&2
+            fi
+            jq --arg host "$host" --argjson port "$port" --arg user "$user" --arg pass "$pass" '.egress={type:"socks",version:"5",server:$host,server_port:$port} + (if $user!="" then {username:$user,password:$pass} else {} end)' "$candidate" > "$tmp" && rc=0
+        fi;;
+      add)
+        name=${1:-} mode=${2:-}
+        shift 2 2>/dev/null || shift $#
+        if [[ -z $name ]] || (( $# == 0 )); then err '用法：srm routing add 名称 dns|proxy 域名后缀…'
+        elif [[ $mode != dns && $mode != proxy ]]; then err '方式只能是 dns 或 proxy。'
+        else
+            domains=$(printf '%s\n' "$@" | jq -Rsc 'split("\n")|map(split(" ")[])|map(select(length>0)|ascii_downcase)|unique') &&
+            jq --arg name "$name" --arg mode "$mode" --argjson domains "$domains" '.policies=(.policies|map(select(.name!=$name)))+[{name:$name,mode:$mode,domains:$domains}]' "$candidate" > "$tmp" &&
+            routing_check_conflicts "$tmp" "$name" && rc=0
+        fi;;
+      del)
+        name=${1:-}
+        if jq -e --arg name "$name" 'any(.policies[]; .name==$name)' "$candidate" >/dev/null; then
+            jq --arg name "$name" '.policies|=map(select(.name!=$name))' "$candidate" > "$tmp" && rc=0
+        else err "没有名为 ${name:-空} 的规则。"; fi;;
+      *) err '用法：srm routing [show|dns|egress|add|del]';;
+    esac
+    if [[ $rc == 0 ]]; then
+        rc=1
+        if mv "$tmp" "$candidate" && apply_state "$candidate"; then rc=0; fi
+    fi
     rm -f "$candidate" "$tmp"
     return "$rc"
 }
@@ -1166,7 +1207,8 @@ export_node() {
       uri) printf '%s' "$node" | share_uri;;
       qr)
         link=$(printf '%s' "$node" | share_uri) || return 1
-        if command -v qrencode >/dev/null; then printf '%s' "$link" | qrencode -t ANSIUTF8
+        if command -v qrencode >/dev/null; then
+            if use_color; then printf '%s' "$link" | qrencode -t ANSIUTF8; else printf '%s' "$link" | qrencode -t UTF8; fi
         else msg '未安装 qrencode，只显示链接（可运行 apt-get install qrencode 后再生成二维码）：'; msg "$link"; fi;;
       outbound) printf '%s' "$node" | client_outbound;;
       details)
@@ -1201,7 +1243,7 @@ node_change() {
         [[ -n $value ]] || { rm -f "$tmp" "$candidate"; err '名称不能为空。'; return 1; }
         jq --arg id "$id" --arg name "$value" '(.nodes[]|select(.id==$id)|.name)=$name' "$candidate" > "$tmp";;
       retarget)
-        proto_has "$type" retarget || { rm -f "$tmp" "$candidate"; err '只有 Reality 节点可以切换握手目标。'; return 1; }
+        proto_has "$type" retarget || { rm -f "$tmp" "$candidate"; err '此协议的节点不支持切换握手目标。'; return 1; }
         proto_call "$type" retarget "$node" "$value" || { rm -f "$tmp" "$candidate"; return 1; }
         [[ -n $REPLY ]] || { rm -f "$tmp" "$candidate"; return 0; }
         jq --arg id "$id" --argjson f "$REPLY" '(.nodes[]|select(.id==$id)) += $f' "$candidate" > "$tmp";;
@@ -1232,7 +1274,7 @@ node_menu() {
     fi
     type=$(node_json "$STATE" "$id" | jq -r .type) || { err '节点不存在。'; return 1; }
     msg $'1.详情 2.原始分享链接 3.二维码 4.sing-box 客户端出站\n5.启用/停用 6.修改端口 7.重置凭据 8.修改名称 9.删除'
-    ! proto_has "$type" retarget || msg '10.切换 Reality 目标（携程 / 西瓜视频）'
+    ! proto_has "$type" retarget_select || msg "10.$(proto_call "$type" retarget_label)"
     ask '操作' 1 || return 0
     case $REPLY in
       1) export_node "$id" details;; 2) export_node "$id" uri;; 3) export_node "$id" qr;; 4) export_node "$id" outbound;;
@@ -1242,7 +1284,7 @@ node_menu() {
       8) ask '新名称' || return 0; with_lock node_change "$id" name "$REPLY";;
       9) yesno '确认删除此节点' && with_lock node_change "$id" delete;;
       10)
-        proto_has "$type" retarget || { err '仅适用于 Reality 节点。'; return 1; }
+        proto_has "$type" retarget_select || { err '此协议的节点不支持切换握手目标。'; return 1; }
         proto_call "$type" retarget_select || return 0
         msg '切换后需更新客户端的原始链接 / SNI；端口和凭据保持不变，应用时可能短暂中断本脚本节点。'
         if with_lock node_change "$id" retarget "$REPLY"; then
@@ -1349,7 +1391,7 @@ restart_nodes() {
 }
 menu_header() {
     local status='未部署' counts='0 / 0' renew='未配置' routing='未启用' color='' reset=''
-    if [[ -t 1 && -z ${NO_COLOR:-} && ${TERM:-dumb} != dumb ]]; then color=$'\033[1;36m'; reset=$'\033[0m'; fi
+    if use_color; then color=$'\033[1;36m'; reset=$'\033[0m'; fi
     if [[ -f $SRM_ROOT/.srm-owned ]]; then
         status='已安装，服务未运行'
         systemctl is-active --quiet "$SERVICE" && status='运行中'
@@ -1389,7 +1431,8 @@ main_menu() {
     done
 }
 rollback_script() {
-    owned_root && [[ -f $SRM_ROOT/manager.previous.sh ]] || return 1
+    owned_root || return 1
+    [[ -f $SRM_ROOT/manager.previous.sh ]] || { err '没有可回滚的脚本版本。'; return 1; }
     bash -n "$SRM_ROOT/manager.previous.sh" && install -m 755 "$SRM_ROOT/manager.previous.sh" "$SRM_ROOT/manager.sh" && msg '脚本已回滚，请重新运行。'
 }
 usage() {
@@ -1410,6 +1453,10 @@ srm $SRM_VERSION：sing-box 节点管理（$(proto_labels)）
   srm export ID [格式]    uri（默认）| qr | outbound | details；只在本机生成，不联网
   srm protocols           支持的协议和传输层
   srm routing [show]      流媒体分流菜单；show 只查看
+  srm routing dns IP      设置解锁 DNS
+  srm routing egress 地址 [端口] [用户名]   设置 SOCKS5 代理出口；有用户名时从标准输入读密码
+  srm routing add 名称 dns|proxy 域名…     添加或替换平台规则（netflix.com 等域名后缀）
+  srm routing del 名称    删除平台规则
   srm certs [status]      证书管理；status 只查看
   srm renew               检查证书续期
   srm firewall            同步本脚本的 UFW / firewalld 端口规则
@@ -1453,7 +1500,8 @@ main() {
       routing)
         case ${2:-menu} in
           menu) with_lock routing_menu;; show) require_root && routing_show;;
-          *) err '用法：srm routing [show]'; return 1;;
+          dns|egress|add|del) shift; with_lock routing_change "$@";;
+          *) err '用法：srm routing [show|dns|egress|add|del]'; return 1;;
         esac;;
       certs)
         require_linux || return 1

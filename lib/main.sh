@@ -1,6 +1,6 @@
 menu_header() {
     local status='未部署' counts='0 / 0' renew='未配置' routing='未启用' color='' reset=''
-    if [[ -t 1 && -z ${NO_COLOR:-} && ${TERM:-dumb} != dumb ]]; then color=$'\033[1;36m'; reset=$'\033[0m'; fi
+    if use_color; then color=$'\033[1;36m'; reset=$'\033[0m'; fi
     if [[ -f $SRM_ROOT/.srm-owned ]]; then
         status='已安装，服务未运行'
         systemctl is-active --quiet "$SERVICE" && status='运行中'
@@ -40,7 +40,8 @@ main_menu() {
     done
 }
 rollback_script() {
-    owned_root && [[ -f $SRM_ROOT/manager.previous.sh ]] || return 1
+    owned_root || return 1
+    [[ -f $SRM_ROOT/manager.previous.sh ]] || { err '没有可回滚的脚本版本。'; return 1; }
     bash -n "$SRM_ROOT/manager.previous.sh" && install -m 755 "$SRM_ROOT/manager.previous.sh" "$SRM_ROOT/manager.sh" && msg '脚本已回滚，请重新运行。'
 }
 usage() {
@@ -61,6 +62,10 @@ srm $SRM_VERSION：sing-box 节点管理（$(proto_labels)）
   srm export ID [格式]    uri（默认）| qr | outbound | details；只在本机生成，不联网
   srm protocols           支持的协议和传输层
   srm routing [show]      流媒体分流菜单；show 只查看
+  srm routing dns IP      设置解锁 DNS
+  srm routing egress 地址 [端口] [用户名]   设置 SOCKS5 代理出口；有用户名时从标准输入读密码
+  srm routing add 名称 dns|proxy 域名…     添加或替换平台规则（netflix.com 等域名后缀）
+  srm routing del 名称    删除平台规则
   srm certs [status]      证书管理；status 只查看
   srm renew               检查证书续期
   srm firewall            同步本脚本的 UFW / firewalld 端口规则
@@ -104,7 +109,8 @@ main() {
       routing)
         case ${2:-menu} in
           menu) with_lock routing_menu;; show) require_root && routing_show;;
-          *) err '用法：srm routing [show]'; return 1;;
+          dns|egress|add|del) shift; with_lock routing_change "$@";;
+          *) err '用法：srm routing [show|dns|egress|add|del]'; return 1;;
         esac;;
       certs)
         require_linux || return 1

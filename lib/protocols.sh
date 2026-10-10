@@ -10,7 +10,7 @@
 #   prompt           ask protocol options; sets sni plus its own option variables
 #   create           generate credentials after confirmation; REPLY = JSON fields
 #   rotate           new credentials; REPLY = JSON fields to merge into the node
-# Optional: retarget_select / retarget (change a Reality handshake target).
+# Optional: retarget_label / retarget_select / retarget (change a Reality handshake target).
 PROTO_HOOKS='label transport validate render_inbound share_uri client_outbound secrets prompt create rotate'
 PROTOCOLS=''
 PROTO_JQ_DEFS='
@@ -108,6 +108,7 @@ proto_vless_rotate() {
     uuid=$("$CORE" generate uuid) || return 1
     REPLY=$(jq -nc --arg v "$uuid" '{uuid:$v}')
 }
+proto_vless_retarget_label() { printf '切换 Reality 目标（携程 / 西瓜视频）'; }
 proto_vless_retarget_select() { reality_target_select; }
 # REPLY = JSON fields to merge, or empty when the node already uses the target.
 proto_vless_retarget() {

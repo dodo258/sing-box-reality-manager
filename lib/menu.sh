@@ -78,7 +78,8 @@ export_node() {
       uri) printf '%s' "$node" | share_uri;;
       qr)
         link=$(printf '%s' "$node" | share_uri) || return 1
-        if command -v qrencode >/dev/null; then printf '%s' "$link" | qrencode -t ANSIUTF8
+        if command -v qrencode >/dev/null; then
+            if use_color; then printf '%s' "$link" | qrencode -t ANSIUTF8; else printf '%s' "$link" | qrencode -t UTF8; fi
         else msg '未安装 qrencode，只显示链接（可运行 apt-get install qrencode 后再生成二维码）：'; msg "$link"; fi;;
       outbound) printf '%s' "$node" | client_outbound;;
       details)
@@ -113,7 +114,7 @@ node_change() {
         [[ -n $value ]] || { rm -f "$tmp" "$candidate"; err '名称不能为空。'; return 1; }
         jq --arg id "$id" --arg name "$value" '(.nodes[]|select(.id==$id)|.name)=$name' "$candidate" > "$tmp";;
       retarget)
-        proto_has "$type" retarget || { rm -f "$tmp" "$candidate"; err '只有 Reality 节点可以切换握手目标。'; return 1; }
+        proto_has "$type" retarget || { rm -f "$tmp" "$candidate"; err '此协议的节点不支持切换握手目标。'; return 1; }
         proto_call "$type" retarget "$node" "$value" || { rm -f "$tmp" "$candidate"; return 1; }
         [[ -n $REPLY ]] || { rm -f "$tmp" "$candidate"; return 0; }
         jq --arg id "$id" --argjson f "$REPLY" '(.nodes[]|select(.id==$id)) += $f' "$candidate" > "$tmp";;
@@ -144,7 +145,7 @@ node_menu() {
     fi
     type=$(node_json "$STATE" "$id" | jq -r .type) || { err '节点不存在。'; return 1; }
     msg $'1.详情 2.原始分享链接 3.二维码 4.sing-box 客户端出站\n5.启用/停用 6.修改端口 7.重置凭据 8.修改名称 9.删除'
-    ! proto_has "$type" retarget || msg '10.切换 Reality 目标（携程 / 西瓜视频）'
+    ! proto_has "$type" retarget_select || msg "10.$(proto_call "$type" retarget_label)"
     ask '操作' 1 || return 0
     case $REPLY in
       1) export_node "$id" details;; 2) export_node "$id" uri;; 3) export_node "$id" qr;; 4) export_node "$id" outbound;;
@@ -154,7 +155,7 @@ node_menu() {
       8) ask '新名称' || return 0; with_lock node_change "$id" name "$REPLY";;
       9) yesno '确认删除此节点' && with_lock node_change "$id" delete;;
       10)
-        proto_has "$type" retarget || { err '仅适用于 Reality 节点。'; return 1; }
+        proto_has "$type" retarget_select || { err '此协议的节点不支持切换握手目标。'; return 1; }
         proto_call "$type" retarget_select || return 0
         msg '切换后需更新客户端的原始链接 / SNI；端口和凭据保持不变，应用时可能短暂中断本脚本节点。'
         if with_lock node_change "$id" retarget "$REPLY"; then

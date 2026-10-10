@@ -75,3 +75,21 @@ routing_menu <<< $'4\nOther\nexample.org\ndns' >/dev/null 2>&1
 jq -e '.policies|length==3' "$STATE" >/dev/null
 jq -e '.route.final=="direct" and .dns.final=="local"' "$work/config.json" >/dev/null
 echo 'PASS conflicting menu edits are blocked; legacy policies and default direct traffic remain intact'
+# Non-interactive routing commands share the menu's validation and transaction.
+cp "$work/original.json" "$STATE"
+routing_change dns 192.0.2.53 >/dev/null
+routing_change add Video dns 'Netflix.com nflxvideo.net' example.org >/dev/null
+jq -e '.unlock_dns=="192.0.2.53" and .policies==[{name:"Video",mode:"dns",domains:["example.org","netflix.com","nflxvideo.net"]}]' "$STATE" >/dev/null || exit 1
+printf 'secret-password\n' | routing_change egress 192.0.2.80 1081 user >/dev/null 2>&1
+jq -e '.egress=={type:"socks",version:"5",server:"192.0.2.80",server_port:1081,username:"user",password:"secret-password"}' "$STATE" >/dev/null || exit 1
+routing_change add Proxy proxy stream.example.net >/dev/null
+jq -e '.route.rules|any(.outbound=="media-proxy")' "$work/config.json" >/dev/null || exit 1
+before=$(sha256 "$STATE")
+for bad in 'dns not-an-ip' 'dns 999.1.1.1' 'egress 192.0.2.80 70000' 'add X both example.com' 'add X dns' 'del Missing' 'bogus' 'add Other proxy example.org'; do
+    # shellcheck disable=SC2086 # split the argument list
+    if routing_change $bad > /dev/null 2>&1 < /dev/null; then echo "FAIL accepted routing $bad"; exit 1; fi
+done
+[[ $(sha256 "$STATE") == "$before" ]] || exit 1
+routing_change del Proxy >/dev/null
+jq -e '[.policies[].name]==["Video"]' "$STATE" >/dev/null || exit 1
+echo 'PASS non-interactive routing: dns, egress (password from stdin), add, del; invalid input changes nothing'

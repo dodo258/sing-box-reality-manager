@@ -39,39 +39,72 @@ routing_menu() {
     msg '解锁 DNS 需要客户端把域名或 DNS 查询交给本服务器；仅发送已解析 IP 时，SNI 嗅探不会自动重写该 IP。指定代理出口可按可识别的域名分流。'
     msg '流媒体分流：1.查看 2.设置解锁 DNS 3.设置代理出口（SOCKS5） 4.添加/替换平台规则 5.删除平台规则'
     ask '操作' 1 || return 0
-    local op=$REPLY candidate tmp host port user pass name mode domains input
-    [[ $op != 1 ]] || { routing_show; return; }
-    candidate=$(new_candidate) || return 1
-    tmp=$(mktemp) || return 1
-    case $op in
-      2)
-        ask '解锁 DNS 的 IP 地址' || { rm -f "$tmp" "$candidate"; return 0; }; host=$REPLY
-        [[ $host =~ ^[0-9.]+$ || $host =~ ^[0-9a-fA-F:]+$ ]] || { err '解锁 DNS 请输入 IP。'; rm -f "$tmp" "$candidate"; return 1; }
-        jq --arg host "$host" '.unlock_dns=$host' "$candidate" > "$tmp";;
+    local host port user name mode domains
+    case $REPLY in
+      1) routing_show;;
+      2) ask '解锁 DNS 的 IP 地址' || return 0; routing_change dns "$REPLY";;
       3)
         msg '只把命中平台的流量送到此 SOCKS5 出口。出口需支持 UDP 才能承载 QUIC；不会自动回落本机。'
-        ask '出口 IP/域名' || { rm -f "$tmp" "$candidate"; return 0; }; host=$REPLY
-        valid_host "$host" || { err '出口地址无效。'; rm -f "$tmp" "$candidate"; return 1; }
-        ask '出口端口' 1080 || { rm -f "$tmp" "$candidate"; return 0; }; port=$REPLY
-        [[ $port =~ ^[1-9][0-9]{0,4}$ ]] && ((port <= 65535)) || { err '出口端口无效。'; rm -f "$tmp" "$candidate"; return 1; }
-        ask '用户名（无认证则留空）' || { rm -f "$tmp" "$candidate"; return 0; }; user=$REPLY
-        printf '密码（不回显，无认证则留空）：' >&2; IFS= read -rs pass || { rm -f "$tmp" "$candidate"; return 0; }; printf '\n' >&2
-        jq --arg host "$host" --argjson port "$port" --arg user "$user" --arg pass "$pass" '.egress={type:"socks",version:"5",server:$host,server_port:$port} + (if $user!="" then {username:$user,password:$pass} else {} end)' "$candidate" > "$tmp";;
+        ask '出口 IP/域名' || return 0; host=$REPLY
+        ask '出口端口' 1080 || return 0; port=$REPLY
+        ask '用户名（无认证则留空）' || return 0; user=$REPLY
+        routing_change egress "$host" "$port" "$user";;
       4)
-        ask '平台：netflix / disney / youtube / 自定义名称' netflix || { rm -f "$tmp" "$candidate"; return 0; }; name=$REPLY
+        ask '平台：netflix / disney / youtube / 自定义名称' netflix || return 0; name=$REPLY
         domains=$(platform_domains "$name") || domains=''
-        ask '匹配域名后缀，空格分隔（会显示完整范围）' "$domains" || { rm -f "$tmp" "$candidate"; return 0; }; input=$REPLY
-        ask '方式：dns 或 proxy' dns || { rm -f "$tmp" "$candidate"; return 0; }; mode=$REPLY
-        domains=$(printf '%s' "$input" | jq -Rc 'split(" ")|map(select(length>0)|ascii_downcase)|unique') || return 1
-        jq --arg name "$name" --arg mode "$mode" --argjson domains "$domains" '.policies=(.policies|map(select(.name!=$name)))+[{name:$name,mode:$mode,domains:$domains}]' "$candidate" > "$tmp" || { rm -f "$tmp" "$candidate"; return 1; }
-        routing_check_conflicts "$tmp" "$name" || { rm -f "$tmp" "$candidate"; return 1; };;
-      5)
-        ask '要删除的规则名称' || { rm -f "$tmp" "$candidate"; return 0; }; name=$REPLY
-        jq --arg name "$name" '.policies|=map(select(.name!=$name))' "$candidate" > "$tmp";;
-      *) rm -f "$tmp" "$candidate"; err '无效选项。'; return 1;;
+        ask '匹配域名后缀，空格分隔（会显示完整范围）' "$domains" || return 0; domains=$REPLY
+        ask '方式：dns 或 proxy' dns || return 0; mode=$REPLY
+        routing_change add "$name" "$mode" "$domains";;
+      5) ask '要删除的规则名称' || return 0; routing_change del "$REPLY";;
+      *) err '无效选项。'; return 1;;
     esac
-    local rc=1
-    if mv "$tmp" "$candidate" && apply_state "$candidate"; then rc=0; fi
+}
+# Non-interactive routing changes, shared with the menu:
+#   dns IP | egress HOST PORT [USER] (password read from stdin) | add NAME dns|proxy DOMAIN… | del NAME
+# Domain arguments may also hold several space-separated suffixes.
+routing_change() {
+    local op=${1:-} candidate tmp host port user pass='' name mode domains rc=1
+    [[ -f $STATE ]] || { err '请先部署节点。'; return 1; }
+    shift
+    candidate=$(new_candidate) || return 1
+    tmp=$(mktemp) || { rm -f "$candidate"; return 1; }
+    case $op in
+      dns)
+        host=${1:-}
+        if [[ $host =~ ^[0-9.]+$ || $host =~ ^[0-9a-fA-F:]+$ ]] && valid_ip "$host"; then
+            jq --arg host "$host" '.unlock_dns=$host' "$candidate" > "$tmp" && rc=0
+        else err '解锁 DNS 请输入 IP。'; fi;;
+      egress)
+        host=${1:-} port=${2:-1080} user=${3:-}
+        if ! valid_host "$host"; then err '出口地址无效。'
+        elif ! [[ $port =~ ^[1-9][0-9]{0,4}$ ]] || ((port > 65535)); then err '出口端口无效。'
+        else
+            if [[ -n $user ]]; then
+                printf '密码（不回显，无认证则留空）：' >&2; IFS= read -rs pass || pass=''; printf '\n' >&2
+            fi
+            jq --arg host "$host" --argjson port "$port" --arg user "$user" --arg pass "$pass" '.egress={type:"socks",version:"5",server:$host,server_port:$port} + (if $user!="" then {username:$user,password:$pass} else {} end)' "$candidate" > "$tmp" && rc=0
+        fi;;
+      add)
+        name=${1:-} mode=${2:-}
+        shift 2 2>/dev/null || shift $#
+        if [[ -z $name ]] || (( $# == 0 )); then err '用法：srm routing add 名称 dns|proxy 域名后缀…'
+        elif [[ $mode != dns && $mode != proxy ]]; then err '方式只能是 dns 或 proxy。'
+        else
+            domains=$(printf '%s\n' "$@" | jq -Rsc 'split("\n")|map(split(" ")[])|map(select(length>0)|ascii_downcase)|unique') &&
+            jq --arg name "$name" --arg mode "$mode" --argjson domains "$domains" '.policies=(.policies|map(select(.name!=$name)))+[{name:$name,mode:$mode,domains:$domains}]' "$candidate" > "$tmp" &&
+            routing_check_conflicts "$tmp" "$name" && rc=0
+        fi;;
+      del)
+        name=${1:-}
+        if jq -e --arg name "$name" 'any(.policies[]; .name==$name)' "$candidate" >/dev/null; then
+            jq --arg name "$name" '.policies|=map(select(.name!=$name))' "$candidate" > "$tmp" && rc=0
+        else err "没有名为 ${name:-空} 的规则。"; fi;;
+      *) err '用法：srm routing [show|dns|egress|add|del]';;
+    esac
+    if [[ $rc == 0 ]]; then
+        rc=1
+        if mv "$tmp" "$candidate" && apply_state "$candidate"; then rc=0; fi
+    fi
     rm -f "$candidate" "$tmp"
     return "$rc"
 }

@@ -54,6 +54,7 @@ node_json "$STATE" 3333333333333333 | share_uri | grep -q '%E6%B5%8B%E8%AF%95'
 echo 'PASS rename and encoded raw URL'
 # Original services must remain exactly as they were.
 sha256sum -c $TEST_WORKSPACE/config-hashes.before > "$work/hash-check.log"
-systemctl show dodo258-sing-box nginx nezha-agent -p Id -p MainPID -p ActiveEnterTimestamp > "$work/services.after"
+read -ra services <<< "${TEST_SERVICES:?set TEST_SERVICES to the existing services that must stay untouched}"
+systemctl show "${services[@]}" -p Id -p MainPID -p ActiveEnterTimestamp > "$work/services.after"
 cmp $TEST_WORKSPACE/services.before "$work/services.after"
 echo 'PASS original configuration hashes and service PIDs unchanged'

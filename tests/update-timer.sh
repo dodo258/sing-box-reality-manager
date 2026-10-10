@@ -17,6 +17,23 @@ cleanup() {
     systemctl daemon-reload
 }
 trap cleanup EXIT
+[[ $(readlink /usr/local/sbin/srm) == /opt/srm/manager.sh && $(readlink /usr/local/sbin/vasma) == /opt/srm/manager.sh ]] || exit 1
+srm version | grep -q '^srm ' || exit 1
+echo 'PASS install links srm and vasma to the manager'
+# A v3 installation owns /usr/bin/vasma; srm must leave it alone.
+(
+    source ./srm.sh
+    rm /usr/local/sbin/vasma
+    mkdir -p "$DATA/fake-v3"
+    printf '#!/bin/sh\necho v3\n' > "$DATA/fake-v3/install.sh"
+    ln -s "$DATA/fake-v3/install.sh" /usr/bin/vasma
+    link_vasma | grep -q '旧版脚本' || exit 1
+    [[ ! -e /usr/local/sbin/vasma && $(readlink /usr/bin/vasma) == "$DATA/fake-v3/install.sh" ]] || exit 1
+    rm /usr/bin/vasma
+    link_vasma
+    [[ $(readlink /usr/local/sbin/vasma) == /opt/srm/manager.sh ]] || exit 1
+)
+echo 'PASS vasma is not taken over from an existing v3 installation'
 # Exercise certificate activation with real Linux ownership and symlink switching.
 source ./srm.sh
 mkdir -m 700 "$DATA/cert-test"
@@ -70,4 +87,5 @@ cleanup
 trap - EXIT
 [[ ! -e /opt/srm && ! -e /var/lib/srm ]] || exit 1
 [[ ! -e /etc/systemd/system/srm-update.timer ]] || exit 1
-echo 'PASS uninstall removes manager and update timer'
+[[ ! -e /usr/local/sbin/srm && ! -L /usr/local/sbin/vasma ]] || exit 1
+echo 'PASS uninstall removes manager, update timer and both commands'
