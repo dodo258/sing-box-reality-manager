@@ -10,7 +10,7 @@ v4 重写，方案 `docs/specs/2026-10-10-v4-rewrite.md`，2026-10-10 按主人�
 - 前 7 条验收后，是否正式发布 v4.0.0
 
 ## 已知问题 / 风险
-- 2026-10-10 在 Lisa（38.97.250.120，主人的生产机，跑着 v3 节点 33524、番茄小说网站、cloudflared）上并行装了 v4 开发版和 3 个测试节点（test-reality 22658/tcp、test-hy2 30840/udp、test-snell 36256/tcp）。服务器侧部署、监听、防火墙都正常，菜单 0.07 秒；**手机端连通没验证完**：主人测试时 Shadowrocket 在规则模式，流量没经过测试节点，主人决定不再测。Snell v6 在 Surge 里没测。
+- 2026-10-10 Lisa（38.97.250.120，主人的生产机：v3 节点 33524、番茄小说网站、cloudflared）实测 v4 开发版：部署、监听、防火墙正常，菜单 0.07 秒。手机（中国移动 + Shadowrocket，全局代理）：伪装目标 www.ctrip.com 的 Reality 每次握手都报 invalid connection，打不开；同版本只换成 www.seagate.com 的临时对照节点（systemd-run 单元 `srm-ab-test`，端口 24681，UFW 注释 srm-ab-test-temp）正常承载主人全部流量。Hysteria2 只见少量包、未确认连通；Snell v6 未在 Surge 测。测试节点 test-reality/test-hy2/test-snell 和对照节点仍在 Lisa 上，等主人说清理。
 - 安装取 sing-box 最新稳定版（只限最低 1.14，API 不通退回 1.14.1）；将来 1.15 若改配置格式，新装机器部署会在 `sing-box check` 处失败。CI 单元测试仍固定 1.14.1。
 - 已装好的 v4 开发版服务器不会重写 systemd 单元，节点用 1024 以下端口要先重装（新单元带 CAP_NET_BIND_SERVICE）。
 - Snell 节点不受流媒体分流规则影响（snell-server 自己发起出站）；部署装固定的 v6.0.0rc2 / v5.0.1，之后在菜单「5. 更新」跟进新版（新构建官方无校验和，靠 HTTPS + 试运行核对版本）。

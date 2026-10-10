@@ -6,6 +6,15 @@
 
 从上往下做。正在做的条目后面标「（进行中：分支名 时间）」。
 
+- [ ] v4 Reality 伪装目标不能写死国内网站（实测连不上）—— 2026-10-10 在 Lisa（洛杉矶）实测：同一台服务器、同一个 sing-box 1.14.3、同一部手机（中国移动网络，Shadowrocket），伪装目标 `www.ctrip.com` 时手机的每个连接都在服务端报 `REALITY: processed invalid connection`，完全打不开；只把目标换成 `www.seagate.com` 立刻正常（31 个连接成功转发）。在服务器本机用 sing-box 客户端连 ctrip 版是通的，所以问题出在国内网络到海外 IP 这一段，用国内网站当伪装目标会被干扰。现在 `lib/` 把目标写死成只能选 `www.ctrip.com`、`www.ixigua.com`（继承自 dodo-sbox），`srm add --sni` 和 `srm node … retarget` 也只接受这两个。
+  要做：
+  - 内置一份**海外**候选目标列表，作为默认来源（主人在用的节点里实际可用的有 www.seagate.com、www.sennheiser.com、www.jetbrains.com、www.umich.edu），不要再用国内网站。
+  - 部署时从服务器上逐个检测候选目标：TLS 1.3、HTTP/2、证书有效、握手耗时；自动选一个耗时低的，回车即用。
+  - 菜单里可以从检测通过的列表中挑，也可以填自定义域名（同样要检测）。`--sni` 和 `retarget` 接受任何检测通过的域名。
+  - 已部署的节点能在菜单「节点管理」里一键更换伪装目标，换完重新给出链接和二维码。
+  - 迁移 v3 节点时保留原来的目标（例如 seagate），不要强改。
+  - 把这次的实测结论写进 DECISIONS。
+  验收：`grep` 证明 lib/ 里不再有 ctrip、ixigua 作为默认或唯一选项；测试覆盖「候选检测失败的目标不会被选中」「自定义域名要先通过检测」「retarget 接受列表外但检测通过的域名」；CI 全绿。
 - [ ] v4 客户端导入修正：分享链接格式与 Surge 导入 —— 2026-10-10 主人在 Lisa 测试机（v4 开发版）实测发现：（进行中：agent/1010-client-import 2026-10-10 22:37）
   1. Hysteria2 分享链接 `hysteria2://密码@IP:端口?sni=…&alpn=h3&insecure=1&pinSHA256=…` 用复制链接的方式导入 Shadowrocket，既不报错也没加上；改成官方规范（https://v2.hysteria.network/docs/developers/URI-Scheme/）的 `端口/?…`、去掉 `alpn` 后，用二维码导入成功（带 pinSHA256 和不带的两个版本都能加进去）。所有协议的分享链接都要对照各自的官方或事实标准规范逐一核对（Hysteria2 / TUIC / VLESS / Trojan / VMess / SS2022 / Hysteria v1），规范里没有的参数不加，在代码注释里写明依据的规范链接。
   2. 手机版 Surge 不能直接粘贴整行配置，主人只能逐项手填 Snell 的 9 个字段。要查清 Surge 官方支持的导入方式（URL scheme、扫码、托管配置等，只用官方文档里写明的），给出新手能一步完成的办法；确实没有就把 Surge 的输出改成逐项列表，字段名和 Surge 新建代理界面的叫法一致，并保留整行写法给 Mac 版和文本编辑用户。
