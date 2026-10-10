@@ -6,13 +6,13 @@
 
 从上往下做。正在做的条目后面标「（进行中：分支名 时间）」。
 
-- [ ] v4 防火墙支持 iptables（无 UFW / firewalld 的系统）—— 来源：2026-10-10 对比 mack-a/v2ray-agent（提交 5c5e2b7，下称 M，行号指其 install.sh）。`lib/firewall.sh` 检测不到 UFW / firewalld 时只打印提示，甲骨文这类预装 iptables REJECT 规则的镜像会直接连不上；M 的 `allowPort`（883-892）在 netfilter-persistent 系统插 iptables ACCEPT 并保存。要做：加 iptables / ip6tables 后端，规则插在 REJECT 之前、带 `srm` 注释，用 netfilter-persistent 保存（没有就提示）；删节点、卸载时按注释撤掉，不碰别人的规则。验收：测试用 netfilter-persistent 的模拟环境，断言加节点插入带注释的规则、删节点撤掉、已有规则不变；CI 全绿。（进行中：agent/1010-iptables 2026-10-10 23:33）
-
 - [ ] v4 完整客户端配置与一键导入（替代旧订阅）—— 来源：2026-10-10 对比 mack-a/v2ray-agent（提交 5c5e2b7，下称 M，行号指其 install.sh）。新手用 Clash Verge、sing-box 官方 App（SFI/SFA）、手机版 Surge 时，光有一段节点片段导入不了；M 靠订阅给出完整配置（`clashMetaConfig` 9216、sing-box 合并 `documents/sing-box.json` 9613 起）。要做：在菜单「节点管理」里加「导出完整配置」，生成可直接导入的完整 mihomo 配置和完整 sing-box 客户端配置（含所选节点、基本分流、DNS），可选全部或单个节点；再加「临时导入链接」：srm 起一个只在随机路径上服务的临时 HTTP 端口，默认 10 分钟或首次下载后自动关闭并撤掉防火墙规则，给出二维码和各 App 的一键导入链接（`sing-box://import-remote-profile?url=` 已在官方文档核实；`clash://install-config?url=`、Surge 的 `install-config` 先查官方文档，查不到的不放）。如果「客户端导入修正」已经确定了 Surge 的导入方式就复用。没有域名只能走 HTTP 时，界面要提示「链接里带节点密码，用完即关」。验收：生成的 mihomo 配置能被 mihomo `-t` 校验、sing-box 配置能被 `sing-box check` 校验；临时链接在超时或下载一次后关闭且防火墙规则被撤掉（测试断言）；一键导入链接的格式有单元测试并注明官方出处；CI 全绿。
 
 - [ ] v4 部署结果提示与客户端细节 —— 来源：2026-10-10 对比 mack-a/v2ray-agent（提交 5c5e2b7，下称 M，行号指其 install.sh）。四件小事一起做：① Shadowrocket 连 VLESS Vision 节点时 UDP 请求不带 flow，sing-box 服务端按规则拒绝（sing-vmess `vless/service.go` 的 flow 必须一致，Lisa 实测日志大量 `flow mismatch`），网页会回落 TCP 照常用，游戏/语音等纯 UDP 不通；Reality 节点的部署结果和导出说明里写一句「Shadowrocket 走这个节点时 UDP 不可用，需要 UDP 请用 Hysteria2 / TUIC / AnyTLS」。② 服务器没有 IPv6 时，sing-box 配置的 `default_domain_resolver` 加 `strategy: ipv4_only`（M 3537 的做法），减少 network unreachable。③ AnyTLS 的 Clash Meta 片段补 `client-fingerprint: chrome` 和 alpn（对照 M 的输出和 mihomo 文档）。④ Naive 链接是否需要 `padding=true` 查客户端文档后决定。验收：测试断言 Reality 节点提示里有这句 UDP 说明；无 IPv6 的模拟环境生成的配置带 ipv4_only、有 IPv6 时不带；AnyTLS Clash 片段含 client-fingerprint；CI 全绿。
 
 - [ ] v4 Hysteria2 端口跳跃（可选）—— 来源：2026-10-10 对比 mack-a/v2ray-agent（提交 5c5e2b7，下称 M，行号指其 install.sh）。国内运营商常对单一 UDP 端口限速或阻断（M issue #1328），M 用 iptables DNAT 或 firewalld 端口转发实现端口跳跃（3222-3290）。要做：Hysteria2 部署时多一个选项「端口跳跃（运营商限制 UDP 时用）」，默认关；开启后选一段端口范围，用 nftables/iptables 把范围内 UDP 转到节点端口，规则带 srm 注释，删节点和卸载时撤掉；分享链接和各客户端片段带上端口范围（按 Hysteria2 官方规范的 `端口,起-止` 写法，客户端不支持的写明）。验收：测试断言开启时生成转发规则、关闭和删节点时撤掉；链接格式有单元测试；CI 全绿。
+
+- [ ] v4 iptables 规则开机自动补回（没有 netfilter-persistent 的系统）—— 来源：2026-10-10 iptables 后端审查（PR #13）。没装 netfilter-persistent 时，srm 加的 iptables 规则重启后就没了，而系统自己的 REJECT 可能由别的方式恢复，节点要等下次改节点或手动同步才通；现在只打印提示。要做：srm.service 启动前（如 ExecStartPre 或单独的 oneshot）按当前 state 同步一次防火墙端口规则，失败不阻止服务启动。验收：测试断言单元里有这一步、规则缺失时启动后补回；install-live 里真实 systemd 跑通；CI 全绿。
 
 ## 等主人拍板
 
@@ -32,6 +32,10 @@
 
 ## 已完成
 
+- [x] v4 防火墙支持 iptables（无 UFW / firewalld 的系统）—— 2026-10-10 合并，提交 a3ab340（PR #13）。UFW、firewalld 都没运行，且 iptables / ip6tables 的 INPUT 有兜底 `-j REJECT` / `-j DROP`（或默认策略 DROP）时，在兜底规则正前方插入 `-p tcp|udp --dport <端口> -m comment --comment srm -j ACCEPT`，IPv4、IPv6 分别判断；规则有变化且有 netfilter-persistent 就 `netfilter-persistent save`，没有就提示「重启后会失效；安装 iptables-persistent 时选「是」保存当前规则」。删节点、改端口、停用、卸载按完整规则（含注释）精确删除，同端口的别人规则不动。提示文字改成「UFW / firewalld / iptables」。
+  - 替主人定了：只在有兜底拦截时才启用 iptables（INPUT 全放行的普通机器不加规则）；插在兜底规则正前方而不是最前面（mack-a 插最前面，会跳过用户自己的封 IP 规则）；缺 comment 模块的机器部署会失败回滚并提示可改用 UFW。理由见 DECISIONS.md。
+  - 验收：在 GitHub 打开 PR #13，CI「verify」全绿，日志里有 tests/firewall-iptables.sh 的 10 条 PASS（「adding nodes inserts ACCEPT rules commented srm before the REJECT and saves them with netfilter-persistent」「deleting a node removes only its srm rule and saves」「uninstall removes every srm rule and keeps the existing allow on the same port」等）和 firewall-live 的三条「PASS real iptables: …」（真实 iptables 下 REJECT 挡住、同步后能访问、删节点又被挡、卸载后规则逐字节复原）。服务器上试：在甲骨文 Ubuntu 镜像（`iptables -S INPUT` 末尾有 `-j REJECT`）上部署一个节点，`iptables -S INPUT` 应在 REJECT 前多一条带 `--comment srm` 的规则、`/etc/iptables/rules.v4` 里也有；删掉节点后这条消失。
+  - 没做：没在真实甲骨文镜像上跑；`netfilter-persistent save` 会把 fail2ban / Docker 的动态规则一起存进去（照 mack-a 的做法）；没装 netfilter-persistent 时重启后的自动补回放进了待做。原生 nftables 规则仍不接管。
 - [x] v4 Reality 伪装目标不能写死国内网站 —— 2026-10-10 合并，提交 2ff078b（PR #12）。写死的「携程 / 西瓜视频」换成 14 个海外候选：www.jetbrains.com、www.mozilla.org、www.python.org、www.cisco.com、www.oracle.com 等，都满足 TLS 1.3、HTTP/2、证书有效、首页不跳转、不经 Cloudflare。Reality 和 ShadowTLS（Snell）共用这份列表。
   - 部署：在服务器上同时检测全部候选（openssl 查 TLS 1.3、HTTP/2 和证书；curl 请求 `/cdn-cgi/trace` 测握手耗时，回答里有 `visit_scheme=` 就视为经 Cloudflare 并排除），自动选握手最快的。快速部署的问题数不变，结果前显示「伪装目标：自动选用 X（握手 N ms）」。
   - 「2. 节点管理 → 选节点 → 10. 更换伪装目标」：通过检测的候选按耗时列出，回车选最快的；也可以自己填域名（同样要通过检测）。换完重新显示链接、二维码和各客户端配置。
