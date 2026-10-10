@@ -133,6 +133,17 @@ expect_refused "$node"
 echo 'PASS wrong credentials are refused'
 
 if [[ -n ${TEST_MIHOMO:-} ]]; then
+    # mihomo opens its ports before it starts routing and silently closes connections
+    # that arrive in between (tunnel status not yet Running). A second inbound sent
+    # DIRECT to the page shows when it routes, without going through the node.
+    wait_mihomo_routing() {
+        local i
+        for ((i=0; i<50; i++)); do
+            [[ $(curl --noproxy '' --silent --max-time 2 --socks5-hostname 127.0.0.1:18296 http://127.0.0.1:18299/) == srm-traffic-ok ]] && return 0
+            sleep 0.2
+        done
+        return 1
+    }
     for nid in $(jq -r '.nodes[].id' "$work/state.json"); do
         node=$(node_json "$work/state.json" "$nid")
         name=$(jq -r .name <<< "$node")
@@ -143,14 +154,15 @@ if [[ -n ${TEST_MIHOMO:-} ]]; then
             proxy="- $(jq -c --arg fp "$ca_sha256" '.fingerprint=$fp' <<< "${proxy#- }")"
         fi
         mkdir -p "$work/mihomo"
-        printf 'mixed-port: 18297\nbind-address: 127.0.0.1\nmode: rule\nlog-level: warning\nipv6: false\nproxies:\n  %s\nrules:\n  - MATCH,%s\n' \
+        printf 'mixed-port: 18297\nbind-address: 127.0.0.1\nmode: rule\nlog-level: warning\nipv6: false\nlisteners:\n  - {name: ready, type: mixed, listen: 127.0.0.1, port: 18296, proxy: DIRECT}\nproxies:\n  %s\nrules:\n  - MATCH,%s\n' \
             "$proxy" "$name" > "$work/mihomo/config.yaml"
         "$TEST_MIHOMO" -t -d "$work/mihomo" > "$work/mihomo-check.log" 2>&1 || { cat "$work/mihomo/config.yaml" "$work/mihomo-check.log"; fail "mihomo rejected the $name snippet"; }
         "$TEST_MIHOMO" -d "$work/mihomo" > "$work/mihomo.log" 2>&1 & mihomo_pid=$!; pids+=("$mihomo_pid")
         wait_port 18297 || { cat "$work/mihomo.log"; fail "mihomo did not start for $name"; }
-        page=$(fetch_via 127.0.0.1:18297) || page=''
+        wait_mihomo_routing || { cat "$work/mihomo.log"; fail "mihomo never started routing for $name"; }
+        page=$(fetch_via 127.0.0.1:18297) || true
         kill "$mihomo_pid"; wait "$mihomo_pid" 2>/dev/null || true
-        [[ $page == srm-traffic-ok ]] || { cat "$work/mihomo/config.yaml" "$work/mihomo.log"; fail "mihomo through $name"; }
+        [[ $page == srm-traffic-ok ]] || { cat "$work/mihomo/config.yaml" "$work/mihomo.log"; printf '%s\n' "$page"; fail "mihomo through $name"; }
         printf 'PASS mihomo (Clash Meta snippet) fetches the page through %s\n' "$name"
     done
 else

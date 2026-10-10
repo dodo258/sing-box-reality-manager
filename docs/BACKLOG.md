@@ -6,7 +6,7 @@
 
 从上往下做。正在做的条目后面标「（进行中：分支名 时间）」。
 
-- [ ] tests/traffic.sh 的 mihomo 流量测试偶发失败 —— 来源：2026-10-11 main 上 2392455 的 CI（run 38073278751）报「FAIL mihomo through vless-httpupgrade」，mihomo 启动后约 0.2 秒就被关掉、没取到页面；同样代码的 PR #16 三次 CI 和紧接着的 401da53 都通过，和端口跳跃无关。可能是 wait_port 只等端口监听、mihomo 还没准备好出站，或 fetch_via 超时太短。要做：查清原因，给 mihomo 那段加就绪等待或有限次重试（只针对启动竞态，不放松断言）。验收：本机或 CI 连跑 traffic.sh 多次不再出现；CI 全绿。
+- [ ] tests/traffic.sh 的 mihomo 流量测试偶发失败 —— 来源：2026-10-11 main 上 2392455 的 CI（run 38073278751）报「FAIL mihomo through vless-httpupgrade」，mihomo 启动后约 0.2 秒就被关掉、没取到页面；同样代码的 PR #16 三次 CI 和紧接着的 401da53 都通过，和端口跳跃无关。可能是 wait_port 只等端口监听、mihomo 还没准备好出站，或 fetch_via 超时太短。要做：查清原因，给 mihomo 那段加就绪等待或有限次重试（只针对启动竞态，不放松断言）。验收：本机或 CI 连跑 traffic.sh 多次不再出现；CI 全绿。（进行中：agent/1011-mihomo-ready 2026-10-11 02:18）
 
 - [ ] UFW / firewalld 临时停用时不清掉 srm 的规则记录 —— 来源：2026-10-11 PR #17 审查。`firewall_sync` 检测到没有活动防火墙（backend none）时，会把别的后端的记录和规则当作多余删掉；用户临时 `ufw disable` 后再开启，节点就被挡。以前只在改节点时发生，现在 srm.service 每次启动（含崩溃自动重启）都同步，更容易碰到。要做：backend 为 none 时保留 ufw / firewalld 的记录（只清 iptables 这类运行时规则的失效记录），重新启用后下一次同步照常。验收：测试覆盖 ufw 停用 → 同步 → 启用后规则仍在；CI 全绿。
 
