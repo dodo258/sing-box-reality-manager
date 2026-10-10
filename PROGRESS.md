@@ -4,15 +4,16 @@
 v4 重写，方案 `docs/specs/2026-10-10-v4-rewrite.md`，2026-10-10 按主人补充修订：sing-box 全协议、Snell 单独部署、核心更新（只提示、手动更新）、快速部署流程；拆成 8 条待办见 `docs/BACKLOG.md`。
 
 ## 下一步
-1. ~~骨架~~（2026-10-10 合并 e843254：lib/ 模块、协议注册表、常驻菜单、CI）→ 2. ~~多节点/分流~~（2026-10-10 合并 8fb22c4：schema 2、规则限定到节点、端口 1–65535）→ 3. ~~其余协议~~（2026-10-10 合并 95e8a03：7 种协议、自签证书加 pin、Clash Meta / Surge 片段）→ 4. ~~Snell+ShadowTLS~~（2026-10-10 合并 d75eefb：官方 snell-server 独立服务 + sing-box ShadowTLS 前置、Surge/mihomo/sing-box 写法、伴随服务机制）→ 5. 更新提示与手动更新 → 6. 快速部署 → 7. migrate → 8. 切换发布（等主人确认）
+1. ~~骨架~~（2026-10-10 合并 e843254：lib/ 模块、协议注册表、常驻菜单、CI）→ 2. ~~多节点/分流~~（2026-10-10 合并 8fb22c4：schema 2、规则限定到节点、端口 1–65535）→ 3. ~~其余协议~~（2026-10-10 合并 95e8a03：7 种协议、自签证书加 pin、Clash Meta / Surge 片段）→ 4. ~~Snell+ShadowTLS~~（2026-10-10 合并 d75eefb：官方 snell-server 独立服务 + sing-box ShadowTLS 前置、Surge/mihomo/sing-box 写法、伴随服务机制）→ 5. ~~更新提示与手动更新~~（2026-10-10 合并 2413813：每日只查版本、菜单提示、手动更新带校验和回滚）→ 6. 快速部署 → 7. migrate → 8. 切换发布（等主人确认）
 
 ## 待用户决定
 - 前 7 条验收后，是否正式发布 v4.0.0
 
 ## 已知问题 / 风险
-- v4 骨架的 sing-box 核心固定在 1.14.1（沿用 dodo-sbox 的哈希），改成「取最新稳定版 + digest 校验」属于待办「核心更新」。
+- 安装取 sing-box 最新稳定版（只限最低 1.14，API 不通退回 1.14.1）；将来 1.15 若改配置格式，新装机器部署会在 `sing-box check` 处失败。CI 单元测试仍固定 1.14.1。
 - 已装好的 v4 开发版服务器不会重写 systemd 单元，节点用 1024 以下端口要先重装（新单元带 CAP_NET_BIND_SERVICE）。
-- Snell 节点不受流媒体分流规则影响（snell-server 自己发起出站）；snell-server 版本固定在 v6.0.0rc2 / v5.0.1，跟进新版属于「核心更新」。
+- Snell 节点不受流媒体分流规则影响（snell-server 自己发起出站）；部署装固定的 v6.0.0rc2 / v5.0.1，之后在菜单「5. 更新」跟进新版（新构建官方无校验和，靠 HTTPS + 试运行核对版本）。
+- 已装好的 v4 开发版服务器没有每日检查 timer，在菜单「5. 更新 → 6. 开启每日检查」打开。
 - 自签证书目录 `/var/lib/srm/selfsigned/<节点ID>` 删除节点时不清理（回滚可能还要用），只在卸载时随 /var/lib/srm 删除。
 - main 上的 `install.sh` 仍是 v3，现网用户靠它安装和更新，切换前不能改。
 - `.github/workflows/create_release.yml` 监听 `master`，从没运行过；里面有删除旧 release 的逻辑，改触发条件前要先去掉。
