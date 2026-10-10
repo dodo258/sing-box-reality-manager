@@ -13,7 +13,7 @@ mkdir -p "$SRM_ROOT" "$DATA/current" "$work/bin"
 for tool in curl wget; do
     printf '#!/usr/bin/env bash\nprintf "%%s %%s\\n" "%s" "$*" >> "%s/network-calls"\nexit 1\n' "$tool" "$work" > "$work/bin/$tool"
 done
-printf '#!/usr/bin/env bash\ncat > /dev/null\necho "[QR]"\n' > "$work/bin/qrencode"
+printf '#!/usr/bin/env bash\ncat > /dev/null\necho "[QR $*]"\n' > "$work/bin/qrencode"
 chmod 755 "$work/bin/"*
 export PATH="$work/bin:$PATH"
 require_linux() { return 0; }
@@ -47,7 +47,8 @@ grep -q 'VLESS Reality · AnyTLS · Hysteria2' "$work/menu"
 grep -q '节点：2 / 3' "$work/menu"
 echo 'PASS menu stays open and returns after each action until 0'
 grep -q 'vless://0f2a6c1e-3b4d-4e5f-8a9b-0c1d2e3f4a5b@192.0.2.1:18101' "$work/menu"
-grep -q '\[QR\]' "$work/menu"
+grep -q '\[QR -t UTF8\]' "$work/menu"
+grep -q '10.切换 Reality 目标' "$work/menu"
 grep -q '"type": "anytls"' "$work/menu"
 grep -q 'journal fixture' "$work/menu"
 grep -q '1 条平台规则' "$work/menu"

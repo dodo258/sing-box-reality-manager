@@ -25,6 +25,10 @@ proto_register() {
     for hook in $PROTO_HOOKS; do
         declare -F "proto_${type}_$hook" >/dev/null || { err "协议 $type 缺少 proto_${type}_$hook，未注册。"; return 1; }
     done
+    # Optional hooks come as a complete group or not at all.
+    local optional=0
+    for hook in retarget retarget_select retarget_label; do declare -F "proto_${type}_$hook" >/dev/null && optional=$((optional+1)); done
+    (( optional == 0 || optional == 3 )) || { err "协议 $type 的 retarget 钩子不完整，未注册。"; return 1; }
     proto_known "$type" || PROTOCOLS="${PROTOCOLS:+$PROTOCOLS }$type"
 }
 proto_known() { [[ $1 =~ ^[a-z][a-z0-9]*$ && " $PROTOCOLS " == *" $1 "* ]]; }

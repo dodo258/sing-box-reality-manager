@@ -29,6 +29,14 @@ ask_opt() {
     fi
     ask "$prompt" "$default"
 }
+# Reads one hidden line into REPLY; a last line without newline still counts.
+read_secret() {
+    local rc=0
+    printf '%s：' "$1" >&2
+    IFS= read -rs REPLY || [[ -n $REPLY ]] || rc=1
+    printf '\n' >&2
+    return "$rc"
+}
 yesno() { local answer; printf '%s [y/N]：' "$1" >&2; IFS= read -r answer && [[ $answer == y || $answer == Y ]]; }
 random_hex() { openssl rand -hex "$1"; }
 fetch() { curl --proto '=https' --tlsv1.2 --fail --location --silent --show-error --retry 2 --connect-timeout 15 --max-time 180 "$1" -o "$2"; }

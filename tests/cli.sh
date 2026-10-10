@@ -27,3 +27,16 @@ source lib/common.sh
 [[ $(bash dist/srm version) == "srm $SRM_VERSION / tested core $CORE_VERSION" ]] || fail version
 [[ $(bash srm.sh protocols | cut -f1,3 | tr '\t\n' ': ') == 'vless:tcp anytls:tcp hysteria2:udp ' ]] || fail protocols
 echo 'PASS version and protocol list'
+# main() passes the remaining arguments to each handler unchanged.
+(
+    source ./srm.sh
+    with_lock() { printf '%s\n' "$*"; }
+    require_root() { return 0; }
+    [[ $(main routing dns 192.0.2.1) == 'routing_change dns 192.0.2.1' ]] || fail 'routing dispatch'
+    [[ $(main routing add N dns 'a.com b.com') == 'routing_change add N dns a.com b.com' ]] || fail 'routing add dispatch'
+    [[ $(main add vless --name x --yes) == "node_add $SRM_SELF vless --name x --yes" ]] || fail 'add dispatch'
+    [[ $(main node 1111111111111111 port 20000) == 'node_change 1111111111111111 port 20000' ]] || fail 'node dispatch'
+    [[ $(main uninstall --yes) == uninstall ]] || fail 'uninstall dispatch'
+    [[ $(main bbr on) == bbr_enable && $(main auto-update off) == auto_update_off ]] || fail 'subcommand dispatch'
+) || exit 1
+echo 'PASS subcommands pass their arguments to the right handler'

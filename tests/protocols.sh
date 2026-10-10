@@ -27,6 +27,13 @@ grep -q 'proto_vmess_label' "$work/err" || fail 'missing hook not reported'
 proto_partial_label() { printf 'Partial'; }
 if proto_register partial 2>/dev/null; then fail 'protocol with missing hooks registered'; fi
 if proto_register 'Bad-Name' 2>/dev/null; then fail 'invalid protocol name registered'; fi
+(
+    for hook in $PROTO_HOOKS; do eval "proto_half_$hook() { :; }"; done
+    proto_half_retarget() { :; }
+    if proto_register half 2>/dev/null; then fail 'incomplete optional hook group registered'; fi
+    proto_half_retarget_select() { :; }; proto_half_retarget_label() { :; }
+    proto_register half || fail 'complete optional hook group rejected'
+) || exit 1
 [[ $PROTOCOLS == 'vless anytls hysteria2' ]] || fail "registry changed: $PROTOCOLS"
 if proto_call vmess label 2> "$work/err"; then fail 'unknown protocol dispatched'; fi
 grep -q '不支持的协议：vmess' "$work/err" || fail 'unknown protocol message'

@@ -80,16 +80,22 @@ cp "$work/original.json" "$STATE"
 routing_change dns 192.0.2.53 >/dev/null
 routing_change add Video dns 'Netflix.com nflxvideo.net' example.org >/dev/null
 jq -e '.unlock_dns=="192.0.2.53" and .policies==[{name:"Video",mode:"dns",domains:["example.org","netflix.com","nflxvideo.net"]}]' "$STATE" >/dev/null || exit 1
+printf 'unterminated' | routing_change egress 192.0.2.80 1081 user >/dev/null 2>&1
+jq -e '.egress.password=="unterminated"' "$STATE" >/dev/null || exit 1
+routing_menu <<< $'3\n192.0.2.81\n1082\nbob\nmenu-password' >/dev/null 2>&1
+jq -e '.egress=={type:"socks",version:"5",server:"192.0.2.81",server_port:1082,username:"bob",password:"menu-password"}' "$STATE" >/dev/null || exit 1
 printf 'secret-password\n' | routing_change egress 192.0.2.80 1081 user >/dev/null 2>&1
 jq -e '.egress=={type:"socks",version:"5",server:"192.0.2.80",server_port:1081,username:"user",password:"secret-password"}' "$STATE" >/dev/null || exit 1
 routing_change add Proxy proxy stream.example.net >/dev/null
 jq -e '.route.rules|any(.outbound=="media-proxy")' "$work/config.json" >/dev/null || exit 1
 before=$(sha256 "$STATE")
-for bad in 'dns not-an-ip' 'dns 999.1.1.1' 'egress 192.0.2.80 70000' 'add X both example.com' 'add X dns' 'del Missing' 'bogus' 'add Other proxy example.org'; do
+for bad in 'dns not-an-ip' 'dns 999.1.1.1' 'dns 192.0.2.9 extra' 'egress 192.0.2.80 70000' 'egress 192.0.2.80 1081 user' 'egress 192.0.2.80 1081 user extra' 'add X both example.com' 'add X dns' 'del Missing' 'del Video extra' 'bogus' 'add Other proxy example.org'; do
     # shellcheck disable=SC2086 # split the argument list
     if routing_change $bad > /dev/null 2>&1 < /dev/null; then echo "FAIL accepted routing $bad"; exit 1; fi
 done
 [[ $(sha256 "$STATE") == "$before" ]] || exit 1
+if printf '3\n192.0.2.81\n1082\nbob\n' | routing_menu >/dev/null 2>&1; then echo 'FAIL menu applied egress without a password'; exit 1; fi
+[[ $(sha256 "$STATE") == "$before" ]] || exit 1
 routing_change del Proxy >/dev/null
 jq -e '[.policies[].name]==["Video"]' "$STATE" >/dev/null || exit 1
-echo 'PASS non-interactive routing: dns, egress (password from stdin), add, del; invalid input changes nothing'
+echo 'PASS non-interactive routing: dns, egress (password from stdin), add, del; invalid input or a missing password changes nothing'

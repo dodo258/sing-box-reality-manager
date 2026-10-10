@@ -63,9 +63,11 @@ routing_menu() {
 #   dns IP | egress HOST PORT [USER] (password read from stdin) | add NAME dns|proxy DOMAIN… | del NAME
 # Domain arguments may also hold several space-separated suffixes.
 routing_change() {
-    local op=${1:-} candidate tmp host port user pass='' name mode domains rc=1
+    local op=${1:-} candidate tmp host port user pass='' name mode domains rc=1 max=0
     [[ -f $STATE ]] || { err '请先部署节点。'; return 1; }
     shift
+    case $op in dns|del) max=1;; egress) max=3;; esac
+    (( max == 0 || $# <= max )) || { err "多余的参数：${*:max+1}"; return 1; }
     candidate=$(new_candidate) || return 1
     tmp=$(mktemp) || { rm -f "$candidate"; return 1; }
     case $op in
@@ -78,10 +80,9 @@ routing_change() {
         host=${1:-} port=${2:-1080} user=${3:-}
         if ! valid_host "$host"; then err '出口地址无效。'
         elif ! [[ $port =~ ^[1-9][0-9]{0,4}$ ]] || ((port > 65535)); then err '出口端口无效。'
+        elif [[ -n $user ]] && ! read_secret '密码（不回显）'; then err '没有从标准输入读到密码，未修改。'
         else
-            if [[ -n $user ]]; then
-                printf '密码（不回显，无认证则留空）：' >&2; IFS= read -rs pass || pass=''; printf '\n' >&2
-            fi
+            [[ -z $user ]] || pass=$REPLY
             jq --arg host "$host" --argjson port "$port" --arg user "$user" --arg pass "$pass" '.egress={type:"socks",version:"5",server:$host,server_port:$port} + (if $user!="" then {username:$user,password:$pass} else {} end)' "$candidate" > "$tmp" && rc=0
         fi;;
       add)
