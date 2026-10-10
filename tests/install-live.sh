@@ -192,8 +192,9 @@ echo 'PASS no automatic update job is installed'
 # Moving v3 with real systemd: a stand-in for v3's dodo258-sing-box runs the single
 # Reality sample on its port. When the takeover fails after srm started on the port,
 # the old unit runs and is enabled again; then srm takes the port over, the old unit
-# ends stopped and disabled, the v3 cron job is commented out and the v3 files stay
-# byte for byte the same.
+# ends stopped, disabled and blocked by srm's drop-in (v3 renewal restarting it fails,
+# srm keeps the port), the v3 cron job is commented out and the v3 files stay byte for
+# byte the same.
 (
     source ./srm.sh
     logs() { systemctl status srm.service dodo258-sing-box.service --no-pager || true; journalctl -u srm.service -n 40 --no-pager; ss -ltnp; exit 1; }
@@ -224,16 +225,30 @@ echo 'PASS no automatic update job is installed'
     for i in 1 2 3 4 5 6 7 8 9 10; do [[ -z $(ss -H -ltn "sport = :$port") ]] || break; sleep 1; done
     [[ -n $(ss -H -ltn "sport = :$port") && $(sha256sum < "$STATE") == "$state" ]] || logs
     crontab -l | grep -q '^30 1 \* \* \* /bin/bash' || exit 1
-    echo 'PASS a failed takeover with real systemd starts and enables the old v3 service again'
+    [[ ! -e /etc/systemd/system/dodo258-sing-box.service.d ]] || { echo 'FAIL old unit still blocked after restoring'; exit 1; }
+    echo 'PASS a failed takeover with real systemd starts and enables the old v3 service again (no longer blocked)'
     migrate_apply "$PWD/dist/srm" > "$v3.out" 2>&1 || { cat "$v3.out"; logs; }
     ! systemctl is-active --quiet dodo258-sing-box.service && ! systemctl is-enabled --quiet dodo258-sing-box.service || logs
     systemctl is-active --quiet srm.service && [[ -n $(ss -H -ltnp "sport = :$port" | grep sing-box) ]] || logs
     id=$(jq -r --argjson p "$port" '.nodes[]|select(.port == $p)|.id' "$STATE")
     [[ -n $id && $(hash) == "$before" ]] || exit 1
     crontab -l | grep -q '^# srm 迁移后停用：30 1 ' || exit 1
-    node_change "$id" delete
-    crontab -r; rm -f /etc/systemd/system/dodo258-sing-box.service "$v3.out"; systemctl daemon-reload
     echo 'PASS srm takes over the port of the v3 service with real systemd; the old unit is stopped and disabled, /etc/v2ray-agent unchanged'
+    # What v3's RenewTLS / UpdateGeo do to its sing-box (handleSingBox restart): stop, start.
+    systemctl stop dodo258-sing-box.service
+    if systemctl start dodo258-sing-box.service 2> "$v3.out"; then echo 'FAIL the blocked old unit started'; logs; fi
+    grep -qi 'assert' "$v3.out" || { cat "$v3.out"; exit 1; }
+    sleep 1
+    ! systemctl is-active --quiet dodo258-sing-box.service || logs
+    owner=$(ss -H -ltnp "sport = :$port" | grep -o 'pid=[0-9]*' | head -n 1)
+    [[ ${owner#pid=} == "$(systemctl show -P MainPID srm.service)" ]] || logs
+    # The block ends with srm's record: without it the unit starts (and fails on the port srm holds).
+    mv "$DATA/migrated-v3.json" "$v3.record"
+    systemctl start dodo258-sing-box.service || { echo 'FAIL old unit still blocked without srm'"'"'s record'; logs; }
+    systemctl stop dodo258-sing-box.service; mv "$v3.record" "$DATA/migrated-v3.json"
+    node_change "$id" delete
+    crontab -r; rm -rf /etc/systemd/system/dodo258-sing-box.service /etc/systemd/system/dodo258-sing-box.service.d "$v3.out"; systemctl daemon-reload
+    echo 'PASS with real systemd the taken-over v3 unit cannot be started again (v3 renewal restarting it fails, srm keeps the port) until srm'"'"'s record is gone'
 )
 # Uninstall with sing-box and a snell-server still running stops and removes both.
 systemctl is-active --quiet srm.service || exit 1

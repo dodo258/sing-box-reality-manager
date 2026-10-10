@@ -1,0 +1,10 @@
+{
+  "nodes": [
+    {"name": "vless-35443", "type": "vless", "port": 35443, "enabled": true, "sni": "www.example.com",
+     "uuid": "9fa0b1c2-3333-4444-8555-2a2b2c2d2e2f", "private_key": "AD74yTt0mGFM10h4XD8vkbSwpIaN7roL58_tkjbdOkQ",
+     "public_key": "6G0iU-IquRpPD0H6wtDSutUMsjBqk34b-r3JjhA301M", "short_id": "6ba85179e30d4fc2"}
+  ],
+  "lost_users": {"vless-35443": ["bob-VLESS_Reality_Vision", "carol-VLESS_Reality_Vision"]},
+  "skipped": [],
+  "units": ["dodo258-sing-box.service"]
+}

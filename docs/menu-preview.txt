@@ -154,7 +154,9 @@ AnyTLS 需要一个已经解析到本机（192.0.2.10）的域名，用来申请
 能迁移的节点（端口、密码和密钥都不变，正在用的客户端不用改）：
   1. VLESS Reality（端口 443，07_VLESS_vision_reality_inbounds.json） · www.example.com
   2. VLESS Reality（端口 31444，30_VLESS_vision_reality_multi_jp1.json） · www.example.org
-     说明：这个端口还有 1 个用户（bob-VLESS_Reality_Vision）不迁移，v4 每个节点只保留第一个用户。
+     这个端口有 2 个用户，v4 每个节点只能有一个用户，只迁移「alice-VLESS_Reality_Vision」。
+     下面这些用户迁移后将无法连接：
+       - bob-VLESS_Reality_Vision
   3. AnyTLS（端口 8443，13_anytls_inbounds.json） · vpn.example.com
   4. Snell v5 + ShadowTLS（端口 32443，20260101120000-32443.env） · www.example.com
 
@@ -167,15 +169,18 @@ AnyTLS 需要一个已经解析到本机（192.0.2.10）的域名，用来申请
 
 迁移时会：
   - 停止并停用旧服务：dodo258-sing-box.service、dodo258-shadowtls-20260101120000-32443.service、dodo258-snell-20260101120000-32443.service；上面不能迁移的旧 sing-box 节点随之停止
+  - 禁止这些旧服务再启动：旧版脚本重启它们会失败，不会和 srm 抢端口
   - 由 srm 在原端口启动这些节点；启动或健康检查失败就恢复旧服务
-  - 注释掉旧版定时任务（RenewTLS、UpdateGeo），行首加 #，不删除
-    注意：继续运行的旧版网站 / Xray 用的证书（/etc/v2ray-agent/tls）从此不再自动续期，Xray 的 geo 数据也不再更新，请在证书到期前自行处理
+  - 保留旧版定时任务（RenewTLS、UpdateGeo）：继续运行的 Xray vless（端口 31448）、网站 还要靠它续期证书（/etc/v2ray-agent/tls）、更新 geo 数据
   - 证书改由 srm 续期：到期前 30 天自动向 Let's Encrypt 重新申请（用 80 或 443 端口验证）
   - /etc/v2ray-agent 里的文件一个字节都不改
+
+注意：上面列出的 1 个用户迁移后将无法连接。
 
   1. 确认迁移（服务会重启，连接断开几秒）
   0. 返回
 请选择 [0]：                                          ← 输入 1（直接回车 = 返回，什么都不改）
 
+（没有剩余的旧版服务时，这一行是「注释掉旧版定时任务（RenewTLS、UpdateGeo），行首加 #，不删除」）
 （选「否」后主菜单多一项，迁移完成后这一项和第一屏的提示都不再出现）
   9. 迁移旧版节点 · 发现 v3 安装

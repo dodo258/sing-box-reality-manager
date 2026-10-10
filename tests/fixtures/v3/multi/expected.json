@@ -12,7 +12,7 @@
     {"name": "anytls-31445", "type": "anytls", "port": 31445, "enabled": true, "sni": "vpn.example.com",
      "password": "4e5f6071-5555-4666-8777-88889999aaaa", "cert_dir": "certs/vpn.example.com/active"}
   ],
-  "notes": {"vless-31444": "这个端口还有 1 个用户（bob-VLESS_Reality_Vision）不迁移，v4 每个节点只保留第一个用户。"},
+  "lost_users": {"vless-31444": ["bob-VLESS_Reality_Vision"]},
   "skipped": [
     "VLESS Reality（端口 31446，08_VLESS_vision_gRPC_inbounds.json）",
     "vmess（端口 31306，11_VMess_HTTPUpgrade_inbounds.json）",

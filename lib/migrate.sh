@@ -6,9 +6,18 @@
 V3_ROOT=/etc/v2ray-agent
 V3_UNIT_DIR=/etc/systemd/system
 # Crontab lines of v3 that renew certificates or update geo data and restart v3's
-# services; after moving they are commented out, never deleted.
+# services (reloadCore). Commented out after moving, never deleted, and only when
+# nothing of v3 keeps running on them (V3_REMAINS).
 V3_CRON_JOBS='RenewTLS UpdateGeo'
 MIGRATE_MARK='# srm 迁移后停用：'
+# What of v3 keeps running after the move: Xray, the website, or v3's sing-box service
+# when none of its nodes moves (jq on the plan, a list of labels).
+V3_REMAINS='[.skipped[]|select(.runs)|.label] + (if any(.skipped[]; .stops) and (any(.units[]; test("sing-box"))|not) then ["旧版 sing-box 服务（上面不能迁移的 sing-box 节点）"] else [] end)'
+# Drop-in that keeps a taken-over unit of v3 from starting while srm runs its nodes:
+# v3's RenewTLS / UpdateGeo restart its sing-box. `systemctl mask` refuses unit files
+# in /etc/systemd/system, where v3 puts them; the assertion ends with srm's record, so
+# removing srm (and DATA with it) frees the unit again.
+V3_BLOCK=srm-migrated.conf
 # Settings-only fragments of v3 that need nothing in srm.
 V3_PLAIN_FILES='log.json sniff.json'
 # Menu item while v3 is there and nothing has been moved yet; no network, no root
@@ -74,8 +83,9 @@ migrate_skip() {
     jq --arg l "$2" --arg r "$3" --arg k "${4:-}" '.skipped += [{label:$l,reason:$r} + (if $k == "" then {} else {($k):true} end)]' "$1" > "$tmp" && mv "$tmp" "$1"
 }
 # A node from a v3_scan line or from an inbound; checks what every node needs and adds it.
+# LABEL NODE [CERT UNITS NOTE USERS]: USERS, names of all users of the v3 inbound.
 migrate_add() {
-    local plan=$1 label=$2 node=$3 cert=${4:-null} unit_list=${5:-[]} note=${6:-} port id taken tmp check stops=''
+    local plan=$1 label=$2 node=$3 cert=${4:-null} unit_list=${5:-[]} note=${6:-} users=${7:-[]} port id taken tmp check stops=''
     # Nodes without units of their own are served by v3's sing-box service.
     [[ $unit_list != '[]' ]] || stops=stops
     port=$(jq -r .port <<< "$node")
@@ -93,8 +103,9 @@ migrate_add() {
     if ! validate_state "$check" 2>/dev/null; then rm -f "$check"; migrate_skip "$plan" "$label" '节点数据 v4 不接受（字段格式不符）' $stops; return 0; fi
     rm -f "$check"
     tmp=$(mktemp) || return 1
-    jq --argjson n "$node" --arg l "$label" --argjson c "$cert" --argjson u "$unit_list" --arg note "$note" \
-        '.nodes += [{node:$n,label:$l,cert:$c,units:$u} + (if $note == "" then {} else {note:$note} end)]' "$plan" > "$tmp" && mv "$tmp" "$plan"
+    jq --argjson n "$node" --arg l "$label" --argjson c "$cert" --argjson u "$unit_list" --arg note "$note" --argjson users "$users" \
+        '.nodes += [{node:$n,label:$l,cert:$c,units:$u} + (if $note == "" then {} else {note:$note} end)
+            + (if ($users|length) > 1 then {user:$users[0],lost_users:$users[1:]} else {} end)]' "$plan" > "$tmp" && mv "$tmp" "$plan"
 }
 migrate_scanned() {
     local plan=$1 line=$2 label
@@ -122,10 +133,9 @@ migrate_inbound() {
             { migrate_skip "$plan" "$label" "$REPLY" stops; return 0; }
         cert=$REPLY
     fi
-    if jq -e '(.users|length) > 1' <<< "$in" >/dev/null; then
-        note="这个端口还有 $(( $(jq '.users|length' <<< "$in") - 1 )) 个用户（$(jq -r '[.users[1:][]|.name // .username // "?"]|join("、")' <<< "$in")）不迁移，v4 每个节点只保留第一个用户。"
-    fi
-    migrate_add "$plan" "$label" "$(jq -c --arg t "$type" --argjson p "$port" '. + {type:$t,port:$p}' <<< "$fields")" "$cert" '[]' "$note"
+    # v4 nodes have one user each: the first one moves, the others are listed.
+    migrate_add "$plan" "$label" "$(jq -c --arg t "$type" --argjson p "$port" '. + {type:$t,port:$p}' <<< "$fields")" "$cert" '[]' '' \
+        "$(jq -c '[.users|to_entries[]|.value.name // .value.username // .value.email // "第 \(.key+1) 个用户"]' <<< "$in")"
 }
 # REPLY = the certificate of a TLS node: {kind:"ca",domain,cert,key} or, for a
 # self-signed one (only protocols whose clients pin it), {kind:"self",cert,key,pins}.
@@ -161,7 +171,9 @@ migrate_show() {
         jq -r '.nodes|to_entries[]|"  \(.key+1). \(.value.label)"
             + (if .value.node.sni then " · \(.value.node.sni)" else "" end)
             + (if .value.cert.kind == "self" then " · 自签证书" else "" end)
-            + (if .value.note then "\n     说明：\(.value.note)" else "" end)' "$plan"
+            + (if .value.note then "\n     说明：\(.value.note)" else "" end)
+            + (if .value.lost_users then "\n     这个端口有 \(.value.lost_users|length + 1) 个用户，v4 每个节点只能有一个用户，只迁移「\(.value.user)」。"
+               + "\n     下面这些用户迁移后将无法连接：" + ([.value.lost_users[]|"\n       - \(.)"]|add) else "" end)' "$plan"
     fi
     if jq -e '.skipped|length > 0' "$plan" >/dev/null; then
         msg $'\n不能迁移：'
@@ -170,10 +182,15 @@ migrate_show() {
     [[ $count != 0 ]] || return 0
     msg $'\n迁移时会：'
     msg "  - 停止并停用旧服务：$(jq -r '.units|join("、")' "$plan")$(jq -r 'if any(.skipped[]; .stops) and any(.units[]; test("sing-box")) then "；上面不能迁移的旧 sing-box 节点随之停止" else "" end' "$plan")"
+    msg "  - 禁止这些旧服务再启动：旧版脚本重启它们会失败，不会和 srm 抢端口"
     msg '  - 由 srm 在原端口启动这些节点；启动或健康检查失败就恢复旧服务'
-    msg "  - 注释掉旧版定时任务（${V3_CRON_JOBS// /、}），行首加 #，不删除"
-    if jq -e 'any(.skipped[]; .runs)' "$plan" >/dev/null; then
-        msg "    注意：继续运行的旧版网站 / Xray 用的证书（$V3_ROOT/tls）从此不再自动续期，Xray 的 geo 数据也不再更新，请在证书到期前自行处理"
+    if jq -e "($V3_REMAINS)|length > 0" "$plan" >/dev/null; then
+        msg "  - 保留旧版定时任务（${V3_CRON_JOBS// /、}）：继续运行的 $(jq -r "($V3_REMAINS)|join(\"、\")" "$plan") 还要靠它续期证书（$V3_ROOT/tls）、更新 geo 数据"
+        if [[ -d $V3_ROOT/website-manager ]] && jq -e 'any(.units[]; test("sing-box"))' "$plan" >/dev/null && migrate_v3_restarts_singbox; then
+            msg "    注意：旧版续期证书时会重启旧 sing-box，这一步会失败（提示「sing-box重启失败」）并提前结束，网站的 nginx 会停着；证书续期那天（到期前一天凌晨）过后请打开网站看看，打不开就运行 systemctl start nginx"
+        fi
+    else
+        msg "  - 注释掉旧版定时任务（${V3_CRON_JOBS// /、}），行首加 #，不删除"
     fi
     if jq -e 'any(.nodes[]; .cert.kind == "ca")' "$plan" >/dev/null; then
         if migrate_renewable "$plan"; then
@@ -183,6 +200,18 @@ migrate_show() {
         fi
     fi
     msg "  - $V3_ROOT 里的文件一个字节都不改"
+}
+# Whether v3's reloadCore, which RenewTLS and UpdateGeo call, restarts v3's sing-box
+# service (v3's readInstallType): without Xray always, with Xray only when sing-box
+# serves Hysteria2, TUIC or socks5.
+migrate_v3_restarts_singbox() {
+    local s=$V3_ROOT/sing-box/conf/config x=$V3_ROOT/xray/conf
+    if [[ -f $V3_ROOT/xray/xray ]]; then
+        [[ -f $x/02_VLESS_TCP_inbounds.json || -f $x/02_trojan_TCP_inbounds.json || -f $x/07_VLESS_vision_reality_inbounds.json || -f $x/12_VLESS_XHTTP_inbounds.json ]] &&
+            [[ -f $V3_ROOT/sing-box/sing-box ]] && [[ -f $s/06_hysteria2_inbounds.json || -f $s/09_tuic_inbounds.json || -f $s/20_socks5_inbounds.json ]]
+    else
+        [[ -f $V3_ROOT/sing-box/sing-box && -f $V3_ROOT/sing-box/conf/config.json ]]
+    fi
 }
 # Whether a certificate request could validate on 80 or 443 once the nodes moved: the
 # port is not used by any TCP node (srm's or moving) and nothing listens on it now.
@@ -202,14 +231,21 @@ migrate_menu() {
     plan=$(mktemp) || return 1
     migrate_scan "$plan" && migrate_show "$plan" || rc=1
     if [[ $rc == 0 ]] && jq -e '.nodes|length > 0' "$plan" >/dev/null; then
-        msg $'\n  1. 确认迁移（服务会重启，连接断开几秒）\n  0. 返回'
-        ask '请选择' 0 && [[ $REPLY == 1 ]] && { with_lock migrate_apply "$SRM_SELF" || rc=1; }
+        migrate_confirm "$plan" && { with_lock migrate_apply "$SRM_SELF" || rc=1; }
     elif [[ $rc == 0 && -d $DATA ]]; then
         # Nothing can move: the first screen stops asking; item 9 stays.
         date '+%F %T' > "$DATA/migrate-v3-nothing" || true
     fi
     rm -f "$plan"
     return "$rc"
+}
+# 「确认 / 返回」 after the preview of PLAN; Enter = back.
+migrate_confirm() {
+    local lost
+    lost=$(jq '[.nodes[].lost_users // [] | .[]]|length' "$1") || return 1
+    [[ $lost == 0 ]] || msg $'\n'"注意：上面列出的 $lost 个用户迁移后将无法连接。"
+    msg $'\n  1. 确认迁移（服务会重启，连接断开几秒）\n  0. 返回'
+    ask '请选择' 0 && [[ $REPLY == 1 ]]
 }
 # First screen of the menu while v3 is there and nothing has moved yet.
 migrate_offer() {
@@ -239,11 +275,9 @@ migrate_command() {
     fi
     if [[ $assume_yes != 1 ]]; then
         plan=$(mktemp) || return 1
-        migrate_scan "$plan" && migrate_show "$plan" || rc=1
+        migrate_scan "$plan" && migrate_show "$plan" && migrate_confirm "$plan" || rc=1
         rm -f "$plan"
-        [[ $rc == 0 ]] || return 1
-        msg $'\n  1. 确认迁移（服务会重启，连接断开几秒）\n  0. 返回'
-        ask '请选择' 0 && [[ $REPLY == 1 ]] || { err '没有迁移。'; return 1; }
+        [[ $rc == 0 ]] || { err '没有迁移。'; return 1; }
     fi
     with_lock migrate_apply "$SRM_SELF"
 }
@@ -310,7 +344,9 @@ migrate_apply() {
         err '迁移失败，已恢复旧服务；旧版节点保持原样。'; return 1
     fi
     trap - INT TERM HUP
-    migrate_cron || err '旧版定时任务没能注释掉，请手动在 crontab -e 里给它们的行首加 #。'
+    if jq -e "($V3_REMAINS)|length == 0" "$plan" >/dev/null; then
+        migrate_cron || err '旧版定时任务没能注释掉，请手动在 crontab -e 里给它们的行首加 #。'
+    fi
     if jq -e 'any(.nodes[]; .cert.kind == "ca")' "$plan" >/dev/null; then install_renew_timer || err '证书续期定时任务注册失败。'; fi
     jq -n --arg at "$(date '+%F %T')" --slurpfile p "$plan" '{migrated_at:$at,units:$p[0].units,nodes:[$p[0].nodes[].node.id]}' > "$DATA/migrated-v3.json"
     msg $'\n迁移完成：'
@@ -341,8 +377,9 @@ migrate_install_cert() {
         cert_rc=$?; rm -rf "$tmp"; return "$cert_rc";;
     esac
 }
-# Stops and disables UNITS, remembering what each was, so migrate_restore_units can
-# put them back. Disabled as well: a reboot must not start them next to srm.
+# Stops and disables UNITS and keeps them from starting (V3_BLOCK), remembering what
+# each was, so migrate_restore_units can put them back. Disabled as well: a reboot must
+# not start them next to srm.
 MIGRATE_RESTORE=''
 migrate_stop_units() {
     local unit active enabled
@@ -356,10 +393,22 @@ migrate_stop_units() {
         if ! systemctl disable --now "$unit" >/dev/null 2>&1 && systemctl is-active --quiet "$unit"; then
             err "$unit 停不下来。"; return 1
         fi
+        mkdir -p "$V3_UNIT_DIR/$unit.d" && printf '%s\n' \
+            "# srm 已接管这个旧版服务的节点（$DATA/migrated-v3.json），旧版脚本不能再启动它。" \
+            '# 要恢复旧版：删除本文件，运行 systemctl daemon-reload。' \
+            '[Unit]' "AssertPathExists=!$DATA/migrated-v3.json" > "$V3_UNIT_DIR/$unit.d/$V3_BLOCK" || { err "$unit 没能禁止启动。"; return 1; }
     done
+    (( $# == 0 )) || systemctl daemon-reload || { err 'systemctl daemon-reload 失败。'; return 1; }
 }
 migrate_restore_units() {
     local unit active enabled failures=0
+    # Unblocked first (V3_BLOCK), so they can start again.
+    while read -r unit active enabled; do
+        [[ -n $unit ]] || continue
+        rm -f "$V3_UNIT_DIR/$unit.d/$V3_BLOCK" || failures=1
+        rmdir "$V3_UNIT_DIR/$unit.d" 2>/dev/null || true
+    done <<< "$MIGRATE_RESTORE"
+    [[ -z $MIGRATE_RESTORE ]] || systemctl daemon-reload || failures=1
     while read -r unit active enabled; do
         [[ -n $unit ]] || continue
         [[ $enabled == 0 ]] || systemctl enable "$unit" >/dev/null 2>&1 || failures=1

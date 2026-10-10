@@ -1,0 +1,37 @@
+{
+  "inbounds": [
+    {
+      "port": 443,
+      "protocol": "vless",
+      "tag": "VLESSTCP",
+      "settings": {
+        "clients": [
+          {
+            "id": "8e9fa0b1-2222-4333-8444-1a1b1c1d1e1f",
+            "flow": "xtls-rprx-vision",
+            "email": "8e9fa0b1-VLESS_TCP/TLS_Vision"
+          }
+        ],
+        "decryption": "none",
+        "fallbacks": [
+          {
+            "dest": 31300,
+            "xver": 1
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "tls",
+        "tlsSettings": {
+          "certificates": [
+            {
+              "certificateFile": "/etc/v2ray-agent/tls/site.example.com.crt",
+              "keyFile": "/etc/v2ray-agent/tls/site.example.com.key"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}
