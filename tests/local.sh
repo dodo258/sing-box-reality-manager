@@ -35,7 +35,7 @@ jq -n --arg dir "$work" --arg private "$private" --arg public "$public" --arg uu
 render_config "$work/state.json" > "$work/server.json"
 "$CORE" check -c "$work/server.json"
 ok 'all three protocol configurations accepted by real core'
-for mutation in '.nodes[1].port=.nodes[0].port' '.nodes[1].id=.nodes[0].id' '.nodes[0].port=0' '.nodes[0].port=65536' '.schema=1' '.nodes[0].type="vmess"' '.nodes[0].name="bad\nname"' '.policies=[{name:"x",mode:"dns",domains:["netflix.com"]}]'; do
+for mutation in '.nodes[1].port=.nodes[0].port' '.nodes[1].id=.nodes[0].id' '.nodes[0].port=0' '.nodes[0].port=65536' '.schema=1' '.nodes[0].type="socks"' '.nodes[0].name="bad\nname"' '.policies=[{name:"x",mode:"dns",domains:["netflix.com"]}]'; do
  jq "$mutation" "$work/state.json" > "$work/invalid.json"
  if validate_state "$work/invalid.json" 2>/dev/null; then echo "FAILED: accepted $mutation"; exit 1; fi
 done

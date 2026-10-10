@@ -172,7 +172,7 @@ validate_state() {
       ([.nodes[].port]|length == (unique|length)) and
       all(.nodes[];
         (.id|test("^[a-f0-9]{16}$")) and (.name|text) and
-        (.host|text) and (.sni|text) and ((.listen // "::") == "::" or .listen == "0.0.0.0") and (.enabled|type == "boolean") and
+        (.host|text) and (.sni == null or (.sni|text)) and ((.listen // "::") == "::" or .listen == "0.0.0.0") and (.enabled|type == "boolean") and
         (.port|type == "number" and floor == . and . >= 1 and . <= 65535) and
         ('"$(proto_jq validate false)"')) and
       all(.policies[];
@@ -191,7 +191,7 @@ validate_state() {
     h=$(jq -r '.unlock_dns // empty' "$1")
     [[ -z $h ]] || valid_ip "$h" || { err '解锁 DNS IP 无效。'; return 1; }
     while IFS= read -r h; do valid_host "$h" || { err "地址不合法：$h"; return 1; }; done < <(jq -r '.nodes[].host, (.egress.server // empty)' "$1")
-    while IFS= read -r h; do valid_domain "$h" || { err "域名不合法：$h"; return 1; }; done < <(jq -r '.nodes[].sni, .policies[].domains[]' "$1")
+    while IFS= read -r h; do valid_domain "$h" || { err "域名不合法：$h"; return 1; }; done < <(jq -r '.nodes[].sni // empty, .policies[].domains[]' "$1")
 }
 render_config() {
     validate_state "$1" || return 1
@@ -226,19 +226,23 @@ render_config() {
 node_json() { jq -e --arg id "$2" '.nodes[]|select(.id==$id)' "$1"; }
 client_outbound() { jq "$PROTO_JQ_DEFS $(proto_jq client_outbound 'error("不支持的协议：\(.type)")')"; }
 share_uri() { jq -r "$PROTO_JQ_DEFS $(proto_jq share_uri 'error("不支持的协议：\(.type)")')"; }
+# Client snippets; empty output when the client has no support for the protocol.
+clash_proxy() { jq -r "$PROTO_JQ_DEFS $(proto_jq clash empty)|\"- \(tojson)\""; }
+surge_proxy() { jq -r "$PROTO_JQ_DEFS $(proto_jq surge empty)"; }
 # Protocol registry. Each protocol is one block of proto_<type>_<hook> functions;
 # other modules dispatch through proto_call / proto_jq and never match on types.
 #   label            display name
-#   transport        tcp or udp, used by firewall rules and health checks
+#   transport        "tcp", "udp" or "tcp udp", used by firewall rules and health checks
 #   validate         jq boolean for the protocol's own node fields (def text available)
 #   render_inbound   jq array of sing-box server inbounds for one node
-#   share_uri        jq string: raw share link
+#   share_uri        jq string: raw share link (Shadowrocket, v2rayN and others import it)
 #   client_outbound  jq object: sing-box client outbound
 #   secrets          jq paths hidden from node details
-#   prompt           ask protocol options; sets sni plus its own option variables
+#   prompt           ask protocol options; sets sni (empty when unused) plus its own option variables
 #   create           generate credentials after confirmation; REPLY = JSON fields
 #   rotate           new credentials; REPLY = JSON fields to merge into the node
-# Optional: retarget_label / retarget_select / retarget (change a Reality handshake target).
+# Optional: clash (jq object: Clash Meta / mihomo proxy), surge (jq string: Surge proxy line),
+# retarget_label / retarget_select / retarget (change a Reality handshake target).
 PROTO_HOOKS='label transport validate render_inbound share_uri client_outbound secrets prompt create rotate'
 PROTOCOLS=''
 PROTO_JQ_DEFS='
@@ -246,6 +250,13 @@ PROTO_JQ_DEFS='
   def base_outbound: {tag:.name,server:.host,server_port:.port};
   def uri_host: if (.host|contains(":")) then "["+.host+"]" else .host end;
   def tls_files: {certificate_path:(.cert_dir+"/fullchain.pem"),key_path:(.cert_dir+"/key.pem")};
+  # Self-signed nodes carry their certificate hashes; clients pin them instead of trusting a CA.
+  def pinned: .cert_sha256 != null;
+  def tls_client: {enabled:true,server_name:.sni} + (if pinned then {certificate_public_key_sha256:[.pubkey_sha256]} else {} end);
+  def clash_base: {name:.name,server:.host,port:.port};
+  def clash_pin: if pinned then {fingerprint:.cert_sha256} else {} end;
+  def surge_head($type): "\(.name|gsub("[,=]";" ")) = \($type), \(.host), \(.port)";
+  def surge_pin: if pinned then ", server-cert-fingerprint-sha256=\(.cert_sha256)" else "" end;
 '
 proto_register() {
     local type=$1 hook
@@ -268,23 +279,25 @@ proto_call() {
     "proto_${type}_$hook" "$@"
 }
 proto_has() { proto_known "$1" && declare -F "proto_$1_$2" >/dev/null; }
-# Builds `if .type=="a" then (<a hook>) elif … else <fallback> end` for jq.
+# Builds `if .type=="a" then (<a hook>) elif … else <fallback> end` for jq;
+# protocols without an optional hook fall through to the fallback.
 proto_jq() {
     local hook=$1 fallback=$2 type out='' keyword=if
     for type in $PROTOCOLS; do
+        declare -F "proto_${type}_$hook" >/dev/null || continue
         out+="$keyword .type==\"$type\" then ($("proto_${type}_$hook")) "
         keyword=elif
     done
-    printf '%s else %s end' "$out" "$fallback"
+    if [[ -z $out ]]; then printf '%s' "$fallback"; else printf '%s else %s end' "$out" "$fallback"; fi
 }
-# Transport as a jq string expression, e.g. for firewall and listener checks.
-proto_jq_transport() {
+# Transports as a jq array expression, e.g. ["tcp","udp"], for firewall and listener checks.
+proto_jq_transports() {
     local type out='' keyword=if
     for type in $PROTOCOLS; do
-        out+="$keyword .type==\"$type\" then \"$("proto_${type}_transport")\" "
+        out+="$keyword .type==\"$type\" then (\"$("proto_${type}_transport")\"|split(\" \")) "
         keyword=elif
     done
-    printf '%s else "tcp" end' "$out"
+    printf '%s else ["tcp"] end' "$out"
 }
 proto_by_index() {
     local type i=0
@@ -294,9 +307,15 @@ proto_by_index() {
     done
     return 1
 }
+# All labels, or only the first N followed by the total count.
 proto_labels() {
-    local type out=''
-    for type in $PROTOCOLS; do out+="${out:+ · }$("proto_${type}_label")"; done
+    local type out='' count=0
+    for type in $PROTOCOLS; do
+        count=$((count+1))
+        [[ -n ${1:-} ]] && (( count > $1 )) && continue
+        out+="${out:+ · }$("proto_${type}_label")"
+    done
+    if [[ -n ${1:-} ]] && (( count > $1 )); then out+=" 等 $count 种协议"; fi
     printf '%s\n' "$out"
 }
 
@@ -305,7 +324,7 @@ REALITY_TARGETS='www.ctrip.com www.ixigua.com'
 proto_vless_label() { printf 'VLESS Reality'; }
 proto_vless_transport() { printf 'tcp'; }
 proto_vless_validate() {
-    printf '%s' '(.uuid|test("^[a-f0-9-]{36}$")) and (.private_key|text) and (.public_key|text) and (.short_id|test("^[a-f0-9]{16}$"))'
+    printf '%s' '(.sni|text) and (.uuid|test("^[a-f0-9-]{36}$")) and (.private_key|text) and (.public_key|text) and (.short_id|test("^[a-f0-9]{16}$"))'
 }
 proto_vless_render_inbound() {
     printf '%s' '[base_inbound + {type:"vless",users:[{uuid:.uuid,flow:"xtls-rprx-vision"}],tls:{enabled:true,server_name:.sni,reality:{enabled:true,handshake:{server:.sni,server_port:443},private_key:.private_key,short_id:[.short_id]}}}]'
@@ -315,6 +334,10 @@ proto_vless_share_uri() {
 }
 proto_vless_client_outbound() {
     printf '%s' 'base_outbound + {type:"vless",uuid:.uuid,flow:"xtls-rprx-vision",tls:{enabled:true,server_name:.sni,utls:{enabled:true,fingerprint:"chrome"},reality:{enabled:true,public_key:.public_key,short_id:.short_id}}}'
+}
+proto_vless_clash() {
+    printf '%s' 'clash_base + {type:"vless",uuid:.uuid,network:"tcp",tls:true,udp:true,flow:"xtls-rprx-vision",servername:.sni,
+      "reality-opts":{"public-key":.public_key,"short-id":.short_id},"client-fingerprint":"chrome"}'
 }
 proto_vless_secrets() { printf '%s' '.uuid,.private_key,.public_key,.short_id'; }
 proto_vless_prompt() {
@@ -381,22 +404,37 @@ reality_target_check() {
     rm -f "$output"
 }
 
-# --- Shared TLS certificate handling (AnyTLS, Hysteria2) ---------------------
+# --- Shared TLS certificate handling ------------------------------------------
 # Option variables (mode email webroot cert key) are locals of node_add.
+# A protocol whose clients can pin a certificate passes "selfsigned": it then also
+# offers a self-signed certificate, the default when the server has no domain.
+SELF_SIGNED_SNI=www.bing.com
 tls_prompt() {
-    ask_opt "${opt_sni:-}" '证书域名' "$host" || return 1; sni=$REPLY
+    local allow=${1:-} default=1 domain=''
+    # valid_domain also accepts dotted IPv4 addresses, which cannot get a certificate.
+    if [[ ! $host =~ ^[0-9.]+$ ]] && valid_domain "$host"; then domain=$host; fi
+    # Without any domain (no domain host, no --sni) the self-signed certificate is the default.
+    [[ $allow != selfsigned || -n $domain || -n ${opt_sni:-} ]] || default=4
     if [[ -z ${opt_cert:-} && ${assume_yes:-0} != 1 ]]; then
         msg 'Lets Encrypt 免费证书：1.自动验证（使用空闲 80 或 443） 2.现有网站目录验证（网站保持运行） 3.导入已有证书'
+        [[ $allow != selfsigned ]] || msg '不用域名：4.自签证书（客户端按证书指纹校验）'
     fi
-    ask_opt "${opt_cert:-}" '证书方式' 1 || return 1
+    ask_opt "${opt_cert:-}" '证书方式' "$default" || return 1
     case $REPLY in
       1|auto) mode=auto;;
-      2|webroot) mode=webroot; ask_opt "${opt_webroot:-}" '现有网站根目录绝对路径' || return 1; webroot=$REPLY;;
-      3|import)
-        mode=import
+      2|webroot) mode=webroot;;
+      3|import) mode=import;;
+      4|selfsigned)
+        [[ $allow == selfsigned ]] || { err '此协议需要域名证书，不支持自签证书。'; return 1; }
+        mode=selfsigned; sni=${opt_sni:-$SELF_SIGNED_SNI}; return 0;;
+      *) err '证书方式无效。'; return 1;;
+    esac
+    ask_opt "${opt_sni:-}" '证书域名（需解析到本机）' "$domain" || return 1; sni=$REPLY
+    case $mode in
+      webroot) ask_opt "${opt_webroot:-}" '现有网站根目录绝对路径' || return 1; webroot=$REPLY;;
+      import)
         ask_opt "${opt_cert_file:-}" '完整证书链绝对路径' || return 1; cert=$REPLY
         ask_opt "${opt_key_file:-}" '私钥绝对路径' || return 1; key=$REPLY;;
-      *) err '证书方式无效。'; return 1;;
     esac
     if [[ $mode != import ]]; then
         ask_opt "${opt_email:-}" '证书联系邮箱（可留空）' '' 1 || return 1; email=$REPLY
@@ -404,56 +442,301 @@ tls_prompt() {
         msg '自动申请使用 Lets Encrypt；继续表示同意该机构的服务条款。'
     fi
 }
+# REPLY = certificate fields of the node: cert_dir, plus the pins of a self-signed one.
 tls_create() {
-    local tmp password cert_rc
-    if [[ $mode == import ]]; then
+    local tmp cert_rc
+    case $mode in
+      selfsigned) selfsigned_create; return;;
+      import)
         cert_valid "$cert" "$key" "$sni" || { err '证书与域名/私钥不匹配，或一天内到期。'; return 1; }
         tmp=$(mktemp -d) || return 1
         cp "$cert" "$tmp/fullchain.pem" && cp "$key" "$tmp/key.pem" && activate_cert "$sni" "$tmp"
         cert_rc=$?; rm -rf "$tmp"; [[ $cert_rc == 0 ]] || return 1
-        msg '导入的外部证书需由原签发工具续期，再导入新证书。'
-    else issue_certificate "$sni" "$mode" "$email" "$webroot" || return 1; fi
-    password=$(random_hex 24) || return 1
-    REPLY=$(jq -nc --arg password "$password" --arg cert "$DATA/certs/$sni/active" '{password:$password,cert_dir:$cert}')
+        msg '导入的外部证书需由原签发工具续期，再导入新证书。';;
+      *) issue_certificate "$sni" "$mode" "$email" "$webroot" || return 1;;
+    esac
+    REPLY=$(jq -nc --arg cert "$DATA/certs/$sni/active" '{cert_dir:$cert}')
 }
-tls_validate() { printf '%s' '(.password|text) and (.cert_dir|text and startswith("/"))'; }
-tls_rotate() {
+# One self-signed certificate per node ($id is node_add's new node ID), valid for
+# ten years and never renewed; clients pin its hashes.
+selfsigned_create() {
+    local dir=$DATA/selfsigned/$id cert_hash key_hash
+    install -d -m 750 "$DATA/selfsigned" "$dir" && chgrp srm "$DATA/selfsigned" "$dir" || return 1
+    if ! openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 3650 -subj "/CN=$sni" \
+         -addext "subjectAltName=DNS:$sni" -keyout "$dir/key.pem" -out "$dir/fullchain.pem" >/dev/null 2>&1; then
+        err '自签证书生成失败。'; return 1
+    fi
+    chmod 640 "$dir/key.pem" "$dir/fullchain.pem" && chgrp srm "$dir/key.pem" "$dir/fullchain.pem" || return 1
+    # Certificate hash (Surge, mihomo, Hysteria2 links) and public key hash (sing-box).
+    cert_hash=$(openssl x509 -in "$dir/fullchain.pem" -outform der | openssl dgst -sha256 | awk '{print $NF}') &&
+        key_hash=$(openssl x509 -in "$dir/fullchain.pem" -pubkey -noout | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | openssl base64 -A) || return 1
+    REPLY=$(jq -nc --arg dir "$dir" --arg cert "$cert_hash" --arg key "$key_hash" '{cert_dir:$dir,cert_sha256:$cert,pubkey_sha256:$key}')
+}
+tls_validate() {
+    printf '%s' '(.sni|text) and (.cert_dir|text and startswith("/")) and
+      ((pinned|not) or ((.cert_sha256|test("^[a-f0-9]{64}$")) and (.pubkey_sha256|test("^[A-Za-z0-9+/]{43}=$"))))'
+}
+# Merges new credentials into REPLY (from tls_create) or into an empty object.
+with_password() {
     local value
     value=$(random_hex 24) || return 1
-    REPLY=$(jq -nc --arg v "$value" '{password:$v}')
+    REPLY=$(jq -c --arg v "$value" '. + {password:$v}' <<< "${REPLY:-null}")
 }
+with_uuid() {
+    local value
+    value=$("$CORE" generate uuid) || return 1
+    REPLY=$(jq -c --arg v "$value" '. + {uuid:$v}' <<< "${REPLY:-null}")
+}
+UUID_VALID='(.uuid|test("^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$"))'
 
 # --- AnyTLS ------------------------------------------------------------------
 proto_anytls_label() { printf 'AnyTLS'; }
 proto_anytls_transport() { printf 'tcp'; }
-proto_anytls_validate() { tls_validate; }
+proto_anytls_validate() { printf '%s and (.password|text)' "$(tls_validate)"; }
 proto_anytls_render_inbound() {
     printf '%s' '[base_inbound + {type:"anytls",users:[{name:.id,password:.password}],tls:({enabled:true,server_name:.sni} + tls_files)}]'
 }
 proto_anytls_share_uri() { printf '%s' '"anytls://\(.password|@uri)@\(uri_host):\(.port)?sni=\(.sni|@uri)#\(.name|@uri)"'; }
-proto_anytls_client_outbound() { printf '%s' 'base_outbound + {type:"anytls",password:.password,tls:{enabled:true,server_name:.sni}}'; }
+proto_anytls_client_outbound() { printf '%s' 'base_outbound + {type:"anytls",password:.password,tls:tls_client}'; }
+proto_anytls_clash() { printf '%s' 'clash_base + {type:"anytls",password:.password,sni:.sni,udp:true}'; }
+proto_anytls_surge() { printf '%s' '"\(surge_head("anytls")), password=\"\(.password)\", sni=\(.sni)"'; }
 proto_anytls_secrets() { printf '%s' '.password'; }
 proto_anytls_prompt() { tls_prompt; }
-proto_anytls_create() { tls_create; }
-proto_anytls_rotate() { tls_rotate; }
+proto_anytls_create() { tls_create && with_password; }
+proto_anytls_rotate() { REPLY=''; with_password; }
 
 # --- Hysteria2 ---------------------------------------------------------------
 proto_hysteria2_label() { printf 'Hysteria2'; }
 proto_hysteria2_transport() { printf 'udp'; }
-proto_hysteria2_validate() { tls_validate; }
+proto_hysteria2_validate() { proto_anytls_validate; }
 proto_hysteria2_render_inbound() {
     printf '%s' '[base_inbound + {type:"hysteria2",users:[{name:.id,password:.password}],tls:({enabled:true,server_name:.sni,alpn:["h3"]} + tls_files)}]'
 }
-proto_hysteria2_share_uri() { printf '%s' '"hysteria2://\(.password|@uri)@\(uri_host):\(.port)?sni=\(.sni|@uri)&alpn=h3#\(.name|@uri)"'; }
-proto_hysteria2_client_outbound() { printf '%s' 'base_outbound + {type:"hysteria2",password:.password,tls:{enabled:true,server_name:.sni,alpn:["h3"]}}'; }
+# The official client checks pinSHA256 only after normal verification, so a
+# self-signed link also needs insecure=1 (v2.hysteria.network, client docs).
+proto_hysteria2_share_uri() {
+    printf '%s' '"hysteria2://\(.password|@uri)@\(uri_host):\(.port)?sni=\(.sni|@uri)&alpn=h3\(if pinned then "&insecure=1&pinSHA256=\(.cert_sha256)" else "" end)#\(.name|@uri)"'
+}
+proto_hysteria2_client_outbound() { printf '%s' 'base_outbound + {type:"hysteria2",password:.password,tls:(tls_client + {alpn:["h3"]})}'; }
+proto_hysteria2_clash() { printf '%s' 'clash_base + {type:"hysteria2",password:.password,sni:.sni,alpn:["h3"]} + clash_pin'; }
+proto_hysteria2_surge() { printf '%s' '"\(surge_head("hysteria2")), password=\"\(.password)\", sni=\(.sni)\(surge_pin)"'; }
 proto_hysteria2_secrets() { printf '%s' '.password'; }
-proto_hysteria2_prompt() { tls_prompt; }
-proto_hysteria2_create() { tls_create; }
-proto_hysteria2_rotate() { tls_rotate; }
+proto_hysteria2_prompt() { tls_prompt selfsigned; }
+proto_hysteria2_create() { tls_create && with_password; }
+proto_hysteria2_rotate() { REPLY=''; with_password; }
+
+# --- Shadowsocks 2022 --------------------------------------------------------
+# One method; its key is 16 random bytes in base64. TCP and UDP share the port.
+SS_METHOD=2022-blake3-aes-128-gcm
+proto_shadowsocks_label() { printf 'Shadowsocks 2022'; }
+proto_shadowsocks_transport() { printf 'tcp udp'; }
+proto_shadowsocks_validate() {
+    printf '%s' '.sni == null and .method == "'"$SS_METHOD"'" and (.password|test("^[A-Za-z0-9+/]{22}==$"))'
+}
+proto_shadowsocks_render_inbound() { printf '%s' '[base_inbound + {type:"shadowsocks",method:.method,password:.password}]'; }
+# SIP002: AEAD-2022 userinfo is not base64, method and password are percent-encoded.
+proto_shadowsocks_share_uri() { printf '%s' '"ss://\(.method):\(.password|@uri)@\(uri_host):\(.port)#\(.name|@uri)"'; }
+proto_shadowsocks_client_outbound() { printf '%s' 'base_outbound + {type:"shadowsocks",method:.method,password:.password}'; }
+proto_shadowsocks_clash() { printf '%s' 'clash_base + {type:"ss",cipher:.method,password:.password,udp:true}'; }
+proto_shadowsocks_surge() { printf '%s' '"\(surge_head("ss")), encrypt-method=\(.method), password=\"\(.password)\", udp-relay=true"'; }
+proto_shadowsocks_secrets() { printf '%s' '.password'; }
+proto_shadowsocks_prompt() { sni=''; }
+proto_shadowsocks_create() {
+    local key
+    key=$(openssl rand -base64 16) || return 1
+    REPLY=$(jq -nc --arg m "$SS_METHOD" --arg k "$key" '{method:$m,password:$k}')
+}
+proto_shadowsocks_rotate() {
+    proto_shadowsocks_create && REPLY=$(jq -c '{password}' <<< "$REPLY")
+}
+
+# --- TUIC v5 -----------------------------------------------------------------
+proto_tuic_label() { printf 'TUIC v5'; }
+proto_tuic_transport() { printf 'udp'; }
+proto_tuic_validate() { printf '%s and %s and (.password|text)' "$(tls_validate)" "$UUID_VALID"; }
+proto_tuic_render_inbound() {
+    printf '%s' '[base_inbound + {type:"tuic",users:[{name:.id,uuid:.uuid,password:.password}],congestion_control:"bbr",tls:({enabled:true,server_name:.sni,alpn:["h3"]} + tls_files)}]'
+}
+# tuic:// has no pin parameter; clients that cannot pin need allow_insecure=1.
+proto_tuic_share_uri() {
+    printf '%s' '"tuic://\(.uuid):\(.password|@uri)@\(uri_host):\(.port)?congestion_control=bbr&alpn=h3&sni=\(.sni|@uri)&udp_relay_mode=native\(if pinned then "&allow_insecure=1" else "" end)#\(.name|@uri)"'
+}
+proto_tuic_client_outbound() {
+    printf '%s' 'base_outbound + {type:"tuic",uuid:.uuid,password:.password,congestion_control:"bbr",tls:(tls_client + {alpn:["h3"]})}'
+}
+proto_tuic_clash() {
+    printf '%s' 'clash_base + {type:"tuic",uuid:.uuid,password:.password,alpn:["h3"],"congestion-controller":"bbr","udp-relay-mode":"native",sni:.sni} + clash_pin'
+}
+proto_tuic_surge() { printf '%s' '"\(surge_head("tuic-v5")), password=\"\(.password)\", uuid=\(.uuid), alpn=h3, sni=\(.sni)\(surge_pin)"'; }
+proto_tuic_secrets() { printf '%s' '.uuid,.password'; }
+proto_tuic_prompt() { tls_prompt selfsigned; }
+proto_tuic_create() { tls_create && with_uuid && with_password; }
+proto_tuic_rotate() { REPLY=''; with_uuid && with_password; }
+
+# --- VLESS + TLS (tcp Vision / ws / grpc / httpupgrade) ----------------------
+# Node field "transport" picks the stream; ws and httpupgrade carry a random
+# path, grpc a random service name. ws and httpupgrade can sit behind a CDN.
+proto_vlesstls_label() { printf 'VLESS TLS'; }
+proto_vlesstls_transport() { printf 'tcp'; }
+proto_vlesstls_validate() {
+    printf '%s and %s and %s' "$(tls_validate)" "$UUID_VALID" '(
+      (.transport == "tcp") or
+      ((.transport == "ws" or .transport == "httpupgrade") and (.path|test("^/[A-Za-z0-9_-]+$"))) or
+      (.transport == "grpc" and (.service_name|test("^[A-Za-z0-9_-]+$"))))'
+}
+STREAM_JQ_DEFS='
+  def stream_alpn: if .transport == "grpc" then ["h2"] elif .transport == "tcp" then null else ["http/1.1"] end;
+  def stream_server: if .transport == "ws" then {transport:{type:"ws",path:.path}}
+    elif .transport == "httpupgrade" then {transport:{type:"httpupgrade",path:.path}}
+    elif .transport == "grpc" then {transport:{type:"grpc",service_name:.service_name}} else {} end;
+  def stream_client: if .transport == "ws" then {transport:{type:"ws",path:.path,headers:{Host:.sni}}}
+    elif .transport == "httpupgrade" then {transport:{type:"httpupgrade",path:.path,host:.sni}}
+    elif .transport == "grpc" then {transport:{type:"grpc",service_name:.service_name}} else {} end;
+  def stream_query: "type=\(.transport)" + (if .transport == "tcp" then "&flow=xtls-rprx-vision"
+    elif .transport == "grpc" then "&serviceName=\(.service_name)&mode=gun&alpn=h2"
+    else "&host=\(.sni|@uri)&path=\(.path|@uri)&alpn=http%2F1.1" end);
+  def stream_clash: if .transport == "tcp" then {network:"tcp",flow:"xtls-rprx-vision"}
+    elif .transport == "grpc" then {network:"grpc","grpc-opts":{"grpc-service-name":.service_name}}
+    else {network:"ws","ws-opts":({path:.path,headers:{Host:.sni}} + (if .transport == "httpupgrade" then {"v2ray-http-upgrade":true} else {} end))} end;
+'
+PROTO_JQ_DEFS+=$STREAM_JQ_DEFS
+proto_vlesstls_render_inbound() {
+    printf '%s' '[base_inbound + {type:"vless",users:[{name:.id,uuid:.uuid} + (if .transport == "tcp" then {flow:"xtls-rprx-vision"} else {} end)],
+      tls:({enabled:true,server_name:.sni} + (if stream_alpn then {alpn:stream_alpn} else {} end) + tls_files)} + stream_server]'
+}
+proto_vlesstls_share_uri() {
+    printf '%s' '"vless://\(.uuid)@\(uri_host):\(.port)?encryption=none&security=tls&sni=\(.sni|@uri)&fp=chrome&\(stream_query)#\(.name|@uri)"'
+}
+proto_vlesstls_client_outbound() {
+    printf '%s' 'base_outbound + {type:"vless",uuid:.uuid} + (if .transport == "tcp" then {flow:"xtls-rprx-vision"} else {} end)
+      + {tls:(tls_client + {utls:{enabled:true,fingerprint:"chrome"}} + (if stream_alpn then {alpn:stream_alpn} else {} end))} + stream_client'
+}
+proto_vlesstls_clash() {
+    printf '%s' 'clash_base + {type:"vless",uuid:.uuid,tls:true,servername:.sni,"client-fingerprint":"chrome",udp:true} + stream_clash'
+}
+proto_vlesstls_secrets() { printf '%s' '.uuid'; }
+# Sets stream (a local of node_add) from --transport or the menu.
+proto_vlesstls_prompt() {
+    tls_prompt || return 1
+    [[ -n ${opt_transport:-} || ${assume_yes:-0} == 1 ]] ||
+        msg '传输方式：1.tcp（Vision，直连最快） 2.ws（可套 CDN） 3.grpc 4.httpupgrade（可套 CDN）'
+    ask_opt "${opt_transport:-}" '传输方式' 1 || return 1
+    case $REPLY in
+      1|tcp) stream=tcp;; 2|ws) stream=ws;; 3|grpc) stream=grpc;; 4|httpupgrade) stream=httpupgrade;;
+      *) err '传输方式只能是 tcp、ws、grpc 或 httpupgrade。'; return 1;;
+    esac
+}
+proto_vlesstls_create() {
+    local route
+    route=$(random_hex 8) && tls_create && with_uuid || return 1
+    REPLY=$(jq -c --arg t "$stream" --arg r "$route" '. + {transport:$t} +
+      (if $t == "grpc" then {service_name:$r} elif $t == "tcp" then {} else {path:("/"+$r)} end)' <<< "$REPLY")
+}
+proto_vlesstls_rotate() { REPLY=''; with_uuid; }
+
+# --- Trojan ------------------------------------------------------------------
+proto_trojan_label() { printf 'Trojan'; }
+proto_trojan_transport() { printf 'tcp'; }
+proto_trojan_validate() { proto_anytls_validate; }
+proto_trojan_render_inbound() {
+    printf '%s' '[base_inbound + {type:"trojan",users:[{name:.id,password:.password}],tls:({enabled:true,server_name:.sni} + tls_files)}]'
+}
+proto_trojan_share_uri() { printf '%s' '"trojan://\(.password|@uri)@\(uri_host):\(.port)?security=tls&sni=\(.sni|@uri)&type=tcp#\(.name|@uri)"'; }
+proto_trojan_client_outbound() { printf '%s' 'base_outbound + {type:"trojan",password:.password,tls:tls_client}'; }
+proto_trojan_clash() { printf '%s' 'clash_base + {type:"trojan",password:.password,sni:.sni,udp:true}'; }
+proto_trojan_surge() { printf '%s' '"\(surge_head("trojan")), password=\"\(.password)\", sni=\(.sni)"'; }
+proto_trojan_secrets() { printf '%s' '.password'; }
+proto_trojan_prompt() { tls_prompt; }
+proto_trojan_create() { tls_create && with_password; }
+proto_trojan_rotate() { REPLY=''; with_password; }
+
+# --- VMess (TLS + ws) --------------------------------------------------------
+# alterId 0: VMess AEAD only. Kept for older clients.
+proto_vmess_label() { printf 'VMess TLS+ws'; }
+proto_vmess_transport() { printf 'tcp'; }
+proto_vmess_validate() { printf '%s and %s and %s' "$(tls_validate)" "$UUID_VALID" '(.path|test("^/[A-Za-z0-9_-]+$"))'; }
+proto_vmess_render_inbound() {
+    printf '%s' '[base_inbound + {type:"vmess",users:[{name:.id,uuid:.uuid,alterId:0}],
+      tls:({enabled:true,server_name:.sni,alpn:["http/1.1"]} + tls_files),transport:{type:"ws",path:.path}}]'
+}
+# v2rayN format: vmess:// + base64 of a JSON object with string values.
+proto_vmess_share_uri() {
+    printf '%s' '"vmess://" + ({v:"2",ps:.name,add:.host,port:(.port|tostring),id:.uuid,aid:"0",scy:"auto",net:"ws",type:"none",
+      host:.sni,path:.path,tls:"tls",sni:.sni,alpn:"http/1.1",fp:"chrome"}|tojson|@base64)'
+}
+proto_vmess_client_outbound() {
+    printf '%s' 'base_outbound + {type:"vmess",uuid:.uuid,security:"auto",alter_id:0,
+      tls:(tls_client + {utls:{enabled:true,fingerprint:"chrome"},alpn:["http/1.1"]}),transport:{type:"ws",path:.path,headers:{Host:.sni}}}'
+}
+proto_vmess_clash() {
+    printf '%s' 'clash_base + {type:"vmess",uuid:.uuid,alterId:0,cipher:"auto",tls:true,servername:.sni,udp:true,network:"ws","ws-opts":{path:.path,headers:{Host:.sni}}}'
+}
+proto_vmess_surge() {
+    printf '%s' '"\(surge_head("vmess")), username=\(.uuid), ws=true, ws-path=\(.path), ws-headers=Host:\(.sni), tls=true, sni=\(.sni), vmess-aead=true"'
+}
+proto_vmess_secrets() { printf '%s' '.uuid'; }
+proto_vmess_prompt() { tls_prompt; }
+proto_vmess_create() {
+    local route
+    route=$(random_hex 8) && tls_create && with_uuid || return 1
+    REPLY=$(jq -c --arg r "/$route" '. + {path:$r}' <<< "$REPLY")
+}
+proto_vmess_rotate() { REPLY=''; with_uuid; }
+
+# --- Naive -------------------------------------------------------------------
+# HTTP/2 over TLS only (no QUIC). Naive clients connect by the certificate domain,
+# so the link uses sni as its host. Clash Meta and Surge have no naive client.
+proto_naive_label() { printf 'Naive'; }
+proto_naive_transport() { printf 'tcp'; }
+proto_naive_validate() { printf '%s and (.username|test("^[a-f0-9]{12}$")) and (.password|text)' "$(tls_validate)"; }
+proto_naive_render_inbound() {
+    printf '%s' '[base_inbound + {type:"naive",network:"tcp",users:[{username:.username,password:.password}],tls:({enabled:true,server_name:.sni} + tls_files)}]'
+}
+proto_naive_share_uri() { printf '%s' '"naive+https://\(.username):\(.password|@uri)@\(.sni):\(.port)#\(.name|@uri)"'; }
+proto_naive_client_outbound() { printf '%s' 'base_outbound + {type:"naive",username:.username,password:.password,tls:tls_client}'; }
+proto_naive_secrets() { printf '%s' '.username,.password'; }
+proto_naive_prompt() { tls_prompt; }
+proto_naive_create() {
+    local user
+    user=$(random_hex 6) && tls_create && with_password || return 1
+    REPLY=$(jq -c --arg u "$user" '. + {username:$u}' <<< "$REPLY")
+}
+proto_naive_rotate() { REPLY=''; with_password; }
+
+# --- Hysteria v1 (older clients only) ----------------------------------------
+# Clients must state their bandwidth; links and snippets use 30 Mbps up and
+# 100 Mbps down, which users can raise in their client.
+proto_hysteria_label() { printf 'Hysteria v1（兼容老客户端）'; }
+proto_hysteria_transport() { printf 'udp'; }
+proto_hysteria_validate() { proto_anytls_validate; }
+proto_hysteria_render_inbound() {
+    printf '%s' '[base_inbound + {type:"hysteria",up_mbps:1000,down_mbps:1000,users:[{name:.id,auth_str:.password}],
+      tls:({enabled:true,server_name:.sni,alpn:["hysteria"]} + tls_files)}]'
+}
+proto_hysteria_share_uri() {
+    printf '%s' '"hysteria://\(uri_host):\(.port)?protocol=udp&auth=\(.password|@uri)&peer=\(.sni|@uri)&upmbps=30&downmbps=100&alpn=hysteria\(if pinned then "&insecure=1" else "" end)#\(.name|@uri)"'
+}
+proto_hysteria_client_outbound() {
+    printf '%s' 'base_outbound + {type:"hysteria",up_mbps:30,down_mbps:100,auth_str:.password,tls:(tls_client + {alpn:["hysteria"]})}'
+}
+proto_hysteria_clash() {
+    printf '%s' 'clash_base + {type:"hysteria","auth-str":.password,up:"30 Mbps",down:"100 Mbps",protocol:"udp",sni:.sni,alpn:["hysteria"]} + clash_pin'
+}
+proto_hysteria_secrets() { printf '%s' '.password'; }
+proto_hysteria_prompt() { tls_prompt selfsigned; }
+proto_hysteria_create() { tls_create && with_password; }
+proto_hysteria_rotate() { REPLY=''; with_password; }
 
 proto_register vless
 proto_register anytls
 proto_register hysteria2
+proto_register shadowsocks
+proto_register tuic
+proto_register vlesstls
+proto_register trojan
+proto_register vmess
+proto_register naive
+proto_register hysteria
 owned_root() {
     [[ -f $SRM_ROOT/.srm-owned && -f $DATA/.srm-owned ]] || { err '没有找到本脚本的安装标记。'; return 1; }
 }
@@ -534,7 +817,7 @@ service_healthy() {
                 [[ -n $port ]] || continue
                 if [[ $kind == udp ]]; then output=$(ss -H -lun "sport = :$port"); else output=$(ss -H -ltn "sport = :$port"); fi
                 [[ -n $output ]] || good=0
-            done < <(jq -r ".nodes[]|select(.enabled)|[.port,($(proto_jq_transport))]|@tsv" "$candidate")
+            done < <(jq -r ".nodes[]|select(.enabled)|.port as \$p|($(proto_jq_transports))[]|[\$p,.]|@tsv" "$candidate")
             [[ $good == 1 ]] && return 0
         fi
         sleep 1
@@ -785,7 +1068,7 @@ firewall_sync() {
     desired=$(mktemp) || return 1
     ports=$(mktemp) || { rm -f "$desired"; return 1; }
     if [[ -n $state && -f $state ]]; then
-        jq -r ".nodes[]|select(.enabled)|[.port,($(proto_jq_transport))]|@tsv" "$state" > "$ports" || { rm -f "$ports" "$desired"; return 1; }
+        jq -r ".nodes[]|select(.enabled)|.port as \$p|($(proto_jq_transports))[]|[\$p,.]|@tsv" "$state" > "$ports" || { rm -f "$ports" "$desired"; return 1; }
     fi
     if [[ -n ${2:-} ]]; then
         [[ $2 == 80 || $2 == 443 ]] || { rm -f "$ports" "$desired"; return 1; }
@@ -837,6 +1120,9 @@ firewall_renew() (
     firewall_sync "$STATE" "$port" || exit 1
     acme_call "$domain" --renew -d "$domain" --ecc
 )
+# Nodes using a domain certificate (Let's Encrypt or imported); self-signed nodes
+# keep their own ten-year certificate, pinned by clients, and are never renewed.
+CERT_NODES='.cert_dir != null and .cert_sha256 == null'
 ensure_acme() {
     [[ -x $ACME ]] && return 0
     local tmp
@@ -947,7 +1233,7 @@ issue_certificate() (
 cert_auto_mode() {
     local taken=" ${cert_avoid_port:-} "
     if [[ -f $STATE ]]; then
-        taken+=$(jq -r "[.nodes[]|select(($(proto_jq_transport)) == \"tcp\")|.port|tostring]|join(\" \")" "$STATE") || return 1
+        taken+=$(jq -r "[.nodes[]|select(any(($(proto_jq_transports))[]; . == \"tcp\"))|.port|tostring]|join(\" \")" "$STATE") || return 1
         taken+=' '
     fi
     if [[ $taken != *' 80 '* && -z $(ss -H -ltn 'sport = :80') ]]; then printf 'http\n'
@@ -967,13 +1253,13 @@ cert_challenge_port() {
 # nodes plus an optional DOMAIN about to be used.
 cert_port_ok() {
     local port=$1 transport=$2 domain
-    [[ $transport == tcp ]] || return 0
+    [[ " $transport " == *" tcp "* ]] || return 0
     while IFS= read -r domain; do
         [[ -n $domain && $(certificate_source "$domain") == acme ]] || continue
         if [[ $(cert_challenge_port "$domain") == "$port" ]]; then
             err "TCP $port 要留给证书 $domain 自动续期验证，节点不能占用；请换一个端口。"; return 1
         fi
-    done < <({ [[ ! -f $STATE ]] || jq -r '.nodes[]|select(.cert_dir != null)|.sni' "$STATE"; printf '%s\n' "${3:-}"; } | sort -u)
+    done < <({ [[ ! -f $STATE ]] || jq -r ".nodes[]|select($CERT_NODES)|.sni" "$STATE"; printf '%s\n' "${3:-}"; } | sort -u)
 }
 install_renew_timer() {
     cat > /etc/systemd/system/srm-renew.service <<UNIT
@@ -1013,7 +1299,7 @@ renew_certificates() {
                 failures=$((failures+1))
             fi
         else err "证书续期失败：${domain}；保留原证书。日志：$SRM_ROOT/acme-accounts/$domain/renew.log"; failures=$((failures+1)); fi
-    done < <(jq -r '.nodes[]|select(.cert_dir != null)|.sni' "$STATE" | sort -u)
+    done < <(jq -r ".nodes[]|select($CERT_NODES)|.sni" "$STATE" | sort -u)
     [[ $failures == 0 ]]
 }
 certificate_preserve_source() {
@@ -1038,7 +1324,11 @@ certificate_source() {
 certificate_status() {
     local domain cert count source health expiry issuer enabled running
     msg $'\n证书管理（只显示本脚本节点使用的证书）\nReality 无需自行申请证书；使用 TLS 证书的节点在这里查看到期时间和续期状态。'
-    if [[ ! -f $STATE ]] || ! jq -e 'any(.nodes[]; .cert_dir != null)' "$STATE" >/dev/null; then
+    if [[ -f $STATE ]]; then
+        count=$(jq '[.nodes[]|select(.cert_sha256 != null)]|length' "$STATE") || return 1
+        [[ $count == 0 ]] || msg "另有 $count 个节点使用自签证书：有效期十年，客户端按证书指纹校验，不需要续期。"
+    fi
+    if [[ ! -f $STATE ]] || ! jq -e "any(.nodes[]; $CERT_NODES)" "$STATE" >/dev/null; then
         msg '目前没有使用 TLS 证书的节点。'; return 0
     fi
     enabled=$(systemctl is-enabled srm-renew.timer 2>/dev/null) || enabled='未启用'
@@ -1047,7 +1337,7 @@ certificate_status() {
     systemctl list-timers --all srm-renew.timer --no-pager 2>/dev/null || true
     while IFS= read -r domain; do
         cert=$DATA/certs/$domain/active/fullchain.pem
-        count=$(jq --arg d "$domain" '[.nodes[]|select(.cert_dir != null and .sni==$d)]|length' "$STATE") || return 1
+        count=$(jq --arg d "$domain" "[.nodes[]|select($CERT_NODES and .sni==\$d)]|length" "$STATE") || return 1
         source=$(certificate_source "$domain") || return 1
         case $source in
           acme) source="Let's Encrypt 自动续期";;
@@ -1063,7 +1353,7 @@ certificate_status() {
         elif ! openssl x509 -in "$cert" -noout -checkend 2592000 >/dev/null 2>&1; then health='30 天内到期'
         else health='有效'; fi
         printf '到期时间：%s\n签发者：%s\n状态：%s\n' "${expiry#notAfter=}" "${issuer#issuer=}" "$health"
-    done < <(jq -r '.nodes[]|select(.cert_dir != null)|.sni' "$STATE" | sort -u)
+    done < <(jq -r ".nodes[]|select($CERT_NODES)|.sni" "$STATE" | sort -u)
 }
 certificate_renew_now() {
     msg '检查本脚本签发的证书：达到续期条件时才申请，未到期不会强制重签。'
@@ -1248,19 +1538,20 @@ routing_change() {
     return "$rc"
 }
 # All mutation menu paths execute under with_lock.
-# node_add SELF [TYPE] [--name N] [--host H] [--port P|random] [--sni D] [--cert auto|webroot|import]
-#          [--webroot DIR] [--cert-file F] [--key-file F] [--email E] [--bbr enable|keep] [--yes]
+# node_add SELF [TYPE] [--name N] [--host H] [--port P|random] [--sni D] [--cert auto|webroot|import|selfsigned]
+#          [--webroot DIR] [--cert-file F] [--key-file F] [--email E] [--transport tcp|ws|grpc|httpupgrade]
+#          [--bbr enable|keep] [--yes]
 node_add() {
     local self=$1 type='' name host port sni='' bbr=keep candidate node id tmp transport var assume_yes=0 cert_avoid_port=''
-    local opt_name='' opt_host='' opt_port='' opt_sni='' opt_cert='' opt_webroot='' opt_cert_file='' opt_key_file='' opt_email='' opt_bbr=''
+    local opt_name='' opt_host='' opt_port='' opt_sni='' opt_cert='' opt_webroot='' opt_cert_file='' opt_key_file='' opt_email='' opt_bbr='' opt_transport=''
     # Protocol prompt hooks fill these.
-    local mode=none email='' webroot='' cert='' key=''
+    local mode=none email='' webroot='' cert='' key='' stream=''
     shift
     if [[ -n ${1:-} && $1 != -* ]]; then type=$1; shift; fi
     while (( $# )); do
         case $1 in
           -y|--yes) assume_yes=1; shift; continue;;
-          --name|--host|--port|--sni|--cert|--webroot|--cert-file|--key-file|--email|--bbr) ;;
+          --name|--host|--port|--sni|--cert|--webroot|--cert-file|--key-file|--email|--transport|--bbr) ;;
           *) err "未知参数：$1（可用参数见 srm --help）"; return 1;;
         esac
         [[ $# -ge 2 && -n $2 ]] || { err "$1 需要一个值。"; return 1; }
@@ -1283,20 +1574,21 @@ node_add() {
     ask_opt "$opt_port" '端口：1–65535，回车随机（10000–50000 里的空闲端口）' random || return 1; port=$REPLY
     if [[ $port != random ]]; then valid_port "$port" || { err '端口必须在 1–65535。'; return 1; }; fi
     proto_call "$type" prompt || return 1
-    valid_domain "$sni" || { err '域名不合法，请使用 ASCII/Punycode 域名。'; return 1; }
+    [[ -z $sni ]] || valid_domain "$sni" || { err '域名不合法，请使用 ASCII/Punycode 域名。'; return 1; }
+    [[ -z $opt_transport || -n $stream ]] || { err "--transport 不适用于 $(proto_call "$type" label)。"; return 1; }
     if [[ ! -f $STATE ]]; then
         [[ -n $opt_bbr || $assume_yes == 1 ]] || msg 'BBR：1.内核支持时自动启用（主机级 TCP 设置） 2.保持现状（与现有程序共存时选择）'
         ask_opt "$opt_bbr" 'BBR 设置' 2 || return 1
         case $REPLY in 1|enable) bbr=enable;; 2|keep) bbr=keep;; *) err '无效选项。'; return 1;; esac
     fi
-    msg "部署：$name / $(proto_call "$type" label) / $host:$port / $sni"
+    msg "部署：$name / $(proto_call "$type" label) / $host:$port${sni:+ / $sni}"
     if [[ $assume_yes != 1 ]]; then yesno '开始安装缺失依赖、申请证书并部署' || return 0; fi
     [[ -f $SRM_ROOT/.srm-owned ]] || setup "$self" || return 1
     ensure_dependencies || return 1
     if [[ $port == random ]]; then port=$(choose_port) || return 1; else port_free "$port" || { err '端口被占用，原服务未改动。'; return 1; }; fi
     transport=$(proto_call "$type" transport) || return 1
     cert_port_ok "$port" "$transport" || return 1
-    [[ $transport != tcp ]] || cert_avoid_port=$port
+    [[ " $transport " != *" tcp "* ]] || cert_avoid_port=$port
     id=$(random_hex 8) || return 1
     proto_call "$type" create || return 1
     # A reused certificate may validate on this node's port.
@@ -1304,7 +1596,7 @@ node_add() {
         msg '证书已经申请好，换一个端口重新部署时会直接复用。'; return 1
     fi
     node=$(jq -n --arg id "$id" --arg name "$name" --arg host "$host" --arg sni "$sni" --arg type "$type" --argjson port "$port" --argjson fields "$REPLY" \
-        '{id:$id,name:$name,host:$host,sni:$sni,port:$port,type:$type,enabled:true} + $fields') || return 1
+        '{id:$id,name:$name,host:$host} + (if $sni == "" then {} else {sni:$sni} end) + {port:$port,type:$type,enabled:true} + $fields') || return 1
     if [[ $(sysctl -n net.ipv6.conf.all.disable_ipv6 2>/dev/null) == 1 ]]; then
         node=$(printf '%s' "$node" | jq '.listen="0.0.0.0"') || return 1
     fi
@@ -1316,13 +1608,15 @@ node_add() {
         if [[ $bbr == enable ]]; then
             if [[ $(sysctl -n net.ipv4.tcp_congestion_control) == bbr ]]; then msg 'BBR 已开启。'; else bbr_enable || msg '节点已部署；BBR 未启用，原因见上方。'; fi
         fi
-        transport=$(printf '%s' "$transport" | tr '[:lower:]' '[:upper:]')
+        transport=$(printf '%s' "$transport" | tr '[:lower:] ' '[:upper:]+')
         msg "节点 ID：$id"
         msg "节点端口：${port}/${transport}；如仍无法连接，请在服务商控制台的云安全组允许 ${transport} ${port}。"
         printf '%s' "$node" | share_uri
         msg '二维码、详情和客户端配置：在菜单里选「2. 节点管理」。'
         return 0
     fi
+    # A self-signed certificate made for this node is unused once the deploy fails.
+    rm -rf "$DATA/selfsigned/$id"
     rm -f "$candidate"; return 1
 }
 # Another node of the same protocol gets a numbered default name: <type>, <type>-2, …
@@ -1347,12 +1641,26 @@ export_node() {
             if use_color; then printf '%s' "$link" | qrencode -t ANSIUTF8; else printf '%s' "$link" | qrencode -t UTF8; fi
         else msg '未安装 qrencode，只显示链接：'; msg "$link"; fi;;
       outbound) printf '%s' "$node" | client_outbound;;
+      clash) printf '%s' "$node" | clash_proxy;;
+      surge) printf '%s' "$node" | surge_proxy;;
+      clients)
+        msg '── sing-box 客户端出站 ──'
+        printf '%s' "$node" | client_outbound || return 1
+        msg '── Clash Meta (mihomo)：放进 proxies: 列表 ──'
+        link=$(printf '%s' "$node" | clash_proxy) || return 1
+        msg "${link:-Clash Meta 不支持此协议。}"
+        msg '── Surge：放进 [Proxy] 段 ──'
+        link=$(printf '%s' "$node" | surge_proxy) || return 1
+        msg "${link:-Surge 不支持此协议。}"
+        msg '── Shadowrocket、v2rayN 等：导入原始分享链接或扫二维码 ──'
+        link=$(printf '%s' "$node" | jq -r '.cert_sha256 // empty')
+        [[ -z $link ]] || msg "自签证书：以上配置已带证书指纹；只导入链接的客户端会跳过证书校验，客户端能填证书 SHA-256 指纹时填：$link";;
       details)
         printf '%s' "$node" | jq "del($(proto_call "$type" secrets))" || return 1
         if [[ $(printf '%s' "$node" | jq -r '.cert_dir // empty') ]]; then
             openssl x509 -in "$(printf '%s' "$node" | jq -r .cert_dir)/fullchain.pem" -noout -subject -enddate
         fi;;
-      *) err '格式只能是 uri、qr、outbound 或 details。'; return 1;;
+      *) err '格式只能是 uri、qr、outbound、clash、surge、clients 或 details。'; return 1;;
     esac
 }
 list_nodes() {
@@ -1418,11 +1726,11 @@ node_menu() {
         id=$(jq -r --argjson i "$((REPLY-1))" '.nodes[$i].id' "$STATE") || return 1
     fi
     type=$(node_json "$STATE" "$id" | jq -r .type) || { err '节点不存在。'; return 1; }
-    msg $'1.详情 2.原始分享链接 3.二维码 4.sing-box 客户端出站\n5.启用/停用 6.修改端口 7.重置凭据 8.修改名称 9.删除'
+    msg $'1.详情 2.原始分享链接 3.二维码 4.客户端配置（sing-box / Clash Meta / Surge）\n5.启用/停用 6.修改端口 7.重置凭据 8.修改名称 9.删除'
     ! proto_has "$type" retarget_select || msg "10.$(proto_call "$type" retarget_label)"
     ask '操作' 1 || return 0
     case $REPLY in
-      1) export_node "$id" details;; 2) export_node "$id" uri;; 3) export_node "$id" qr;; 4) export_node "$id" outbound;;
+      1) export_node "$id" details;; 2) export_node "$id" uri;; 3) export_node "$id" qr;; 4) export_node "$id" clients;;
       5) with_lock node_change "$id" toggle;;
       6) ask '新端口' || return 0; with_lock node_change "$id" port "$REPLY";;
       7) yesno '旧凭据会失效，确认重置' && with_lock node_change "$id" rotate;;
@@ -1492,7 +1800,7 @@ menu_header() {
     systemctl is-active --quiet srm-renew.timer && renew='每日自动检查'
     printf '\n%s━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━%s\n' "$color" "$reset"
     printf '  sing-box-reality-manager (srm)  v%s\n' "$SRM_VERSION"
-    printf '  %s\n' "$(proto_labels)"
+    printf '  %s\n' "$(proto_labels 3)"
     printf '%s━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━%s\n' "$color" "$reset"
     printf '  服务：%s    节点：%s（启用 / 总数）\n' "$status" "$counts"
     printf '  分流：%s    证书续期：%s\n\n' "$routing" "$renew"
@@ -1546,12 +1854,15 @@ srm $SRM_VERSION：sing-box 节点管理（$(proto_labels)）
   srm install             只安装运行环境（核心、服务、srm / vasma 命令）
   srm add [协议] [选项]   部署节点，协议：$PROTOCOLS
                             --name 名称  --host 地址  --port 端口|random  --sni 域名
-                            --cert auto|webroot|import  --webroot 目录  --cert-file 文件  --key-file 文件
-                            --email 邮箱  --bbr enable|keep  --yes（不提问，未给的选项用默认值）
+                            --cert auto|webroot|import|selfsigned（自签只用于客户端能校验证书指纹的协议）
+                            --webroot 目录  --cert-file 文件  --key-file 文件  --email 邮箱
+                            --transport tcp|ws|grpc|httpupgrade（只用于能选传输方式的协议）
+                            --bbr enable|keep  --yes（不提问，未给的选项用默认值）
   srm list                列出节点：ID、名称、协议、端口、状态
   srm nodes               节点管理菜单：原始链接、二维码、启停、改端口、重置凭据
   srm node ID 操作 [值]   toggle | delete | rotate | port 端口 | name 名称 | retarget 目标域名
-  srm export ID [格式]    uri（默认）| qr | outbound | details；只在本机生成，不联网
+  srm export ID [格式]    uri（默认）| qr | outbound（sing-box）| clash | surge | clients（全部客户端）| details
+                          只在本机生成，不联网
   srm protocols           支持的协议和传输层
   srm routing [show]      流媒体分流菜单；show 只查看
   srm routing dns IP      设置解锁 DNS

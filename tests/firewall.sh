@@ -41,6 +41,15 @@ firewall_clear
 [[ $(find "$work/rules" -type f | wc -l | tr -d ' ') == 1 ]] || exit 1
 [[ -f $work/rules/public-permanent-23999-tcp ]] || exit 1
 echo 'PASS cleanup retains pre-existing permanent permission'
+# Shadowsocks listens on TCP and UDP of the same port; both are opened and both removed.
+printf '{"nodes":[{"port":24001,"type":"shadowsocks","enabled":true}]}\n' > "$work/ss-state"
+firewall_sync "$work/ss-state"
+for rule in runtime-24001-tcp runtime-24001-udp permanent-24001-tcp permanent-24001-udp; do
+    [[ -f $work/rules/public-$rule && -f $DATA/firewall/firewalld-public-$rule ]] || { echo "FAIL missing $rule"; exit 1; }
+done
+firewall_clear
+[[ $(find "$work/rules" -type f | wc -l | tr -d ' ') == 1 ]] || exit 1
+echo 'PASS a TCP+UDP protocol opens and later removes both transports'
 firewall-cmd() {
     case $1 in --get-active-zones) printf 'public\n';; *) printf 'query failed\n'; return 254;; esac
 }

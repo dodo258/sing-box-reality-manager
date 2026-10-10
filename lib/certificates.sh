@@ -1,3 +1,6 @@
+# Nodes using a domain certificate (Let's Encrypt or imported); self-signed nodes
+# keep their own ten-year certificate, pinned by clients, and are never renewed.
+CERT_NODES='.cert_dir != null and .cert_sha256 == null'
 ensure_acme() {
     [[ -x $ACME ]] && return 0
     local tmp
@@ -108,7 +111,7 @@ issue_certificate() (
 cert_auto_mode() {
     local taken=" ${cert_avoid_port:-} "
     if [[ -f $STATE ]]; then
-        taken+=$(jq -r "[.nodes[]|select(($(proto_jq_transport)) == \"tcp\")|.port|tostring]|join(\" \")" "$STATE") || return 1
+        taken+=$(jq -r "[.nodes[]|select(any(($(proto_jq_transports))[]; . == \"tcp\"))|.port|tostring]|join(\" \")" "$STATE") || return 1
         taken+=' '
     fi
     if [[ $taken != *' 80 '* && -z $(ss -H -ltn 'sport = :80') ]]; then printf 'http\n'
@@ -128,13 +131,13 @@ cert_challenge_port() {
 # nodes plus an optional DOMAIN about to be used.
 cert_port_ok() {
     local port=$1 transport=$2 domain
-    [[ $transport == tcp ]] || return 0
+    [[ " $transport " == *" tcp "* ]] || return 0
     while IFS= read -r domain; do
         [[ -n $domain && $(certificate_source "$domain") == acme ]] || continue
         if [[ $(cert_challenge_port "$domain") == "$port" ]]; then
             err "TCP $port 要留给证书 $domain 自动续期验证，节点不能占用；请换一个端口。"; return 1
         fi
-    done < <({ [[ ! -f $STATE ]] || jq -r '.nodes[]|select(.cert_dir != null)|.sni' "$STATE"; printf '%s\n' "${3:-}"; } | sort -u)
+    done < <({ [[ ! -f $STATE ]] || jq -r ".nodes[]|select($CERT_NODES)|.sni" "$STATE"; printf '%s\n' "${3:-}"; } | sort -u)
 }
 install_renew_timer() {
     cat > /etc/systemd/system/srm-renew.service <<UNIT
@@ -174,7 +177,7 @@ renew_certificates() {
                 failures=$((failures+1))
             fi
         else err "证书续期失败：${domain}；保留原证书。日志：$SRM_ROOT/acme-accounts/$domain/renew.log"; failures=$((failures+1)); fi
-    done < <(jq -r '.nodes[]|select(.cert_dir != null)|.sni' "$STATE" | sort -u)
+    done < <(jq -r ".nodes[]|select($CERT_NODES)|.sni" "$STATE" | sort -u)
     [[ $failures == 0 ]]
 }
 certificate_preserve_source() {
@@ -199,7 +202,11 @@ certificate_source() {
 certificate_status() {
     local domain cert count source health expiry issuer enabled running
     msg $'\n证书管理（只显示本脚本节点使用的证书）\nReality 无需自行申请证书；使用 TLS 证书的节点在这里查看到期时间和续期状态。'
-    if [[ ! -f $STATE ]] || ! jq -e 'any(.nodes[]; .cert_dir != null)' "$STATE" >/dev/null; then
+    if [[ -f $STATE ]]; then
+        count=$(jq '[.nodes[]|select(.cert_sha256 != null)]|length' "$STATE") || return 1
+        [[ $count == 0 ]] || msg "另有 $count 个节点使用自签证书：有效期十年，客户端按证书指纹校验，不需要续期。"
+    fi
+    if [[ ! -f $STATE ]] || ! jq -e "any(.nodes[]; $CERT_NODES)" "$STATE" >/dev/null; then
         msg '目前没有使用 TLS 证书的节点。'; return 0
     fi
     enabled=$(systemctl is-enabled srm-renew.timer 2>/dev/null) || enabled='未启用'
@@ -208,7 +215,7 @@ certificate_status() {
     systemctl list-timers --all srm-renew.timer --no-pager 2>/dev/null || true
     while IFS= read -r domain; do
         cert=$DATA/certs/$domain/active/fullchain.pem
-        count=$(jq --arg d "$domain" '[.nodes[]|select(.cert_dir != null and .sni==$d)]|length' "$STATE") || return 1
+        count=$(jq --arg d "$domain" "[.nodes[]|select($CERT_NODES and .sni==\$d)]|length" "$STATE") || return 1
         source=$(certificate_source "$domain") || return 1
         case $source in
           acme) source="Let's Encrypt 自动续期";;
@@ -224,7 +231,7 @@ certificate_status() {
         elif ! openssl x509 -in "$cert" -noout -checkend 2592000 >/dev/null 2>&1; then health='30 天内到期'
         else health='有效'; fi
         printf '到期时间：%s\n签发者：%s\n状态：%s\n' "${expiry#notAfter=}" "${issuer#issuer=}" "$health"
-    done < <(jq -r '.nodes[]|select(.cert_dir != null)|.sni' "$STATE" | sort -u)
+    done < <(jq -r ".nodes[]|select($CERT_NODES)|.sni" "$STATE" | sort -u)
 }
 certificate_renew_now() {
     msg '检查本脚本签发的证书：达到续期条件时才申请，未到期不会强制重签。'

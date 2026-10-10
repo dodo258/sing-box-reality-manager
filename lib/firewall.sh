@@ -97,7 +97,7 @@ firewall_sync() {
     desired=$(mktemp) || return 1
     ports=$(mktemp) || { rm -f "$desired"; return 1; }
     if [[ -n $state && -f $state ]]; then
-        jq -r ".nodes[]|select(.enabled)|[.port,($(proto_jq_transport))]|@tsv" "$state" > "$ports" || { rm -f "$ports" "$desired"; return 1; }
+        jq -r ".nodes[]|select(.enabled)|.port as \$p|($(proto_jq_transports))[]|[\$p,.]|@tsv" "$state" > "$ports" || { rm -f "$ports" "$desired"; return 1; }
     fi
     if [[ -n ${2:-} ]]; then
         [[ $2 == 80 || $2 == 443 ]] || { rm -f "$ports" "$desired"; return 1; }

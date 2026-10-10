@@ -60,7 +60,7 @@ validate_state() {
       ([.nodes[].port]|length == (unique|length)) and
       all(.nodes[];
         (.id|test("^[a-f0-9]{16}$")) and (.name|text) and
-        (.host|text) and (.sni|text) and ((.listen // "::") == "::" or .listen == "0.0.0.0") and (.enabled|type == "boolean") and
+        (.host|text) and (.sni == null or (.sni|text)) and ((.listen // "::") == "::" or .listen == "0.0.0.0") and (.enabled|type == "boolean") and
         (.port|type == "number" and floor == . and . >= 1 and . <= 65535) and
         ('"$(proto_jq validate false)"')) and
       all(.policies[];
@@ -79,7 +79,7 @@ validate_state() {
     h=$(jq -r '.unlock_dns // empty' "$1")
     [[ -z $h ]] || valid_ip "$h" || { err '解锁 DNS IP 无效。'; return 1; }
     while IFS= read -r h; do valid_host "$h" || { err "地址不合法：$h"; return 1; }; done < <(jq -r '.nodes[].host, (.egress.server // empty)' "$1")
-    while IFS= read -r h; do valid_domain "$h" || { err "域名不合法：$h"; return 1; }; done < <(jq -r '.nodes[].sni, .policies[].domains[]' "$1")
+    while IFS= read -r h; do valid_domain "$h" || { err "域名不合法：$h"; return 1; }; done < <(jq -r '.nodes[].sni // empty, .policies[].domains[]' "$1")
 }
 render_config() {
     validate_state "$1" || return 1
@@ -114,3 +114,6 @@ render_config() {
 node_json() { jq -e --arg id "$2" '.nodes[]|select(.id==$id)' "$1"; }
 client_outbound() { jq "$PROTO_JQ_DEFS $(proto_jq client_outbound 'error("不支持的协议：\(.type)")')"; }
 share_uri() { jq -r "$PROTO_JQ_DEFS $(proto_jq share_uri 'error("不支持的协议：\(.type)")')"; }
+# Client snippets; empty output when the client has no support for the protocol.
+clash_proxy() { jq -r "$PROTO_JQ_DEFS $(proto_jq clash empty)|\"- \(tojson)\""; }
+surge_proxy() { jq -r "$PROTO_JQ_DEFS $(proto_jq surge empty)"; }
