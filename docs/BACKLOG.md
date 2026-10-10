@@ -6,7 +6,7 @@
 
 从上往下做。正在做的条目后面标「（进行中：分支名 时间）」。
 
-- [ ] v4 Hysteria2 端口跳跃（可选）—— 来源：2026-10-10 对比 mack-a/v2ray-agent（提交 5c5e2b7，下称 M，行号指其 install.sh）。国内运营商常对单一 UDP 端口限速或阻断（M issue #1328），M 用 iptables DNAT 或 firewalld 端口转发实现端口跳跃（3222-3290）。要做：Hysteria2 部署时多一个选项「端口跳跃（运营商限制 UDP 时用）」，默认关；开启后选一段端口范围，用 nftables/iptables 把范围内 UDP 转到节点端口，规则带 srm 注释，删节点和卸载时撤掉；分享链接和各客户端片段带上端口范围（按 Hysteria2 官方规范的 `端口,起-止` 写法，客户端不支持的写明）。验收：测试断言开启时生成转发规则、关闭和删节点时撤掉；链接格式有单元测试；CI 全绿。
+- [ ] v4 Hysteria2 端口跳跃（可选）—— 来源：2026-10-10 对比 mack-a/v2ray-agent（提交 5c5e2b7，下称 M，行号指其 install.sh）。国内运营商常对单一 UDP 端口限速或阻断（M issue #1328），M 用 iptables DNAT 或 firewalld 端口转发实现端口跳跃（3222-3290）。要做：Hysteria2 部署时多一个选项「端口跳跃（运营商限制 UDP 时用）」，默认关；开启后选一段端口范围，用 nftables/iptables 把范围内 UDP 转到节点端口，规则带 srm 注释，删节点和卸载时撤掉；分享链接和各客户端片段带上端口范围（按 Hysteria2 官方规范的 `端口,起-止` 写法，客户端不支持的写明）。验收：测试断言开启时生成转发规则、关闭和删节点时撤掉；链接格式有单元测试；CI 全绿。（进行中：agent/1011-hy2-port-hopping 2026-10-11）
 
 - [ ] v4 iptables 规则开机自动补回（没有 netfilter-persistent 的系统）—— 来源：2026-10-10 iptables 后端审查（PR #13）。没装 netfilter-persistent 时，srm 加的 iptables 规则重启后就没了，而系统自己的 REJECT 可能由别的方式恢复，节点要等下次改节点或手动同步才通；现在只打印提示。要做：srm.service 启动前（如 ExecStartPre 或单独的 oneshot）按当前 state 同步一次防火墙端口规则，失败不阻止服务启动。验收：测试断言单元里有这一步、规则缺失时启动后补回；install-live 里真实 systemd 跑通；CI 全绿。
 
