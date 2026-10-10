@@ -18,7 +18,7 @@ firewall_profile() {
 firewall_fields_valid() {
     [[ $1 == ufw || $1 == firewalld ]] && [[ $2 =~ ^[a-zA-Z0-9_-]+$ ]] &&
         [[ $3 == both || $3 == runtime || $3 == permanent ]] &&
-        { valid_port "$4" || [[ $4 == 80 || $4 == 443 ]]; } && [[ $5 == tcp || $5 == udp ]]
+        valid_port "$4" && [[ $5 == tcp || $5 == udp ]]
 }
 firewall_add() {
     local backend=$1 zone=$2 scope=$3 port=$4 proto=$5 file app profile output rc
@@ -103,6 +103,8 @@ firewall_sync() {
         [[ $2 == 80 || $2 == 443 ]] || { rm -f "$ports" "$desired"; return 1; }
         printf '%s\ttcp\n' "$2" >> "$ports"
     fi
+    # A node may itself use the certificate challenge port.
+    sort -u -o "$ports" "$ports" || { rm -f "$ports" "$desired"; return 1; }
     if [[ $backend == firewalld ]]; then
         zones=$(firewall-cmd --get-active-zones) || { rm -f "$ports" "$desired"; return 1; }
         zones=$(printf '%s\n' "$zones" | awk '/^[^[:space:]]/{print $1}')
@@ -139,10 +141,8 @@ firewall_sync() {
     return "$failures"
 }
 firewall_renew() (
-    local domain=$1 port=80 account=$SRM_ROOT/acme-accounts/$1
-    if [[ -f $account/challenge-port ]]; then
-        read -r port < "$account/challenge-port" || exit 1
-    elif grep -q "^Le_Webroot='alpn'" "$account/${domain}_ecc/$domain.conf" 2>/dev/null; then port=443; fi
+    local domain=$1 port
+    port=$(cert_challenge_port "$domain") || exit 1
     [[ $port == 80 || $port == 443 ]] || { err '证书验证端口记录异常。'; exit 1; }
     trap 'firewall_sync "$STATE" || err "证书临时端口清理失败，请在菜单「4. 运行状态」里选「重新同步防火墙端口规则」重试。"' EXIT
     trap 'exit 130' INT TERM HUP

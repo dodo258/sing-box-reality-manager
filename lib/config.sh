@@ -1,7 +1,22 @@
 # Configuration is generated from one root-owned state file, never edited in-place.
 # Protocol-specific fields are validated and rendered through lib/protocols.sh.
-empty_state() { printf '%s\n' '{"schema":1,"nodes":[],"policies":[],"unlock_dns":null,"egress":null}'; }
-valid_port() { [[ $1 =~ ^[1-9][0-9]{4}$ ]] && (( $1 >= 10000 && $1 <= 50000 )); }
+STATE_SCHEMA=2
+empty_state() { printf '%s\n' '{"schema":2,"nodes":[],"policies":[],"unlock_dns":null,"egress":null}'; }
+# Older state is upgraded one schema at a time whenever it is about to change;
+# the result goes to stdout and the input file is left untouched.
+#   1 → 2: policies may carry "inbounds" (node ids); nodes stay exactly the same.
+state_migrate_1() { jq '.schema = 2'; }
+state_upgrade() {
+    local json schema
+    json=$(jq -c . "$1") && schema=$(jq -r '.schema|tojson' <<< "$json") || { err '节点数据无法读取，未改动。'; return 1; }
+    while [[ $schema != "$STATE_SCHEMA" ]]; do
+        [[ $schema =~ ^[1-9][0-9]*$ ]] && (( schema < STATE_SCHEMA )) && declare -F "state_migrate_$schema" >/dev/null ||
+            { err "节点数据版本 $schema 不受支持（可能来自更新版本的脚本），未改动。"; return 1; }
+        json=$("state_migrate_$schema" <<< "$json") && schema=$(jq -r '.schema|tojson' <<< "$json") || return 1
+    done
+    printf '%s\n' "$json"
+}
+valid_port() { [[ $1 =~ ^[1-9][0-9]{0,4}$ ]] && (( $1 <= 65535 )); }
 valid_domain() {
     [[ ${#1} -le 253 && $1 == *.* && $1 != *..* && $1 =~ ^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?$ ]] || return 1
     local label
@@ -38,19 +53,23 @@ valid_host() {
 validate_state() {
     jq -e "$PROTO_JQ_DEFS"'
       def text: type == "string" and length > 0 and (test("[\\x00-\\x1f\\x7f]")|not);
-      .schema == 1 and (.nodes|type == "array") and (.policies|type == "array") and
+      [.nodes[]?.id] as $ids |
+      .schema == 2 and (.nodes|type == "array") and (.policies|type == "array") and
       ([.policies[].name]|length == (unique|length)) and
       ([.nodes[].id]|length == (unique|length)) and
       ([.nodes[].port]|length == (unique|length)) and
       all(.nodes[];
         (.id|test("^[a-f0-9]{16}$")) and (.name|text) and
         (.host|text) and (.sni|text) and ((.listen // "::") == "::" or .listen == "0.0.0.0") and (.enabled|type == "boolean") and
-        (.port|type == "number" and floor == . and . >= 10000 and . <= 50000) and
+        (.port|type == "number" and floor == . and . >= 1 and . <= 65535) and
         ('"$(proto_jq validate false)"')) and
       all(.policies[];
         (.name|text) and (.mode == "dns" or .mode == "proxy") and
         (.domains|type == "array" and length > 0) and
-        all(.domains[]; text and test("^[a-z0-9][a-z0-9.-]*[a-z0-9]$"))) and
+        all(.domains[]; text and test("^[a-z0-9][a-z0-9.-]*[a-z0-9]$")) and
+        # Optional: limit the rule to these nodes; absent means every node.
+        (.inbounds == null or (.inbounds|type == "array" and length > 0 and length == (unique|length) and
+          all(.[]; . as $i | any($ids[]; . == $i))))) and
       ((any(.policies[]; .mode == "dns")|not) or (.unlock_dns|type == "string" and length > 0)) and
       ((any(.policies[]; .mode == "proxy")|not) or (.egress|type == "object")) and
       (.egress == null or (.egress.type == "socks" and .egress.version == "5" and
@@ -65,29 +84,29 @@ validate_state() {
 render_config() {
     validate_state "$1" || return 1
     jq "$PROTO_JQ_DEFS"'
+      # A policy limited to some nodes matches only traffic entering through their inbounds.
+      def scope: if .inbounds then {inbound:.inbounds} else {} end;
       . as $s |
-      [.policies[]|select(.mode=="dns")|.domains[]]|unique as $dns_domains |
-      [$s.policies[]|select(.mode=="proxy")|.domains[]]|unique as $proxy_domains |
+      [.policies[]|select(.mode=="dns")] as $dns |
+      [.policies[]|select(.mode=="proxy")] as $proxy |
       {
         log: {level:"warn",timestamp:true},
         dns: {
           servers: ([{type:"local",tag:"local"}]
-            + (if ($dns_domains|length)>0 then [{type:"udp",tag:"unlock",server:$s.unlock_dns,server_port:53}] else [] end)
-            + (if ($proxy_domains|length)>0 then [{type:"https",tag:"remote-dns",server:"1.1.1.1",detour:"media-proxy"}] else [] end)),
-          rules: ((if ($proxy_domains|length)>0 then [{domain_suffix:$proxy_domains,action:"route",server:"remote-dns"}] else [] end)
-            + (if ($dns_domains|length)>0 then [{domain_suffix:$dns_domains,action:"route",server:"unlock"}] else [] end)),
+            + (if ($dns|length)>0 then [{type:"udp",tag:"unlock",server:$s.unlock_dns,server_port:53}] else [] end)
+            + (if ($proxy|length)>0 then [{type:"https",tag:"remote-dns",server:"1.1.1.1",detour:"media-proxy"}] else [] end)),
+          rules: ([$proxy[]|scope + {domain_suffix:.domains,action:"route",server:"remote-dns"}]
+            + [$dns[]|scope + {domain_suffix:.domains,action:"route",server:"unlock"}]),
           final:"local"
         },
         inbounds: [$s.nodes[]|select(.enabled)|('"$(proto_jq render_inbound '[]')"')[]],
         outbounds: ([{type:"direct",tag:"direct"}]
-          + (if ($proxy_domains|length)>0 then [$s.egress + {tag:"media-proxy",domain_resolver:"local"}] else [] end)),
+          + (if ($proxy|length)>0 then [$s.egress + {tag:"media-proxy",domain_resolver:"local"}] else [] end)),
         route: {default_domain_resolver:"local",final:"direct",rules: (
           [{action:"sniff",timeout:"300ms"},{protocol:"dns",action:"hijack-dns"}]
-          + (if ($proxy_domains|length)>0 then [{domain_suffix:$proxy_domains,action:"route",outbound:"media-proxy"}] else [] end)
-          + (if ($dns_domains|length)>0 then
-              [{domain_suffix:$dns_domains,action:"resolve",server:"unlock",strategy:"ipv4_only"},
-               {domain_suffix:$dns_domains,action:"route",outbound:"direct"}]
-             else [] end))
+          + [$proxy[]|scope + {domain_suffix:.domains,action:"route",outbound:"media-proxy"}]
+          + [$dns[]|(scope + {domain_suffix:.domains,action:"resolve",server:"unlock",strategy:"ipv4_only"}),
+                    (scope + {domain_suffix:.domains,action:"route",outbound:"direct"})])
         }
       }
     ' "$1"

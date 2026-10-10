@@ -2,7 +2,7 @@
 # node_add SELF [TYPE] [--name N] [--host H] [--port P|random] [--sni D] [--cert auto|webroot|import]
 #          [--webroot DIR] [--cert-file F] [--key-file F] [--email E] [--bbr enable|keep] [--yes]
 node_add() {
-    local self=$1 type='' name host port sni='' bbr=keep candidate node id tmp transport var assume_yes=0
+    local self=$1 type='' name host port sni='' bbr=keep candidate node id tmp transport var assume_yes=0 cert_avoid_port=''
     local opt_name='' opt_host='' opt_port='' opt_sni='' opt_cert='' opt_webroot='' opt_cert_file='' opt_key_file='' opt_email='' opt_bbr=''
     # Protocol prompt hooks fill these.
     local mode=none email='' webroot='' cert='' key=''
@@ -22,17 +22,17 @@ node_add() {
     if [[ -z $type ]]; then
         if [[ $assume_yes == 1 ]]; then err "非交互模式需要指定协议：$PROTOCOLS"; return 1; fi
         local t i=0
-        msg '部署节点（任一步输入 0 返回）'
+        msg '部署节点（任一步输入 0 返回；同一协议可以部署多个节点，端口和凭据各自独立）'
         for t in $PROTOCOLS; do i=$((i+1)); printf '%s. %s\n' "$i" "$(proto_call "$t" label)"; done
         ask '协议' 1 || return 1
         type=$(proto_by_index "$REPLY") || { err "请选择 1–$i。"; return 1; }
     fi
     proto_known "$type" || { err "不支持的协议：$type（可选：$PROTOCOLS）"; return 1; }
-    ask_opt "$opt_name" '节点名称' "$type" || return 1; name=$REPLY
+    ask_opt "$opt_name" '节点名称' "$(default_node_name "$type")" || return 1; name=$REPLY
     ask_opt "$opt_host" '客户端连接的服务器 IP 或域名（域名需 DNS only 灰云）' || return 1; host=$REPLY
     valid_host "$host" || { err '地址不合法。'; return 1; }
-    ask_opt "$opt_port" '端口：10000–50000，回车随机' random || return 1; port=$REPLY
-    if [[ $port != random ]]; then valid_port "$port" || { err '端口必须在 10000–50000。'; return 1; }; fi
+    ask_opt "$opt_port" '端口：1–65535，回车随机（10000–50000 里的空闲端口）' random || return 1; port=$REPLY
+    if [[ $port != random ]]; then valid_port "$port" || { err '端口必须在 1–65535。'; return 1; }; fi
     proto_call "$type" prompt || return 1
     valid_domain "$sni" || { err '域名不合法，请使用 ASCII/Punycode 域名。'; return 1; }
     if [[ ! -f $STATE ]]; then
@@ -45,8 +45,15 @@ node_add() {
     [[ -f $SRM_ROOT/.srm-owned ]] || setup "$self" || return 1
     ensure_dependencies || return 1
     if [[ $port == random ]]; then port=$(choose_port) || return 1; else port_free "$port" || { err '端口被占用，原服务未改动。'; return 1; }; fi
+    transport=$(proto_call "$type" transport) || return 1
+    cert_port_ok "$port" "$transport" || return 1
+    [[ $transport != tcp ]] || cert_avoid_port=$port
     id=$(random_hex 8) || return 1
     proto_call "$type" create || return 1
+    # A reused certificate may validate on this node's port.
+    if [[ -n $(jq -r '.cert_dir // empty' <<< "$REPLY") ]] && ! cert_port_ok "$port" "$transport" "$sni"; then
+        msg '证书已经申请好，换一个端口重新部署时会直接复用。'; return 1
+    fi
     node=$(jq -n --arg id "$id" --arg name "$name" --arg host "$host" --arg sni "$sni" --arg type "$type" --argjson port "$port" --argjson fields "$REPLY" \
         '{id:$id,name:$name,host:$host,sni:$sni,port:$port,type:$type,enabled:true} + $fields') || return 1
     if [[ $(sysctl -n net.ipv6.conf.all.disable_ipv6 2>/dev/null) == 1 ]]; then
@@ -60,7 +67,7 @@ node_add() {
         if [[ $bbr == enable ]]; then
             if [[ $(sysctl -n net.ipv4.tcp_congestion_control) == bbr ]]; then msg 'BBR 已开启。'; else bbr_enable || msg '节点已部署；BBR 未启用，原因见上方。'; fi
         fi
-        transport=$(proto_call "$type" transport | tr '[:lower:]' '[:upper:]')
+        transport=$(printf '%s' "$transport" | tr '[:lower:]' '[:upper:]')
         msg "节点 ID：$id"
         msg "节点端口：${port}/${transport}；如仍无法连接，请在服务商控制台的云安全组允许 ${transport} ${port}。"
         printf '%s' "$node" | share_uri
@@ -68,6 +75,15 @@ node_add() {
         return 0
     fi
     rm -f "$candidate"; return 1
+}
+# Another node of the same protocol gets a numbered default name: <type>, <type>-2, …
+default_node_name() {
+    local name=$1 n=1
+    [[ -f $STATE ]] || { printf '%s\n' "$name"; return 0; }
+    while jq -e --arg n "$name" 'any(.nodes[]; .name == $n)' "$STATE" >/dev/null; do
+        n=$((n+1)); name=$1-$n
+    done
+    printf '%s\n' "$name"
 }
 # Viewing nodes never touches the network: links and QR codes are built locally.
 export_node() {
@@ -95,7 +111,7 @@ list_nodes() {
     jq -r '.nodes[]|[.id,.name,.type,(.port|tostring),(if .enabled then "启用" else "停用" end)]|@tsv' "$STATE"
 }
 node_change() {
-    local id=$1 action=$2 value=${3:-} candidate tmp type node
+    local id=$1 action=$2 value=${3:-} candidate tmp type node dropped='' name
     candidate=$(new_candidate) || return 1
     node=$(node_json "$candidate" "$id") || { rm -f "$candidate"; err '节点不存在。'; return 1; }
     type=$(printf '%s' "$node" | jq -r .type)
@@ -104,11 +120,17 @@ node_change() {
       toggle)
         if [[ $(printf '%s' "$node" | jq -r .enabled) == false ]]; then
             port_free "$(printf '%s' "$node" | jq -r .port)" "$id" || { rm -f "$tmp" "$candidate"; err '端口被占用，无法启用。'; return 1; }
+            cert_port_ok "$(printf '%s' "$node" | jq -r .port)" "$(proto_call "$type" transport)" || { rm -f "$tmp" "$candidate"; return 1; }
         fi
         jq --arg id "$id" '(.nodes[]|select(.id==$id)|.enabled) |= not' "$candidate" > "$tmp";;
-      delete) jq --arg id "$id" '.nodes |= map(select(.id!=$id))' "$candidate" > "$tmp";;
+      delete)
+        # Rules limited to this node lose it; a rule left with no node goes too.
+        dropped=$(jq -r --arg id "$id" '.policies[]|select(.inbounds == [$id])|.name' "$candidate") || dropped=''
+        jq --arg id "$id" '.nodes |= map(select(.id!=$id)) |
+          .policies |= map(if .inbounds then .inbounds -= [$id] else . end | select(.inbounds != []))' "$candidate" > "$tmp";;
       port)
         port_free "$value" "$id" || { rm -f "$tmp" "$candidate"; err '端口无效或被占用。'; return 1; }
+        cert_port_ok "$value" "$(proto_call "$type" transport)" || { rm -f "$tmp" "$candidate"; return 1; }
         jq --arg id "$id" --argjson p "$value" '(.nodes[]|select(.id==$id)|.port)=$p' "$candidate" > "$tmp";;
       name)
         [[ -n $value ]] || { rm -f "$tmp" "$candidate"; err '名称不能为空。'; return 1; }
@@ -124,7 +146,10 @@ node_change() {
       *) rm -f "$tmp" "$candidate"; err '操作只能是 toggle、port、name、rotate、retarget 或 delete。'; return 1;;
     esac
     local rc=1
-    if mv "$tmp" "$candidate" && apply_state "$candidate"; then rc=0; fi
+    if mv "$tmp" "$candidate" && apply_state "$candidate"; then
+        rc=0
+        while IFS= read -r name; do [[ -z $name ]] || msg "分流规则「$name」只作用于这个节点，已一并删除。"; done <<< "$dropped"
+    fi
     rm -f "$candidate" "$tmp"
     return "$rc"
 }

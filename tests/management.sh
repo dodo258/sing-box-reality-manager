@@ -13,7 +13,7 @@ private=$(printf '%s\n' "$pair" | awk '/PrivateKey:/{print $2}')
 public=$(printf '%s\n' "$pair" | awk '/PublicKey:/{print $2}')
 uuid=$("$CORE" generate uuid)
 jq -n --arg private "$private" --arg public "$public" --arg uuid "$uuid" \
- '{schema:1,nodes:[{id:"1111111111111111",name:"test",type:"vless",enabled:true,host:"127.0.0.1",port:18101,sni:"www.microsoft.com",uuid:$uuid,private_key:$private,public_key:$public,short_id:"0123456789abcdef"}],policies:[],unlock_dns:null,egress:null}' > "$STATE"
+ '{schema:2,nodes:[{id:"1111111111111111",name:"test",type:"vless",enabled:true,host:"127.0.0.1",port:18101,sni:"www.microsoft.com",uuid:$uuid,private_key:$private,public_key:$public,short_id:"0123456789abcdef"}],policies:[],unlock_dns:null,egress:null}' > "$STATE"
 cp "$STATE" "$work/original.json"
 reality_target_check() { [[ ${probe_failure:-0} == 0 ]]; }
 apply_state() {

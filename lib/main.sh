@@ -76,7 +76,9 @@ srm $SRM_VERSION：sing-box 节点管理（$(proto_labels)）
   srm routing [show]      流媒体分流菜单；show 只查看
   srm routing dns IP      设置解锁 DNS
   srm routing egress 地址 [端口] [用户名]   设置 SOCKS5 代理出口；有用户名时从标准输入读密码
-  srm routing add 名称 dns|proxy 域名…     添加或替换平台规则（netflix.com 等域名后缀）
+  srm routing add 名称 dns|proxy 域名… [--nodes ID,…|all]
+                          添加或替换平台规则（netflix.com 等域名后缀）；--nodes 只对这些节点生效，
+                          all 对所有节点；不写时替换的规则保留原来的节点
   srm routing del 名称    删除平台规则
   srm certs [status]      证书管理；status 只查看
   srm renew               检查证书续期
@@ -147,7 +149,12 @@ main() {
       uninstall)
         case ${2:-} in -y|--yes) assume_yes=1;; '') ;; *) err '用法：srm uninstall [--yes]'; return 1;; esac
         with_lock uninstall;;
-      render) [[ -n ${2:-} ]] || { err '用法：srm render STATE'; return 1; }; render_config "$2";;
+      render)
+        [[ -n ${2:-} ]] || { err '用法：srm render STATE'; return 1; }
+        local state rc=1
+        state=$(mktemp) || return 1
+        state_upgrade "$2" > "$state" && render_config "$state" && rc=0
+        rm -f "$state"; return "$rc";;
       version|--version) printf 'srm %s / tested core %s\n' "$SRM_VERSION" "$CORE_VERSION";;
       help) usage;;
       *) err "未知命令：$1。可用命令见 srm --help。"; return 1;;
