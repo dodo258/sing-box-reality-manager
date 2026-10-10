@@ -27,7 +27,7 @@ firewall_ipt_save() {
     if command -v netfilter-persistent >/dev/null; then
         netfilter-persistent save >/dev/null 2>&1 || err 'iptables 规则已生效，但 netfilter-persistent 保存失败，服务器重启后可能失效。'
     else
-        msg 'iptables 规则已生效，但系统没有 netfilter-persistent，服务器重启后会失效；安装 iptables-persistent 时选「是」保存当前规则即可。'
+        msg 'iptables 规则已生效；系统没有 netfilter-persistent，服务器重启后由 srm 服务启动时补回。'
     fi
 }
 firewall_detect() {
@@ -221,6 +221,26 @@ firewall_sync() {
     rm -f "$ports" "$desired"
     return "$failures"
 }
+# Run by srm.service before every start (also at boot): iptables accept rules on
+# systems without netfilter-persistent and port hopping redirects are gone after a
+# reboot. Never waits for srm's lock and never recovers an interrupted change (that
+# restarts this very service): when another operation holds the lock (it may be the
+# one restarting the service) it syncs the port rules itself when it finishes, so
+# only the redirects (their own lock) are put back here, as also when the port rules
+# fail. Only errors reach the journal.
+firewall_restore() {
+    local rc=0
+    if [[ -d ${SRM_LOCK%/*} ]] && command -v flock >/dev/null; then
+        exec 9>"$SRM_LOCK" || return 1
+        if flock -n 9; then
+            firewall_sync "$STATE" > /dev/null || { rc=$?; hop_sync "$STATE" > /dev/null || true; }
+            exec 9>&-
+            return "$rc"
+        fi
+        exec 9>&-
+    fi
+    hop_sync "$STATE" > /dev/null
+}
 firewall_renew() (
     local domain=$1 port
     port=$(cert_challenge_port "$domain") || exit 1
@@ -237,7 +257,7 @@ firewall_renew() (
 # e.g. for containers). Rules carry the comment srm-hop: iptables / ip6tables nat
 # PREROUTING when iptables exists (the same backend as the rest of the system),
 # otherwise one nftables table inet srm_hop replaced atomically. Neither survives a
-# reboot by itself: srm.service runs `srm hop-sync` before every start
+# reboot by itself: srm.service runs `srm firewall-restore` before every start
 # (the Port Hopping page of the official documentation, linked in lib/protocols.sh).
 HOP_COMMENT=srm-hop
 HOP_TABLE=srm_hop
@@ -338,8 +358,8 @@ hop_backend() {
 # Redirect rules for STATE's enabled nodes; without STATE every srm-hop rule goes.
 # Systems that never had port hopping are not touched (no record). IPv6 is best
 # effort: a failure there is reported and does not fail the sync.
-# The service start (hop-sync) runs without srm's lock, maybe inside a locked
-# transaction restarting the service, so the rules have a lock of their own, taken
+# The service start (firewall-restore) runs it without srm's lock while a locked
+# transaction restarts the service, so the rules have a lock of their own, taken
 # only around the change (no subshell: FIREWALL_IPT_CHANGED must reach the caller).
 HOP_LOCK=/run/lock/srm-hop.lock
 hop_sync() {

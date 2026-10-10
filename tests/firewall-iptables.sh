@@ -109,10 +109,38 @@ if command -v netfilter-persistent >/dev/null; then
 else
     firewall_sync "$work/state" > "$work/out"
     [[ $(srm_rules ipv4) == 4 ]] || fail 'rules not added without netfilter-persistent'
-    grep -q '没有 netfilter-persistent，服务器重启后会失效' "$work/out" || fail 'missing persistence hint'
+    grep -q '没有 netfilter-persistent，服务器重启后由 srm 服务启动时补回' "$work/out" || fail 'missing persistence hint'
     firewall_clear > /dev/null
     echo 'PASS without netfilter-persistent rules still apply and a reboot warning is printed'
 fi
+
+# After a reboot without netfilter-persistent the system's REJECT may come back while
+# srm's rules do not: srm.service runs firewall-restore before every start, which
+# syncs the current nodes' rules when no other operation holds srm's lock.
+service_unit | grep -Fxq "ExecStartPre=-+$SRM_ROOT/manager.sh firewall-restore" || fail 'the unit does not restore the rules before starting'
+STATE=$work/data/current/state.json
+SRM_LOCK=$work/srm.lock
+mkdir -p "$DATA/current" && cp "$work/state" "$STATE"
+lock_busy=0
+flock() { [[ $1 == -n && $2 == 9 ]] || return 2; [[ $lock_busy == 0 ]]; }
+firewall_sync "$STATE" > /dev/null
+[[ $(srm_rules ipv4) == 4 ]] || fail 'rules before the reboot'
+cp "$work/original-v4" "$work/ipt-ipv4"
+firewall_restore > /dev/null || fail 'restore failed'
+[[ $(srm_rules ipv4) == 4 && $(tail -n 1 "$work/ipt-ipv4") == '-A INPUT -j REJECT --reject-with icmp-host-prohibited' ]] || fail 'rules not restored before the REJECT'
+grep -v -- '--comment srm' "$work/ipt-ipv4" | cmp -s - "$work/original-v4" || fail 'restore changed existing rules'
+cp "$work/ipt-ipv4" "$work/restored"
+firewall_restore > /dev/null && cmp -s "$work/ipt-ipv4" "$work/restored" || fail 'restoring again changed rules'
+# A locked operation (maybe the one restarting the service) syncs the rules itself.
+cp "$work/original-v4" "$work/ipt-ipv4"
+lock_busy=1
+firewall_restore > /dev/null || fail 'restore failed while the lock was held'
+[[ $(srm_rules ipv4) == 0 ]] || fail 'rules changed while another operation held the lock'
+lock_busy=0
+unset -f flock
+rm -rf "$DATA/current"
+firewall_clear > /dev/null
+echo 'PASS the unit restores missing rules before every start, only when no other operation holds the lock'
 
 printf -- '-P INPUT ACCEPT\n-A INPUT -s 192.0.2.1/32 -j DROP\n' > "$work/ipt-ipv4"
 printf -- '-P INPUT ACCEPT\n' > "$work/ipt-ipv6"

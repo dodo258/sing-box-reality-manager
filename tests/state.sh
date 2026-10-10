@@ -63,6 +63,8 @@ chgrp() { :; }
 systemctl() { case $1 in is-active) return 3;; *) return 0;; esac; }
 service_healthy() { return 0; }
 firewall_sync() { return 0; }
+# The unit lives in /etc/systemd/system; tests/install-live.sh writes the real one.
+service_unit_write() { return 0; }
 # BSD mv has no -T; the real atomic switch is covered by tests/install-live.sh.
 switch_generation() { rm -f "$DATA/current" && ln -s "$1" "$DATA/current"; }
 printf '#!/bin/sh\nexit 0\n' > "$work/core"; chmod 755 "$work/core"
