@@ -42,7 +42,7 @@ if proto_call anytls retarget '{}' www.python.org 2>/dev/null; then fail 'option
 echo 'PASS registry rejects unknown names, incomplete protocols and missing hooks'
 
 jq -n '{schema:2,policies:[],unlock_dns:null,egress:null,nodes:[
- {id:"1111111111111111",name:"r",type:"vless",enabled:true,host:"192.0.2.1",port:18101,sni:"www.python.org",uuid:"0f2a6c1e-3b4d-4e5f-8a9b-0c1d2e3f4a5b",private_key:"private",public_key:"public",short_id:"0123456789abcdef"},
+ {id:"1111111111111111",name:"r",type:"vless",enabled:true,host:"192.0.2.1",port:18101,sni:"www.python.org",uuid:"00000000-0000-4000-8000-000000000006",private_key:"private",public_key:"public",short_id:"0123456789abcdef"},
  {id:"2222222222222222",name:"h",type:"hysteria2",enabled:true,host:"192.0.2.1",port:18103,sni:"test.example.com",password:"password",cert_dir:"/certs"}]}' > "$work/state.json"
 validate_state "$work/state.json" || fail 'valid state rejected'
 jq '.nodes[0].type="socks"' "$work/state.json" > "$work/unknown.json"
@@ -67,7 +67,7 @@ if node_add self vless --host 192.0.2.1 --bogus 1 --yes 2>/dev/null; then fail '
 echo 'PASS deploying an unknown protocol or with missing/invalid options changes nothing'
 
 # Non-interactive Reality deployment: each node gets its own random shortId.
-printf '#!/usr/bin/env bash\ncase $2 in reality-keypair) printf "PrivateKey: priv%%s\\nPublicKey: pub%%s\\n" $RANDOM $RANDOM;; uuid) printf "%%s\\n" 0f2a6c1e-3b4d-4e5f-8a9b-$(openssl rand -hex 6);; esac\n' > "$work/core"
+printf '#!/usr/bin/env bash\ncase $2 in reality-keypair) printf "PrivateKey: priv%%s\\nPublicKey: pub%%s\\n" $RANDOM $RANDOM;; uuid) printf "%%s\\n" 00000000-0000-4000-8000-$(openssl rand -hex 6);; esac\n' > "$work/core"
 chmod 755 "$work/core"
 CORE=$work/core
 ensure_dependencies() { return 0; }

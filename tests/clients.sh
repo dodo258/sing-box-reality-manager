@@ -21,7 +21,7 @@ touch "$SRM_ROOT/.srm-owned" "$DATA/.srm-owned"
 [[ $PROTOCOLS == 'vless anytls hysteria2 snell shadowsocks tuic vlesstls trojan vmess naive hysteria' ]] || fail "registered: $PROTOCOLS"
 echo 'PASS Shadowsocks 2022, TUIC v5, VLESS TLS, Trojan, VMess, Naive and Hysteria v1 are registered'
 
-uuid=0f2a6c1e-3b4d-4e5f-8a9b-0c1d2e3f4a5b
+uuid=00000000-0000-4000-8000-000000000006
 pin=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
 jq -n --arg uuid "$uuid" --arg pin "$pin" '
   def node($id; $name; $type; $port): {id:$id,name:$name,type:$type,enabled:true,host:"192.0.2.1",port:$port};
@@ -260,7 +260,7 @@ done
 echo 'PASS Surge is listed field by field for Surge for iOS plus the whole line; UDP-only nodes (Hysteria v1/v2, TUIC) carry the latency and UDP note; Vision nodes say Shadowrocket has no UDP through them'
 
 # Non-interactive deployment with stubs for the system parts.
-printf '#!/usr/bin/env bash\ncase $2 in uuid) printf "%%s\\n" 0f2a6c1e-3b4d-4e5f-8a9b-$(openssl rand -hex 6);; esac\n' > "$work/core"
+printf '#!/usr/bin/env bash\ncase $2 in uuid) printf "%%s\\n" 00000000-0000-4000-8000-$(openssl rand -hex 6);; esac\n' > "$work/core"
 chmod 755 "$work/core"
 CORE=$work/core
 ensure_dependencies() { return 0; }

@@ -6,7 +6,7 @@
       "listen_port": 33445,
       "users": [
         {
-          "password": "5e6f7081-6666-4777-8888-9999aaaabbbb",
+          "password": "00000000-0000-4000-8000-00000000000c",
           "name": "5e6f7081-Trojan_TCP"
         }
       ],

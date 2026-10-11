@@ -7,7 +7,7 @@
       "tag": "VLESSRealityMulti31449",
       "users": [
         {
-          "uuid": "3d4e5f60-4444-4555-8666-777788889999",
+          "uuid": "00000000-0000-4000-8000-000000000009",
           "flow": "xtls-rprx-vision",
           "name": "carol-VLESS_Reality_Vision"
         }
@@ -21,7 +21,7 @@
             "server": "www.example.net",
             "server_port": 443
           },
-          "private_key": "UAaTaPchwzGAReB5KhR1E-OoG_iLe-xrfM5B2aiVz0c",
+          "private_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAU",
           "short_id": [
             "",
             "6ba85179e30d4fc2"

@@ -7,7 +7,7 @@
       "tag": "VLESSReality",
       "users": [
         {
-          "uuid": "5b0c4f0e-8d2a-4c61-9e3b-2f7a1d6c9e01",
+          "uuid": "00000000-0000-4000-8000-00000000000b",
           "flow": "xtls-rprx-vision",
           "name": "5b0c4f0e-VLESS_Reality_Vision"
         }
@@ -21,7 +21,7 @@
             "server": "www.example.com",
             "server_port": 443
           },
-          "private_key": "AD74yTt0mGFM10h4XD8vkbSwpIaN7roL58_tkjbdOkQ",
+          "private_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAI",
           "short_id": [
             "",
             "6ba85179e30d4fc2"

@@ -36,7 +36,7 @@ echo 'PASS menu on a fresh machine opens without network access'
 
 touch "$SRM_ROOT/.srm-owned" "$DATA/.srm-owned"
 jq -n '{schema:1,nodes:[
- {id:"1111111111111111",name:"r",type:"vless",enabled:true,host:"192.0.2.1",port:18101,sni:"www.python.org",uuid:"0f2a6c1e-3b4d-4e5f-8a9b-0c1d2e3f4a5b",private_key:"private",public_key:"public",short_id:"0123456789abcdef"},
+ {id:"1111111111111111",name:"r",type:"vless",enabled:true,host:"192.0.2.1",port:18101,sni:"www.python.org",uuid:"00000000-0000-4000-8000-000000000006",private_key:"private",public_key:"public",short_id:"0123456789abcdef"},
  {id:"2222222222222222",name:"a",type:"anytls",enabled:true,host:"192.0.2.1",port:18102,sni:"test.example.com",password:"password",cert_dir:"/nonexistent"},
  {id:"3333333333333333",name:"h",type:"hysteria2",enabled:false,host:"192.0.2.1",port:18103,sni:"test.example.com",password:"password",cert_dir:"/nonexistent"}
 ],policies:[{name:"N",mode:"dns",domains:["netflix.com"]}],unlock_dns:"192.0.2.53",egress:null}' > "$STATE"
@@ -52,7 +52,7 @@ echo 'PASS opening the menu and every read-only page makes no curl or wget call'
 grep -q 'VLESS Reality · AnyTLS · Hysteria2' "$work/menu"
 grep -q '节点：2 / 3' "$work/menu"
 echo 'PASS menu stays open and returns after each action until 0'
-grep -q 'vless://0f2a6c1e-3b4d-4e5f-8a9b-0c1d2e3f4a5b@192.0.2.1:18101' "$work/menu"
+grep -q 'vless://00000000-0000-4000-8000-000000000006@192.0.2.1:18101' "$work/menu"
 grep -q '\[QR -t UTF8\]' "$work/menu"
 grep -q '10.更换伪装目标（Reality 借用握手的网站）' "$work/menu"
 grep -q '"type": "anytls"' "$work/menu"

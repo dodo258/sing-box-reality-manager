@@ -7,12 +7,12 @@
       "tag": "VLESSRealityMulti31444",
       "users": [
         {
-          "uuid": "1b2c3d4e-2222-4333-8444-555566667777",
+          "uuid": "00000000-0000-4000-8000-000000000007",
           "flow": "xtls-rprx-vision",
           "name": "alice-VLESS_Reality_Vision"
         },
         {
-          "uuid": "2c3d4e5f-3333-4444-8555-666677778888",
+          "uuid": "00000000-0000-4000-8000-000000000008",
           "flow": "xtls-rprx-vision",
           "name": "bob-VLESS_Reality_Vision"
         }
@@ -26,7 +26,7 @@
             "server": "www.example.org",
             "server_port": 443
           },
-          "private_key": "iFWoJwv66IsdLsEdMPfvvVPYdm524dtI3bTJTkdOgWY",
+          "private_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAY",
           "short_id": [
             "",
             "6ba85179e30d4fc2"

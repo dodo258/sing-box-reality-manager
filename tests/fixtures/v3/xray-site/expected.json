@@ -1,8 +1,8 @@
 {
   "nodes": [
     {"name": "vless-34443", "type": "vless", "port": 34443, "enabled": true, "sni": "www.example.com",
-     "uuid": "7d8e9fa0-1111-4222-8333-0a0b0c0d0e0f", "private_key": "AD74yTt0mGFM10h4XD8vkbSwpIaN7roL58_tkjbdOkQ",
-     "public_key": "6G0iU-IquRpPD0H6wtDSutUMsjBqk34b-r3JjhA301M", "short_id": "6ba85179e30d4fc2"}
+     "uuid": "00000000-0000-4000-8000-00000000000e", "private_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAI",
+     "public_key": "rYxIwmdlrqetxTYolgXBq-qVBQCT29IYyWq9JIGgNWU", "short_id": "6ba85179e30d4fc2"}
   ],
   "skipped": [
     "Xray vless（端口 443）",

@@ -7,17 +7,17 @@
       "tag": "VLESSReality",
       "users": [
         {
-          "uuid": "9fa0b1c2-3333-4444-8555-2a2b2c2d2e2f",
+          "uuid": "00000000-0000-4000-8000-000000000010",
           "flow": "xtls-rprx-vision",
           "name": "alice-VLESS_Reality_Vision"
         },
         {
-          "uuid": "a0b1c2d3-4444-4555-8666-3a3b3c3d3e3f",
+          "uuid": "00000000-0000-4000-8000-000000000011",
           "flow": "xtls-rprx-vision",
           "name": "bob-VLESS_Reality_Vision"
         },
         {
-          "uuid": "b1c2d3e4-5555-4666-8777-4a4b4c4d4e4f",
+          "uuid": "00000000-0000-4000-8000-000000000012",
           "flow": "xtls-rprx-vision",
           "name": "carol-VLESS_Reality_Vision"
         }
@@ -31,7 +31,7 @@
             "server": "www.example.com",
             "server_port": 443
           },
-          "private_key": "AD74yTt0mGFM10h4XD8vkbSwpIaN7roL58_tkjbdOkQ",
+          "private_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAI",
           "short_id": [
             "",
             "6ba85179e30d4fc2"

@@ -1,16 +1,16 @@
 {
   "nodes": [
     {"name": "vless-31443", "type": "vless", "port": 31443, "enabled": true, "sni": "www.example.com",
-     "uuid": "0a1b2c3d-1111-4222-8333-444455556666", "private_key": "6EtYN-a8EpE--3kLi-fNIeq5gNbyQEUD6XjD62Nz2Xo",
-     "public_key": "Qx1d9gj9YQVAo1mzznlkxp4vrQ-yRiFS7lMURE4wogs", "short_id": "6ba85179e30d4fc2"},
+     "uuid": "00000000-0000-4000-8000-000000000001", "private_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAE",
+     "public_key": "_TOE4TKtAqVsePRVR-5AA43HkAK5DSntkOCO7nYq5xU", "short_id": "6ba85179e30d4fc2"},
     {"name": "vless-31444", "type": "vless", "port": 31444, "enabled": true, "sni": "www.example.org",
-     "uuid": "1b2c3d4e-2222-4333-8444-555566667777", "private_key": "iFWoJwv66IsdLsEdMPfvvVPYdm524dtI3bTJTkdOgWY",
-     "public_key": "dF9FBWsOeEZlcQTN_9k2SPXBzjFtL8XFY-qV_-MPBDg", "short_id": "6ba85179e30d4fc2"},
+     "uuid": "00000000-0000-4000-8000-000000000007", "private_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAY",
+     "public_key": "xq7CIDgQWc_WnomfNm60GQVpUs9wIusy1g6oglByJxA", "short_id": "6ba85179e30d4fc2"},
     {"name": "vless-31449", "type": "vless", "port": 31449, "enabled": true, "sni": "www.example.net",
-     "uuid": "3d4e5f60-4444-4555-8666-777788889999", "private_key": "UAaTaPchwzGAReB5KhR1E-OoG_iLe-xrfM5B2aiVz0c",
-     "public_key": "_GdiOAjvqBx_kBcdAsLLC9AZbqnWFT3VQ2mVzI3LIQI", "short_id": "6ba85179e30d4fc2"},
+     "uuid": "00000000-0000-4000-8000-000000000009", "private_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAU",
+     "public_key": "PSe-1pnRmrR910zyTVL6ngJOFXLPu8CBW-hjFI0-dhw", "short_id": "6ba85179e30d4fc2"},
     {"name": "anytls-31445", "type": "anytls", "port": 31445, "enabled": true, "sni": "vpn.example.com",
-     "password": "4e5f6071-5555-4666-8777-88889999aaaa", "cert_dir": "certs/vpn.example.com/active"}
+     "password": "00000000-0000-4000-8000-00000000000a", "cert_dir": "certs/vpn.example.com/active"}
   ],
   "lost_users": {"vless-31444": ["bob-VLESS_Reality_Vision"]},
   "skipped": [

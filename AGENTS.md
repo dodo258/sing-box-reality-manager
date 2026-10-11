@@ -21,7 +21,7 @@
 - 语法检查：`bash -n lib/*.sh build.sh srm.sh install.sh`
 - 构建：`./build.sh`，构建后 `git diff --exit-code dist/` 必须无差异（dist 要提交）。
 - 测试：`for t in tests/*.sh; do bash "$t" || exit 1; done`。需要 root、联网或 systemd 的测试只在 CI（GitHub Actions，ubuntu-latest）跑，本机会打印 SKIP 并退出 0；设置 `TEST_CORE=<sing-box 1.14.1 路径>`（和 macOS 上的 `TEST_OPENSSL=<openssl 3 路径>`）可在本机跑真实核心测试；`tests/snell-traffic.sh` 还要 `TEST_SNELL_V6`、`TEST_SNELL_V5`（snell-server 只有 Linux 版，CI 用 `snell_download` 下载）。
-- 公开仓库检查：`bash tests/no-real-ip.sh`，扫所有已跟踪文件里的 IPv4，保留段、文档段（192.0.2.0/24、198.51.100.0/24、203.0.113.0/24）和脚本 `KNOWN` 里列的公共地址（公共 DNS 等）以外的都算真实 IP，报出文件和行号；新文件 `git add` 后才会被扫到；IPv6、域名、UUID 不扫，提交前自己复核。CI 单独一步跑它。
+- 公开仓库检查：`bash tests/no-private-info.sh`，扫所有已跟踪文件里的 IPv4 / IPv6、UUID、Reality 私钥和 short_id、域名、邮箱、`/Users/<名字>` 和 `/home/<名字>` 路径；占位值（文档段 IP、`example.com`、`00000000-0000-4000-8000-000000000001`、`AAAA…AAAE` 这类，规则见脚本开头）和脚本里 `KNOWN`、`KNOWN_*` 列的公共地址以外，都报出文件、行号和类别；新文件 `git add` 后才会被扫到。测试样本一律用占位值；确属公共的地址加进这些清单并写理由。CI 单独一步跑它。
 - shellcheck：`shellcheck -S warning -s bash dist/srm build.sh srm.sh`（模块之间共用变量，按打包后的整体检查），本机没装就以 CI 为准。
 
 ## 约定
