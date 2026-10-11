@@ -327,6 +327,44 @@ main migrate --apply --yes > "$work/out" 2>&1 || fail 'users3 --yes'
 grep -qF '这些用户迁移后将无法连接（v4 每个节点只有一个用户）：bob-VLESS_Reality_Vision、carol-VLESS_Reality_Vision' "$work/out" || { cat "$work/out"; fail 'users3 --yes warning'; }
 echo 'PASS a node with 3 users: the preview lists the 2 users that cannot connect afterwards, Enter goes back, 1 moves the first user; --yes names them too'
 
+# Nodes moved from v3 keep the credentials of v3 through later changes (port, name,
+# disable and enable, port hopping, handshake target), so the clients set up under v3
+# keep working; v3 formats newer nodes do not use (Snell PSKs with letters, Naive user
+# names, v3's shortId, ws paths) stay as they are. tests/credentials.sh covers new nodes.
+reality_target_check() { REPLY=30; }
+hop_tools_ready() { return 0; }
+moved_credentials() {
+    local dir files='{}'
+    for dir in $(jq -r '.nodes[].cert_dir // empty' "$STATE"); do
+        files=$(jq -c --arg d "$dir" --arg c "$(sha256 "$dir/fullchain.pem")" --arg k "$(sha256 "$dir/key.pem")" '. + {($d):[$c,$k]}' <<< "$files")
+    done
+    jq -c --argjson files "$files" '{files:$files,nodes:[.nodes[]|del(.port,.name,.sni,.enabled,.hop)]}' "$STATE"
+}
+for case in trio tls snell multi; do
+    load_fixture "$case"
+    main migrate --apply --yes > "$work/out" 2>&1 || { cat "$work/out"; fail "$case apply"; }
+    moved_credentials > "$work/moved"
+    for id in $(jq -r '.nodes[].id' "$STATE"); do
+        type=$(node_json "$STATE" "$id" | jq -r .type)
+        port=$(node_json "$STATE" "$id" | jq -r .port) new=$((port+100))
+        # Snell's loopback ports are random.
+        while ! port_free "$new" "$id"; do new=$((new+1)); done
+        node_change "$id" port "$new" > /dev/null && node_change "$id" name "改过 $type $port" > /dev/null || fail "$case: changing $type"
+        node_change "$id" toggle > /dev/null && node_change "$id" toggle > /dev/null || fail "$case: disabling and enabling $type"
+        if proto_has "$type" port_hopping; then
+            node_change "$id" hop auto > /dev/null && node_change "$id" hop off > /dev/null || fail "$case: port hopping of $type"
+        fi
+        if proto_has "$type" retarget; then node_change "$id" retarget www.mozilla.org > /dev/null || fail "$case: retarget $type"; fi
+        [[ $(moved_credentials) == "$(cat "$work/moved")" ]] || { diff <(jq -S . "$work/moved") <(moved_credentials | jq -S .) || true; fail "$case: changing $type lost credentials from v3"; }
+        node_json "$STATE" "$id" | jq -e --argjson p "$new" '.port == $p and .enabled and .hop == null' >/dev/null || fail "$case: $type not changed"
+    done
+    # Still those of v3, as expected.json lists them.
+    jq -e --slurpfile want "tests/fixtures/v3/$case/expected.json" '[.nodes[]|del(.id,.name,.port,.sni,.enabled,.local_port,.cert_sha256,.pubkey_sha256,.cert_dir,.host,.listen)]
+      == [$want[0].nodes[]|del(.name,.port,.sni,.enabled,.cert_dir,.host,.listen)]' "$STATE" >/dev/null || { jq .nodes "$STATE"; fail "$case: credentials differ from v3"; }
+done
+unset -f reality_target_check hop_tools_ready
+echo 'PASS nodes moved from v3 (all 9 protocols v3 can hand over) keep the credentials and certificates of v3 through port, name, disable / enable, port hopping and target changes'
+
 # A certificate moved from v3 is renewed by a new Let's Encrypt request within 30 days of expiry.
 issue_certificate() { printf '%s\n' "$*" >> "$work/issued"; }
 owned_root() { return 0; }
