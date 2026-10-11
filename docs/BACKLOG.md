@@ -6,7 +6,7 @@
 
 从上往下做。正在做的条目后面标「（进行中：分支名 时间）」。
 
-- [ ] 核心大版本上限：新装只装 srm 测过的大版本 —— 依据 `docs/research/2026-10-11-同类脚本调研.md`（fscarmen 默认装 alpha，相关 issue 23 条；233boy #112、TheyCallMeSecond #5、caigouzi #4 都是核心大版本升级后配置不兼容、服务停掉）。现在新装取「最新稳定版」，PROGRESS 已记下风险：1.15 如果改了配置格式，新装机器会在 `sing-box check` 处失败。做法：
+- [ ] 核心大版本上限：新装只装 srm 测过的大版本 —— 依据 `docs/research/2026-10-11-同类脚本调研.md`（fscarmen 默认装 alpha，相关 issue 23 条；233boy #112、TheyCallMeSecond #5、caigouzi #4 都是核心大版本升级后配置不兼容、服务停掉）。现在新装取「最新稳定版」，PROGRESS 已记下风险：1.15 如果改了配置格式，新装机器会在 `sing-box check` 处失败。做法：（进行中：agent/1011-core-major-cap 2026-10-11）
   - srm 里写一个「已验证的大版本」（如 1.14），安装和「只更新 sing-box」默认取这个大版本里最新的稳定版。
   - 比它新的稳定版在菜单状态栏和「5. 更新」里显示为「sing-box 1.15.0 可更新（srm 尚未验证）」，用户在菜单里确认后才装，装之前照常 check、失败回滚。
   - 同步改方案「架构」一节的「核心版本」、「更新」一节和 DECISIONS。
