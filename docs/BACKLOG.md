@@ -6,7 +6,6 @@
 
 从上往下做。正在做的条目后面标「（进行中：分支名 时间）」。
 
-- [ ] 同类一键脚本全面调研，写出 srm 凭什么值得用 —— 主人：GitHub 上已经有很多 sing-box / 代理一键脚本，我们还要做，就是要做出别人没有的、把别人做得不好的做好、更懂用户；要与众不同又让人喜欢，不做缝合怪。按全局 `prior-art` 技能做：① 直接同类至少 8 个（例如 mack-a/v2ray-agent、233boy/sing-box、fscarmen/sing-box、yonggekkk/sing-box-yg 等，以实际搜索的 star 和更新时间为准，不限于这些），相邻形态（3x-ui、s-ui 这类面板，Docker 部署，Hiddify 等一体化方案）和「不用脚本的人怎么搭」；② 每个真去读安装流程、菜单、关键实现（证书、端口冲突、更新、卸载、迁移、订阅输出、防火墙），挖它们 issues 里的高频抱怨（按 `feedback-triage` 判真假）；③ 写 `docs/research/<日期>-同类脚本调研.md`：对照表、借什么（注明出处和许可证，本仓库是 AGPL-3.0，不兼容的只借思路）、避什么、「srm 凭什么」一句话 + 2–3 个要做到最好的点、明确不做什么；④ 把差异化写进 `docs/specs/2026-10-10-v4-rewrite.md`（新增一节，不推翻已合并的设计，有冲突的写成待做）和 AGENTS.md「项目是什么」；⑤ 借鉴和补短板拆成能各自验收的待做放进本文件（大的放「以后再说」写出处）。验收：报告里每个同类都有链接、star、最近更新、许可证、至少一条读代码或 issue 得出的具体结论；差异化说得出来（说不出来就如实写）；只改文档，检查命令全过（进行中：agent/1011-prior-art-research 2026-10-11 12:15）
 - [ ] 公开仓库扫描补全：IPv6、UUID、域名、密钥、邮箱、本机路径 —— 主人：公开仓库给任何人用，IP 这类地方应该是占位或文字描述（如「这里填你的服务器 IP」）。现在 `tests/no-real-ip.sh` 只扫 IPv4。扩展（可改名 `tests/no-private-info.sh`，CI 和 AGENTS.md 同步改）：公网 IPv6（排除文档段 2001:db8::/32、保留段）、不是明显占位的 UUID（全 0、`xxxxxxxx-…` 之类放行，测试样本统一用占位）、Reality 私钥/short_id 样子的值、非示例域名（example.com/.org/.net、`*.example` 放行）、邮箱、`/Users/<名字>` 或 `/home/<名字>` 路径；README 和菜单预览里的示例统一成占位写法。先扫一遍现有已跟踪文件，真问题改成占位、确属公共地址的进白名单并写理由。验收：扫描当前仓库 0 条（贴输出）；每类各放一个真值样本时测试失败、放占位时通过；检查命令全过
 - [ ] 核心大版本上限：新装只装 srm 测过的大版本 —— 依据 `docs/research/2026-10-11-同类脚本调研.md`（fscarmen 默认装 alpha，相关 issue 23 条；233boy #112、TheyCallMeSecond #5、caigouzi #4 都是核心大版本升级后配置不兼容、服务停掉）。现在新装取「最新稳定版」，PROGRESS 已记下风险：1.15 如果改了配置格式，新装机器会在 `sing-box check` 处失败。做法：
   - srm 里写一个「已验证的大版本」（如 1.14），安装和「只更新 sing-box」默认取这个大版本里最新的稳定版。
@@ -68,6 +67,21 @@
 
 ## 已完成
 
+- [x] 同类一键脚本全面调研，写出 srm 凭什么值得用 —— 2026-10-11 合并，合并提交 5e4f86b（PR #22）。只改了文档。
+  - 报告 `docs/research/2026-10-11-同类脚本调研.md` 的覆盖面：
+    - 12 个直接同类：mack-a、yonggekkk、fscarmen、eooce、233boy、Xray_onekey、reality-ezpz、Xray-install、caigouzi、deathline94、TheyCallMeSecond、passeway。
+    - 7 类相邻形态：3x-ui、s-ui、Hiddify、PasarGuard/Marzban、Docker、Outline、Amnezia，以及纯手工、商家一键应用、买机场。
+    - 每个都有链接、star、最近更新、许可证和读代码或 issue 得出的结论。
+  - 结论：srm 定位「装上能用，而且绝不把你的服务器搞坏」，三条底线：
+    - 改了不会坏、坏了能回去：同类被骂得最多的是升级后要卸载重装，mack-a、yg、fscarmen 合计 100 条以上。
+    - 不越界：yg、fscarmen、mack-a 都有卸掉 UFW、关防火墙的 issue。
+    - 装完就能连上，连不上知道为什么。
+  - 已写进方案「定位与差异化」一节、AGENTS.md「项目是什么」和 DECISIONS。补短板拆成上面 7 条待做，「以后再说」加了 6 条。
+  - 替主人定了：
+    - 不追功能广度、不做面板和 Docker（理由见 DECISIONS「2026-10-11 srm 的定位」）。
+    - 「新装取最新稳定版」和第一条底线冲突，写成待做「核心大版本上限」，没直接改方案。
+  - 验收：打开报告，看第五节「srm 凭什么」和第六节「明确不做」，再看第一节对照表最后一行 srm 和同类的对比；不同意哪条直接说。
+  - 没做：Reddit 英文社区抓不到；面板内存数字只引用 issue，没实测。
 - [x] 要不要改写 git 历史清掉旧提交里的生产机 IP —— 2026-10-11 按推荐 A 定：不改写历史（IP 已公开约 8 小时，改写收不回已被抓取的副本，还会改掉所有提交号），当前文件里的 IP 已在 3597fee 去掉并加了 CI 检查。决定记在 DECISIONS.md
 - [x] 公开仓库去掉生产机真实 IP，并加自动检查 —— 2026-10-11 合并，合并提交 3597fee（PR #21）。PROGRESS.md 里 Lisa 实测那一条只写代号「Lisa（主人的生产机）」，去掉公网 IP、v3 节点端口、所跑服务和对照节点端口；全仓核查已跟踪文件：公网 IPv4 只有那一处，UUID 都是示例值，IPv6 是文档段 / ULA / 公共 NAT64 DNS，域名都是示例或公共服务。新增 `tests/no-real-ip.sh`：扫已跟踪文件里保留段、文档段和脚本 `KNOWN` 公共地址（公共 DNS 等）以外的 IPv4，报文件和行号、退出 1，先自检扫描本身；CI 单独一步「Check tracked files for real server IP addresses」，AGENTS.md「常用命令」写明。验收：在 GitHub 打开 PR #21，CI「verify」全绿，那一步日志里有「PASS tracked files contain no real server IPv4 address」；本机在仓库里 `bash tests/no-real-ip.sh` 应两条 PASS，把 PROGRESS.md 换成 `git show a15df5f:PROGRESS.md` 再跑应 FAIL 并报出 `PROGRESS.md:19`（看完 `git checkout -- PROGRESS.md` 恢复）。没做：git 历史里的旧提交（等主人拍板那条）；IPv6、域名、UUID 没有自动检查，靠提交前人工复核。
 - [x] firewalld 停着时也能卸载 srm —— 2026-10-11 合并，提交 e560303（PR #20）。firewalld 没运行时卸载不再停在「端口规则清理失败」：运行时记录丢掉（停止时规则已没了），srm 加的永久端口用 `firewall-offline-cmd` 从配置文件删掉，原有端口不动；同端口永久规则没删成功时运行时记录也保留；系统没有 `firewall-offline-cmd` 时报错提示「先启动 firewalld（systemctl start firewalld）再重试」；firewalld 已卸掉时直接丢记录。CI 新增一步装 firewalld 但不启动，用真实 `firewall-offline-cmd` 验证。验收：在装了 firewalld 的测试机上部署一个节点，`systemctl stop firewalld` 后在菜单里卸载，应显示「卸载完成。」，`firewall-offline-cmd --list-ports` 里不再有节点端口。
