@@ -8,7 +8,6 @@
 
 ## 等主人拍板
 
-- [ ] 要不要改写 git 历史，清掉旧提交里的生产机 IP —— f22dfa0、b7efa8a 把 Lisa 的公网 IP 和 v3 节点端口推到了公开仓库的 main（2026-10-10 22:35 起公开）。当前文件里的会由「待做」那条去掉，旧提交里还在。选项：A 不改写历史，只去掉当前文件里的；担心被盯上就把 v3 节点换个端口、确认 Lisa 的 SSH 只允许密钥登录。B 用 git filter-repo 改写历史再强推 main：所有提交号都会变，已有的 PR、早报、DECISIONS 里引用的提交号对不上，别人的克隆也要重来；GitHub 上旧提交按哈希可能仍能打开，要彻底清得再联系 GitHub 支持。推荐 A：IP 已经公开了大约 8 小时，改写历史收不回已被抓取的副本，代价却大。改写历史和强推属于破坏性操作，必须等主人决定。
 
 - [ ] v4 切换发布 —— 前面 7 条合并、主人验收后才做。内容：
   - 根目录 `install.sh` 换成 v4 引导：从 Release 下载 `srm` 和 `SHA256SUMS`，校验后安装；收到 v3 定时任务参数 `RenewTLS`、`UpdateGeo`、`WebsitePublish` 时输出一行迁移提示并退出 0。
@@ -26,6 +25,7 @@
 
 ## 已完成
 
+- [x] 要不要改写 git 历史清掉旧提交里的生产机 IP —— 2026-10-11 按推荐 A 定：不改写历史（IP 已公开约 8 小时，改写收不回已被抓取的副本，还会改掉所有提交号），当前文件里的 IP 已在 3597fee 去掉并加了 CI 检查。决定记在 DECISIONS.md
 - [x] 公开仓库去掉生产机真实 IP，并加自动检查 —— 2026-10-11 合并，合并提交 3597fee（PR #21）。PROGRESS.md 里 Lisa 实测那一条只写代号「Lisa（主人的生产机）」，去掉公网 IP、v3 节点端口、所跑服务和对照节点端口；全仓核查已跟踪文件：公网 IPv4 只有那一处，UUID 都是示例值，IPv6 是文档段 / ULA / 公共 NAT64 DNS，域名都是示例或公共服务。新增 `tests/no-real-ip.sh`：扫已跟踪文件里保留段、文档段和脚本 `KNOWN` 公共地址（公共 DNS 等）以外的 IPv4，报文件和行号、退出 1，先自检扫描本身；CI 单独一步「Check tracked files for real server IP addresses」，AGENTS.md「常用命令」写明。验收：在 GitHub 打开 PR #21，CI「verify」全绿，那一步日志里有「PASS tracked files contain no real server IPv4 address」；本机在仓库里 `bash tests/no-real-ip.sh` 应两条 PASS，把 PROGRESS.md 换成 `git show a15df5f:PROGRESS.md` 再跑应 FAIL 并报出 `PROGRESS.md:19`（看完 `git checkout -- PROGRESS.md` 恢复）。没做：git 历史里的旧提交（等主人拍板那条）；IPv6、域名、UUID 没有自动检查，靠提交前人工复核。
 - [x] firewalld 停着时也能卸载 srm —— 2026-10-11 合并，提交 e560303（PR #20）。firewalld 没运行时卸载不再停在「端口规则清理失败」：运行时记录丢掉（停止时规则已没了），srm 加的永久端口用 `firewall-offline-cmd` 从配置文件删掉，原有端口不动；同端口永久规则没删成功时运行时记录也保留；系统没有 `firewall-offline-cmd` 时报错提示「先启动 firewalld（systemctl start firewalld）再重试」；firewalld 已卸掉时直接丢记录。CI 新增一步装 firewalld 但不启动，用真实 `firewall-offline-cmd` 验证。验收：在装了 firewalld 的测试机上部署一个节点，`systemctl stop firewalld` 后在菜单里卸载，应显示「卸载完成。」，`firewall-offline-cmd --list-ports` 里不再有节点端口。
 - [x] UFW / firewalld 临时停用时保留 srm 的放行规则 —— 2026-10-11 合并，提交 a169bd5（PR #19）。同步时 UFW / firewalld 只要不是当前活动的防火墙（`ufw disable`、开机时还没起来、检测选了 iptables 或 none），它的记录就不当作多余删：UFW 停用时还能改规则文件，只删已经不用的端口（停用期间删掉的节点）；firewalld 停着时什么都改不了，记录全保留，等它运行后的第一次同步再清。iptables 记录照旧。同步结果提示「UFW 当前没有运行，还在用的节点的放行规则保留着…启用后在菜单「4. 运行状态」里选「重新同步防火墙端口规则」」。以前 firewalld 停着时每次同步都失败、改节点被回滚，现在也好了。
