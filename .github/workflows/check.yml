@@ -25,7 +25,8 @@ jobs:
       - name: Download checksum-pinned sing-box core
         run: |
           source ./srm.sh
-          # Tests use the tested release; installation itself takes the newest stable one.
+          # Tests use the tested release; installation itself takes the newest stable one
+          # of the same series (CORE_SERIES).
           core_fetch "$RUNNER_TEMP/sing-box" "$CORE_VERSION" "$(core_pinned_hash)"
           # The naive client in tests/traffic.sh loads libcronet.so from the core's
           # directory; it comes from the same checksum-pinned archive (servers do not need it).

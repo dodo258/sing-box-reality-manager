@@ -62,7 +62,7 @@ grep -q '1 条平台规则' "$work/menu"
 ! grep -q '"private_key"' "$work/menu" || exit 1
 ! grep -q $'\033' "$work/menu" || exit 1
 echo 'PASS pages render locally; details hide secrets; no color when not a terminal'
-[[ $(grep -c '可更新：sing-box 1.14.1 → 1.14.3（选 5 更新）' "$work/menu") == 10 ]] || fail 'update hint in every header'
+[[ $(grep -c '可更新：sing-box 1.14.1 → 1.14.3，选 5 更新' "$work/menu") == 10 ]] || fail 'update hint in every header'
 grep -q '上次检查：2026-10-10 03:12' "$work/menu" && grep -q 'Snell v6：当前 6.0.0rc2，最新 6.0.0rc2' "$work/menu" || fail 'update page from the cache'
 if grep -q '可更新' "$work/fresh"; then fail 'hint without a cache'; fi
 echo 'PASS update hints come only from the cached daily check, without network access'
