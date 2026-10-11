@@ -6,11 +6,6 @@
 
 从上往下做。正在做的条目后面标「（进行中：分支名 时间）」。
 
-- [ ] 核心大版本上限：新装只装 srm 测过的大版本 —— 依据 `docs/research/2026-10-11-同类脚本调研.md`（fscarmen 默认装 alpha，相关 issue 23 条；233boy #112、TheyCallMeSecond #5、caigouzi #4 都是核心大版本升级后配置不兼容、服务停掉）。现在新装取「最新稳定版」，PROGRESS 已记下风险：1.15 如果改了配置格式，新装机器会在 `sing-box check` 处失败。做法：（进行中：agent/1011-core-major-cap 2026-10-11）
-  - srm 里写一个「已验证的大版本」（如 1.14），安装和「只更新 sing-box」默认取这个大版本里最新的稳定版。
-  - 比它新的稳定版在菜单状态栏和「5. 更新」里显示为「sing-box 1.15.0 可更新（srm 尚未验证）」，用户在菜单里确认后才装，装之前照常 check、失败回滚。
-  - 同步改方案「架构」一节的「核心版本」、「更新」一节和 DECISIONS。
-  - 验收：测试里用假的 Release 列表（1.14.5、1.15.0），新装选 1.14.5；更新菜单显示 1.15.0 未验证、默认返回；确认后装 1.15.0。检查命令全过。
 - [ ] 凭据不轮换的测试：改设置不让已发出去的链接失效 —— 依据 `docs/research/2026-10-11-同类脚本调研.md`（Amnezia #2958：改设置后 Reality 被悄悄去掉、密钥被轮换，客户端连不上）。现在只有「换伪装目标保留凭据」有测试（`tests/management.sh:32`）。补测试：每种协议的节点，分别做改端口、改名、停用后启用、开关端口跳跃、换核心版本（测试里换二进制）、迁移后再改一次，之后 uuid / password / private_key / public_key / short_id / 证书 pin 都不变；只有「rotate」会变。发现会变的就修。验收：测试覆盖上面每个操作，撤掉任一处保留逻辑测试会失败；检查命令全过。
 - [ ] 离线 / 代理更新：GitHub 不通时也能装核心 —— 依据 `docs/research/2026-10-11-同类脚本调研.md`（233boy `-f/-p/-v`、Xray-install `--local/-p/--version`，GPL-3.0；233boy 下载 GitHub 失败约 6 条，Xray-install #42 API 限流；mack-a #1046 #1296）。
   - 菜单「5. 更新」加「从本地文件更新 sing-box」：用户把官方 tar.gz 传到服务器后，在菜单里选这个文件。命令行 `srm update core --file PATH`。
@@ -66,6 +61,11 @@
 
 ## 已完成
 
+- [x] 核心大版本上限：新装只装 srm 测过的大版本 —— 2026-10-11 合并，合并提交 b05ef09（PR #24）。
+  - 新装、「只更新 sing-box」、「全部更新」、`srm update core --yes` 都只取 srm 验证过的 1.14 系列里最新的稳定版（`CORE_SERIES`，由 `CORE_VERSION` 1.14.1 得出）；查不到时照旧装固定 SHA256 的 1.14.1。
+  - 有 1.15 这类更新的大版本时：状态栏「可更新：…，sing-box 1.15.0（srm 尚未验证），选 5 更新」；「5. 更新」页「sing-box 1.15.0 可更新（srm 尚未验证）」；在「5. 更新 → 2. 只更新 sing-box → 1. 确认更新」后才列出「1. 更新到 1.14.x（srm 已验证）/ 2. 安装 1.15.0（srm 尚未验证）/ 0. 返回」，回车 = 返回。选了照样校验、`sing-box check`、失败回滚；装了 1.15 不会被降回去。「全部更新」和 `--yes` 只提一句，不装。
+  - 验收：在 GitHub 打开 PR #24，CI「verify」全绿，tests/updates.sh 日志里有「a new installation takes 1.14.5 … not 1.15.0」「the header and the update page show "sing-box 1.15.0 可更新（srm 尚未验证）" …」「menu 5 → 2 offers 1.14.5 (verified) and 1.15.0 (not verified); Enter goes back …」「after confirming in menu 5 → 2, 1.15.0 is checked, installed and restarted …」。服务器上现在看不到区别（最新稳定版 1.14.3 就在 1.14 系列里）；等 sing-box 出了 1.15.0，在 Lisa 上菜单选 5 → 5 立即检查，应看到「sing-box 1.15.0 可更新（srm 尚未验证）」。
+  - 已知局限：查 1.14 系列时最多试 3 个最新的稳定 tag；`/releases/latest` 取不到（离线、限流）就不再查，新装退回 1.14.1。
 - [x] 公开仓库扫描补全：IPv6、UUID、域名、密钥、邮箱、本机路径 —— 2026-10-11 合并，合并提交 2545601（PR #23）。
   - `tests/no-real-ip.sh` 改名 `tests/no-private-info.sh`，扫已跟踪文件里的八类：IPv4、IPv6（全球单播，放过 2001:db8::/32、3fff::/20）、UUID、Reality 私钥、short_id、域名、邮箱、`/Users`/`/home` 路径。每类有放行的占位写法，公共地址进 `KNOWN`、`KNOWN_*` 清单并写理由；规则写在脚本开头和 DECISIONS.md。
   - 测试样本统一成占位：UUID 用 `00000000-0000-4000-8000-00000000000N`，迁移样本私钥用 `AAAA…AAAx`（公钥重新推导）；测试输入里的真实短域名换成 example.com 下的名字。README 和菜单预览原本就是占位，没改。CI 那一步和 AGENTS.md 同步。

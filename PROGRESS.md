@@ -11,6 +11,7 @@ v4 重写，方案 `docs/specs/2026-10-10-v4-rewrite.md`，2026-10-10 按主人�
 - 公开仓库去掉 Lisa 的 IP：2026-10-11 合并 3597fee（PR #21），新增 `tests/no-real-ip.sh` 扫已跟踪文件里的真实 IPv4，CI 单独一步跑；git 历史里的旧提交等主人拍板。
 - 同类脚本调研：2026-10-11 合并 5e4f86b（PR #22）。报告见 `docs/research/2026-10-11-同类脚本调研.md`，定位「绝不把你的服务器搞坏」写进方案和 AGENTS.md；补短板的 7 条待做已进 BACKLOG。
 - 公开仓库扫描补全：2026-10-11 合并 2545601（PR #23），`tests/no-private-info.sh` 扫 IPv4 / IPv6、UUID、Reality 私钥、short_id、域名、邮箱、本机路径，测试样本全换成占位，CI 单独一步跑。
+- 核心大版本上限：2026-10-11 合并 b05ef09（PR #24），新装和更新只取 srm 验证过的 1.14 系列，更新的大版本标「srm 尚未验证」、菜单确认后才装。
 
 ## 待用户决定
 - 前 7 条验收后，是否正式发布 v4.0.0
@@ -20,7 +21,7 @@ v4 重写，方案 `docs/specs/2026-10-10-v4-rewrite.md`，2026-10-10 按主人�
 - 完整配置 / 临时导入链接（e45cbd7）还没在真机扫码导入过：下次在 Lisa 上用「2. 节点管理 → 临时导入链接」分别试 sing-box App、Surge、Clash Verge。
 - 伪装目标已改成海外候选（2ff078b），但新候选还没在中国移动网络下实测，下次在 Lisa 上用「节点管理 → 10」换成自动选的目标再测一次。
 - 2026-10-10 Lisa（主人的生产机）实测 v4 开发版：部署、监听、防火墙正常，菜单 0.07 秒。手机（中国移动 + Shadowrocket，全局代理）：伪装目标 www.ctrip.com 的 Reality 每次握手都报 invalid connection，打不开；同版本只换成 www.seagate.com 的临时对照节点（systemd-run 单元 `srm-ab-test`，UFW 注释 srm-ab-test-temp）正常承载主人全部流量。Hysteria2 只见少量包、未确认连通；Snell v6 未在 Surge 测。测试节点 test-reality/test-hy2/test-snell 和对照节点仍在 Lisa 上，等主人说清理。
-- 安装取 sing-box 最新稳定版（只限最低 1.14，API 不通退回 1.14.1）；将来 1.15 若改配置格式，新装机器部署会在 `sing-box check` 处失败。CI 单元测试仍固定 1.14.1。
+- 新装和更新 sing-box 只取 1.14 系列最新稳定版（API 不通退回 1.14.1）；1.15 出来后只在「5. 更新 → 2」确认才装。验证新大版本后发 srm 时把 `CORE_VERSION` 和固定 SHA256 升上去。CI 单元测试仍固定 1.14.1。
 - 已装好的 v4 开发版服务器下一次改节点时自动更新 systemd 单元（补上 firewall-restore 和 1024 以下端口的权限，ec56f37）。
 - Snell 节点不受流媒体分流规则影响（snell-server 自己发起出站）；部署装固定的 v6.0.0rc2 / v5.0.1，之后在菜单「5. 更新」跟进新版（新构建官方无校验和，靠 HTTPS + 试运行核对版本）。
 - 已装好的 v4 开发版服务器没有每日检查 timer，在菜单「5. 更新 → 6. 开启每日检查」打开。
