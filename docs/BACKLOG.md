@@ -6,7 +6,6 @@
 
 从上往下做。正在做的条目后面标「（进行中：分支名 时间）」。
 
-- [ ] 公开仓库扫描补全：IPv6、UUID、域名、密钥、邮箱、本机路径 —— 主人：公开仓库给任何人用，IP 这类地方应该是占位或文字描述（如「这里填你的服务器 IP」）。现在 `tests/no-real-ip.sh` 只扫 IPv4。扩展（可改名 `tests/no-private-info.sh`，CI 和 AGENTS.md 同步改）：公网 IPv6（排除文档段 2001:db8::/32、保留段）、不是明显占位的 UUID（全 0、`xxxxxxxx-…` 之类放行，测试样本统一用占位）、Reality 私钥/short_id 样子的值、非示例域名（example.com/.org/.net、`*.example` 放行）、邮箱、`/Users/<名字>` 或 `/home/<名字>` 路径；README 和菜单预览里的示例统一成占位写法。先扫一遍现有已跟踪文件，真问题改成占位、确属公共地址的进白名单并写理由。验收：扫描当前仓库 0 条（贴输出）；每类各放一个真值样本时测试失败、放占位时通过；检查命令全过（进行中：agent/1011-no-private-info 2026-10-11 12:47）
 - [ ] 核心大版本上限：新装只装 srm 测过的大版本 —— 依据 `docs/research/2026-10-11-同类脚本调研.md`（fscarmen 默认装 alpha，相关 issue 23 条；233boy #112、TheyCallMeSecond #5、caigouzi #4 都是核心大版本升级后配置不兼容、服务停掉）。现在新装取「最新稳定版」，PROGRESS 已记下风险：1.15 如果改了配置格式，新装机器会在 `sing-box check` 处失败。做法：
   - srm 里写一个「已验证的大版本」（如 1.14），安装和「只更新 sing-box」默认取这个大版本里最新的稳定版。
   - 比它新的稳定版在菜单状态栏和「5. 更新」里显示为「sing-box 1.15.0 可更新（srm 尚未验证）」，用户在菜单里确认后才装，装之前照常 check、失败回滚。
@@ -67,6 +66,11 @@
 
 ## 已完成
 
+- [x] 公开仓库扫描补全：IPv6、UUID、域名、密钥、邮箱、本机路径 —— 2026-10-11 合并，合并提交 2545601（PR #23）。
+  - `tests/no-real-ip.sh` 改名 `tests/no-private-info.sh`，扫已跟踪文件里的八类：IPv4、IPv6（全球单播，放过 2001:db8::/32、3fff::/20）、UUID、Reality 私钥、short_id、域名、邮箱、`/Users`/`/home` 路径。每类有放行的占位写法，公共地址进 `KNOWN`、`KNOWN_*` 清单并写理由；规则写在脚本开头和 DECISIONS.md。
+  - 测试样本统一成占位：UUID 用 `00000000-0000-4000-8000-00000000000N`，迁移样本私钥用 `AAAA…AAAx`（公钥重新推导）；测试输入里的真实短域名换成 example.com 下的名字。README 和菜单预览原本就是占位，没改。CI 那一步和 AGENTS.md 同步。
+  - 验收：在 GitHub 打开 PR #23，CI「verify」全绿，「Check tracked files for real addresses, UUIDs, keys, domains, emails and home paths」那一步日志里有两条 PASS。本机在仓库里 `bash tests/no-private-info.sh` 应两条 PASS；随便建个文件写一个真实样子的域名（如你自己的域名）和一个 `/Users/你的用户名`，`git add` 后再跑应 FAIL 并报出这两行（看完 `git rm -f` 删掉）。
+  - 已知局限：私钥和 short_id 只认和字段名同一行的值；`TLDS` 清单外的冷门后缀不报。
 - [x] 同类一键脚本全面调研，写出 srm 凭什么值得用 —— 2026-10-11 合并，合并提交 5e4f86b（PR #22）。只改了文档。
   - 报告 `docs/research/2026-10-11-同类脚本调研.md` 的覆盖面：
     - 12 个直接同类：mack-a、yonggekkk、fscarmen、eooce、233boy、Xray_onekey、reality-ezpz、Xray-install、caigouzi、deathline94、TheyCallMeSecond、passeway。

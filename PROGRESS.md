@@ -10,6 +10,7 @@ v4 重写，方案 `docs/specs/2026-10-10-v4-rewrite.md`，2026-10-10 按主人�
 - 测试稳定性：2026-10-11 合并 a1321a9，traffic.sh / snell-traffic.sh 的 mihomo 段先等直连探测通过再测节点（mihomo 开端口早于开始转发，曾偶发 CI 失败）。
 - 公开仓库去掉 Lisa 的 IP：2026-10-11 合并 3597fee（PR #21），新增 `tests/no-real-ip.sh` 扫已跟踪文件里的真实 IPv4，CI 单独一步跑；git 历史里的旧提交等主人拍板。
 - 同类脚本调研：2026-10-11 合并 5e4f86b（PR #22）。报告见 `docs/research/2026-10-11-同类脚本调研.md`，定位「绝不把你的服务器搞坏」写进方案和 AGENTS.md；补短板的 7 条待做已进 BACKLOG。
+- 公开仓库扫描补全：2026-10-11 合并 2545601（PR #23），`tests/no-private-info.sh` 扫 IPv4 / IPv6、UUID、Reality 私钥、short_id、域名、邮箱、本机路径，测试样本全换成占位，CI 单独一步跑。
 
 ## 待用户决定
 - 前 7 条验收后，是否正式发布 v4.0.0
