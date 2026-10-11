@@ -6,7 +6,6 @@
 
 从上往下做。正在做的条目后面标「（进行中：分支名 时间）」。
 
-- [ ] 凭据不轮换的测试：改设置不让已发出去的链接失效 —— 依据 `docs/research/2026-10-11-同类脚本调研.md`（Amnezia #2958：改设置后 Reality 被悄悄去掉、密钥被轮换，客户端连不上）。现在只有「换伪装目标保留凭据」有测试（`tests/management.sh:32`）。补测试：每种协议的节点，分别做改端口、改名、停用后启用、开关端口跳跃、换核心版本（测试里换二进制）、迁移后再改一次，之后 uuid / password / private_key / public_key / short_id / 证书 pin 都不变；只有「rotate」会变。发现会变的就修。验收：测试覆盖上面每个操作，撤掉任一处保留逻辑测试会失败；检查命令全过。（进行中：agent/1011-keep-credentials 2026-10-11 13:31）
 - [ ] 离线 / 代理更新：GitHub 不通时也能装核心 —— 依据 `docs/research/2026-10-11-同类脚本调研.md`（233boy `-f/-p/-v`、Xray-install `--local/-p/--version`，GPL-3.0；233boy 下载 GitHub 失败约 6 条，Xray-install #42 API 限流；mack-a #1046 #1296）。
   - 菜单「5. 更新」加「从本地文件更新 sing-box」：用户把官方 tar.gz 传到服务器后，在菜单里选这个文件。命令行 `srm update core --file PATH`。
   - 有官方 digest 可查时照常比对；查不到时提示「无法核对校验和」，要用户确认，再跑 `version`、`check`，健康检查失败照常回滚。
@@ -61,6 +60,11 @@
 
 ## 已完成
 
+- [x] 凭据不轮换的测试：改设置不让已发出去的链接失效 —— 2026-10-11 合并，合并提交 7340f2c（PR #25）。只加了测试，没发现会变的地方，产品代码没改。
+  - `tests/credentials.sh`：11 种协议各一个节点（各自 create 钩子生成，走 srm 的 apply_state + sing-box check），逐个做改端口、改名、停用后启用、端口跳跃开 / 换范围 / 关（Hysteria2，其他协议拒绝且不改动）、换伪装目标（Reality、ShadowTLS）、换核心二进制（core_replace），之后 uuid、password、Naive 用户名、Reality 私钥 / 公钥 / short_id、Snell PSK / ShadowTLS 密码、ws 路径、证书 pin 和证书文件、运行配置里的凭据、客户端出站都不变；rotate 只换该节点的凭据。
+  - `tests/migrate.sh`：4 个 v3 样本（v3 能迁的 9 种协议）迁移后再做同样的操作，凭据和证书仍和 v3 一样（含带字母的 Snell PSK、Naive 用户名、v3 的 shortId）。
+  - 变异检查：在每个操作的分支里注入「顺手重置凭据 / 重新生成证书 / 重新生成 Reality 密钥 / 换核心后改 short_id / 规整 v3 格式」，对应测试都 FAIL。
+  - 验收：在 GitHub 打开 PR #25，CI「verify」全绿，「tests/credentials.sh」那组日志有 4 条 PASS（「… keep credentials, certificate pins and client configurations of every protocol (11 nodes)」等），「tests/migrate.sh」里有「nodes moved from v3 (all 9 protocols v3 can hand over) keep the credentials …」。服务器上可以自己试：节点管理里改端口或改名后，「2. 原始分享链接」里除端口 / 名字外和改之前一模一样，手机上原来导入的节点改一下端口就能接着用。
 - [x] 核心大版本上限：新装只装 srm 测过的大版本 —— 2026-10-11 合并，合并提交 b05ef09（PR #24）。
   - 新装、「只更新 sing-box」、「全部更新」、`srm update core --yes` 都只取 srm 验证过的 1.14 系列里最新的稳定版（`CORE_SERIES`，由 `CORE_VERSION` 1.14.1 得出）；查不到时照旧装固定 SHA256 的 1.14.1。
   - 有 1.15 这类更新的大版本时：状态栏「可更新：…，sing-box 1.15.0（srm 尚未验证），选 5 更新」；「5. 更新」页「sing-box 1.15.0 可更新（srm 尚未验证）」；在「5. 更新 → 2. 只更新 sing-box → 1. 确认更新」后才列出「1. 更新到 1.14.x（srm 已验证）/ 2. 安装 1.15.0（srm 尚未验证）/ 0. 返回」，回车 = 返回。选了照样校验、`sing-box check`、失败回滚；装了 1.15 不会被降回去。「全部更新」和 `--yes` 只提一句，不装。
