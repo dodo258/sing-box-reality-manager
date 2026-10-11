@@ -6,7 +6,7 @@
 
 从上往下做。正在做的条目后面标「（进行中：分支名 时间）」。
 
-- [ ] 凭据不轮换的测试：改设置不让已发出去的链接失效 —— 依据 `docs/research/2026-10-11-同类脚本调研.md`（Amnezia #2958：改设置后 Reality 被悄悄去掉、密钥被轮换，客户端连不上）。现在只有「换伪装目标保留凭据」有测试（`tests/management.sh:32`）。补测试：每种协议的节点，分别做改端口、改名、停用后启用、开关端口跳跃、换核心版本（测试里换二进制）、迁移后再改一次，之后 uuid / password / private_key / public_key / short_id / 证书 pin 都不变；只有「rotate」会变。发现会变的就修。验收：测试覆盖上面每个操作，撤掉任一处保留逻辑测试会失败；检查命令全过。
+- [ ] 凭据不轮换的测试：改设置不让已发出去的链接失效 —— 依据 `docs/research/2026-10-11-同类脚本调研.md`（Amnezia #2958：改设置后 Reality 被悄悄去掉、密钥被轮换，客户端连不上）。现在只有「换伪装目标保留凭据」有测试（`tests/management.sh:32`）。补测试：每种协议的节点，分别做改端口、改名、停用后启用、开关端口跳跃、换核心版本（测试里换二进制）、迁移后再改一次，之后 uuid / password / private_key / public_key / short_id / 证书 pin 都不变；只有「rotate」会变。发现会变的就修。验收：测试覆盖上面每个操作，撤掉任一处保留逻辑测试会失败；检查命令全过。（进行中：agent/1011-keep-credentials 2026-10-11 13:31）
 - [ ] 离线 / 代理更新：GitHub 不通时也能装核心 —— 依据 `docs/research/2026-10-11-同类脚本调研.md`（233boy `-f/-p/-v`、Xray-install `--local/-p/--version`，GPL-3.0；233boy 下载 GitHub 失败约 6 条，Xray-install #42 API 限流；mack-a #1046 #1296）。
   - 菜单「5. 更新」加「从本地文件更新 sing-box」：用户把官方 tar.gz 传到服务器后，在菜单里选这个文件。命令行 `srm update core --file PATH`。
   - 有官方 digest 可查时照常比对；查不到时提示「无法核对校验和」，要用户确认，再跑 `version`、`check`，健康检查失败照常回滚。
