@@ -217,20 +217,50 @@ rollback_config() {
     [[ -f $DATA/previous/state.json ]] || { err '没有可回滚的配置。'; return 1; }
     apply_state "$DATA/previous/state.json"
 }
-# Under the lock: the newest stable sing-box replaces the core only after its archive
-# matches the Release digest and it accepts the current configuration; a failed
-# health check after the restart puts the previous core back.
+# Under the lock: the newest stable sing-box of CORE_SERIES replaces the core. A later
+# series (srm has not verified it) is installed only when OFFER is "offer" (menu
+# 5 → 2) and the user picks it; otherwise it is only mentioned.
 update_core() {
     owned_root || return 1
-    local tmp old_active=0 current release version
+    local offer=${1:-} current releases release newer verified_newer=0
     current=$(core_installed)
-    release=$(core_release) || { err "sing-box 保持 ${current:-当前版本}，没有更新。"; return 1; }
-    version=${release% *}
-    if ! version_newer "$version" "$current"; then
-        msg "sing-box 已是最新版本 $current，不需要重启。"; update_cache_mark sing-box "$current"; return 0
+    releases=$(core_releases) || true
+    release=$(awk '$1 == "verified" {print $2, $3}' <<< "$releases")
+    newer=$(awk '$1 == "newer" {print $2, $3}' <<< "$releases")
+    [[ -n $newer ]] && version_newer "${newer% *}" "$current" || newer=''
+    [[ -n $release ]] && version_newer "${release% *}" "$current" && verified_newer=1
+    if [[ -n $newer && $offer == offer ]]; then
+        msg "sing-box ${newer% *} 可更新（srm 尚未验证）：srm 只验证过 $CORE_SERIES 系列，新的大版本可能改了配置格式。"
+        msg '装之前会先用它检查当前配置，不通过就不替换；重启后健康检查失败自动换回原版本。'
+        if [[ $verified_newer == 1 ]]; then
+            msg "  1. 更新到 ${release% *}（srm 已验证）"
+            msg "  2. 安装 ${newer% *}（srm 尚未验证）"
+        else msg "  1. 安装 ${newer% *}（srm 尚未验证）"; fi
+        msg '  0. 返回'
+        ask '请选择' 0 || REPLY=0
+        case $verified_newer$REPLY in
+          11) ;;
+          12|01) release=$newer;;
+          *) msg "已返回，sing-box 保持 $current。"; return 0;;
+        esac
+        core_replace "$current" "${release% *}" "${release#* }"; return
     fi
+    [[ -z $newer ]] || msg "sing-box ${newer% *} 可更新（srm 尚未验证），没有自动安装；要装请在菜单「5. 更新」里选「2. 只更新 sing-box」确认。"
+    if [[ -z $release ]]; then err "sing-box 保持 ${current:-当前版本}，没有更新。"; return 1; fi
+    if [[ $verified_newer == 0 ]]; then
+        if [[ -n $newer ]]; then msg "srm 已验证的 sing-box $CORE_SERIES 系列没有比 $current 新的版本，不需要重启。"
+        else msg "sing-box 已是最新版本 $current，不需要重启。"; fi
+        update_cache_mark sing-box "$current"; return 0
+    fi
+    core_replace "$current" "${release% *}" "${release#* }"
+}
+# The new core replaces CURRENT only after its archive matches the Release digest and
+# it accepts the current configuration; a failed health check after the restart puts
+# the previous core back.
+core_replace() {
+    local current=$1 version=$2 hash=$3 tmp old_active=0
     tmp=$(mktemp "$SRM_ROOT/core/.candidate.XXXXXX") || return 1
-    if ! core_fetch "$tmp" "$version" "${release#* }"; then rm -f "$tmp"; err "sing-box 保持 $current，没有替换。"; return 1; fi
+    if ! core_fetch "$tmp" "$version" "$hash"; then rm -f "$tmp"; err "sing-box 保持 $current，没有替换。"; return 1; fi
     if [[ -f $DATA/current/config.json ]] && ! "$tmp" check -c "$DATA/current/config.json"; then
         rm -f "$tmp"; err "sing-box $version 不接受当前配置，保持 $current，没有替换。"; return 1
     fi
@@ -287,7 +317,7 @@ show_status() {
     msg '节点变更时自动同步 UFW / firewalld / iptables 端口规则；云安全组需在服务商控制台放行对应端口。'
     local hint
     hint=$(update_hint)
-    [[ -z $hint ]] || msg "可更新：$hint（在菜单里选「5. 更新」）"
+    [[ -z $hint ]] || msg "可更新：$hint，在菜单里选「5. 更新」"
 }
 show_logs() {
     local unit args=(-u "$SERVICE")

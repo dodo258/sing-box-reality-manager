@@ -18,7 +18,7 @@ menu_header() {
     printf '%s━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━%s\n' "$color" "$reset"
     printf '  服务：%s    节点：%s（启用 / 总数）\n' "$status" "$counts"
     printf '  分流：%s    证书续期：%s\n' "$routing" "$renew"
-    [[ -z $updates ]] || printf '  可更新：%s（选 5 更新）\n' "$updates"
+    [[ -z $updates ]] || printf '  可更新：%s，选 5 更新\n' "$updates"
     printf '\n'
 }
 main_menu() {

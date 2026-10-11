@@ -19,11 +19,15 @@ program_keys() {
     jq -r --arg t "$1" "$PROTO_JQ_DEFS .nodes[]|select(.type == \$t)|$(proto_jq program_key empty)" "$STATE" | sort -u
 }
 core_installed() { "$CORE" version 2>/dev/null | awk 'NR == 1 {print $3}'; }
+# ITEMS NAME CURRENT LATEST [UNVERIFIED]: UNVERIFIED (sing-box of a series srm has not
+# verified) is recorded only when it is newer than CURRENT.
 update_item() {
-    local newer=false
+    local newer=false unverified=${5:-}
     [[ -z $4 ]] || ! version_newer "$4" "$3" || newer=true
-    jq -c --arg n "$2" --arg c "$3" --arg l "$4" --argjson newer "$newer" \
-        '. + [{name:$n,current:(if $c == "" then null else $c end),latest:(if $l == "" then null else $l end),newer:$newer}]' <<< "$1"
+    [[ -n $unverified ]] && version_newer "$unverified" "$3" || unverified=''
+    jq -c --arg n "$2" --arg c "$3" --arg l "$4" --argjson newer "$newer" --arg u "$unverified" \
+        '. + [{name:$n,current:(if $c == "" then null else $c end),latest:(if $l == "" then null else $l end),newer:$newer}
+              + (if $u == "" then {} else {unverified:$u} end)]' <<< "$1"
 }
 update_cache_write() {
     local tmp
@@ -33,12 +37,15 @@ update_cache_write() {
 }
 # After a manual update the cached entry NAME runs VERSION; the hint goes away.
 update_cache_mark() {
-    local file=$DATA/update-check.json latest cache
+    local file=$DATA/update-check.json latest unverified cache
     [[ -f $file ]] || return 0
     latest=$(jq -r --arg n "$1" '.items[]|select(.name == $n)|.latest // empty' "$file") || return 0
-    local newer=false
+    unverified=$(jq -r --arg n "$1" '.items[]|select(.name == $n)|.unverified // empty' "$file") || return 0
+    local newer=false keep=false
     [[ -z $latest ]] || ! version_newer "$latest" "$2" || newer=true
-    cache=$(jq --arg n "$1" --arg v "$2" --argjson newer "$newer" '(.items[]|select(.name == $n)) |= (.current = $v | .newer = $newer)' "$file") &&
+    [[ -z $unverified ]] || ! version_newer "$unverified" "$2" || keep=true
+    cache=$(jq --arg n "$1" --arg v "$2" --argjson newer "$newer" --argjson keep "$keep" \
+        '(.items[]|select(.name == $n)) |= ((.current = $v | .newer = $newer) | if $keep then . else del(.unverified) end)' "$file") &&
         update_cache_write "$cache" || true
 }
 # The daily timer's job: looks up the newest versions and records them. It downloads
@@ -46,9 +53,11 @@ update_cache_mark() {
 # lock (the lock would resume an interrupted change).
 update_check_run() {
     owned_root || return 1
-    local items='[]' errors=() release latest='' type key version keys lines label
-    if release=$(core_release); then latest=${release% *}; else errors+=('sing-box：没有查到最新版本'); fi
-    items=$(update_item "$items" sing-box "$(core_installed)" "$latest") || return 1
+    local items='[]' errors=() releases latest unverified type key version keys lines label
+    releases=$(core_releases) || errors+=("sing-box：没有查到 srm 已验证的 $CORE_SERIES 系列最新版本")
+    latest=$(awk '$1 == "verified" {print $2}' <<< "$releases")
+    unverified=$(awk '$1 == "newer" {print $2}' <<< "$releases")
+    items=$(update_item "$items" sing-box "$(core_installed)" "$latest" "$unverified") || return 1
     for type in $(program_types); do
         keys=$(program_keys "$type")
         [[ -n $keys ]] || continue
@@ -66,10 +75,12 @@ update_check_run() {
         update_cache_write "$cache" || return 1
     (( ${#errors[@]} == 0 ))
 }
-# "sing-box 1.14.1 → 1.14.3，Snell v6 …" from the cache; empty when nothing is newer.
+# "sing-box 1.14.1 → 1.14.3，sing-box 1.15.0（srm 尚未验证），Snell v6 …" from the
+# cache; empty when nothing is newer.
 update_hint() {
     [[ -f $DATA/update-check.json ]] && command -v jq >/dev/null || return 0
-    jq -r '[.items[]?|select(.newer)|"\(.name) \(.current // "未知") → \(.latest)"]|join("，")' "$DATA/update-check.json" 2>/dev/null || true
+    jq -r '[.items[]?|(select(.newer)|"\(.name) \(.current // "未知") → \(.latest)"),
+             (select(.unverified)|"\(.name) \(.unverified)（srm 尚未验证）")]|join("，")' "$DATA/update-check.json" 2>/dev/null || true
 }
 update_summary() {
     local file=$DATA/update-check.json
@@ -77,8 +88,11 @@ update_summary() {
         msg '每日检查：已开启（每天凌晨只查一次版本号，不下载、不重启）'
     else msg '每日检查：已关闭'; fi
     if [[ ! -f $file ]]; then msg '还没有检查过新版本。'
-    elif ! jq -r '"上次检查：\(.checked_at)",
-          (.items[]|"  \(.name)：当前 \(.current // "未知")，最新 \(.latest // "未查到")\(if .newer then "（可更新）" else "" end)"),
+    elif ! jq -r --arg s "$CORE_SERIES" '"上次检查：\(.checked_at)",
+          (.items[]|"  \(.name)：当前 \(.current // "未知")，最新 \(.latest // "未查到")\(
+              [(if .unverified then "srm 已验证的 \($s) 系列" else empty end), (if .newer then "可更新" else empty end)]
+              | if length > 0 then "（\(join("，"))）" else "" end)",
+            (select(.unverified)|"  \(.name) \(.unverified) 可更新（srm 尚未验证）：选「2. 只更新 sing-box」，确认后才安装")),
           (.errors[]?|"  \(.)")' "$file" 2>/dev/null; then
         msg '检查记录无法读取，下次检查会重写。'
     fi
@@ -225,7 +239,8 @@ update_run() {
     update_confirm || { msg '已返回，没有更新。'; return 0; }
     case $target in
       all) with_lock update_all;;
-      core) with_lock update_core;;
+      # Only a person at the menu or terminal is offered a series srm has not verified.
+      core) if [[ ${assume_yes:-0} == 1 ]]; then with_lock update_core; else with_lock update_core offer; fi;;
       programs) with_lock update_programs;;
       *) with_lock update_programs "$target";;
     esac

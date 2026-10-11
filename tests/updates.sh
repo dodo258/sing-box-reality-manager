@@ -23,7 +23,8 @@ case $arch in amd64) snell_arch=amd64;; *) snell_arch=aarch64;; esac
 # configuration, and a snell-server that prints the version it was given.
 make_core() { printf '#!/usr/bin/env bash\ncase $1 in version) echo "sing-box version %s";; check) exit %s;; esac\n' "$1" "$2" > "$3"; chmod 755 "$3"; }
 make_snell() { printf '#!/bin/sh\necho "snell-server v%s (test)"\n' "$1" > "$2"; chmod 755 "$2"; }
-# Release API answer for VERSION: [check result of its core] [prerelease] [digest].
+# Release API answer for VERSION, served as /releases/latest and by its tag:
+# [check result of its core] [prerelease] [digest].
 make_release() {
     local v=$1 dir=sing-box-$1-linux-$arch digest
     mkdir -p "$work/rel/$dir"
@@ -33,6 +34,12 @@ make_release() {
     jq -n --arg v "$v" --arg arch "$arch" --arg d "sha256:$digest" --argjson pre "${3:-false}" \
         '{tag_name:"v\($v)",draft:false,prerelease:$pre,assets:[
           {name:"sing-box-\($v)-linux-\($arch).tar.gz",digest:$d},{name:"sing-box-\($v)-linux-386.tar.gz",digest:"sha256:00"}]}' > "$work/release.json"
+    cp "$work/release.json" "$work/release-$v.json"
+}
+# Tags starting with v1.14. as git matching-refs lists them.
+make_refs() {
+    local t
+    for t in "$@"; do printf 'v%s\n' "$t"; done | jq -R '{ref:"refs/tags/\(.)",object:{type:"commit"}}' | jq -s . > "$work/refs.json"
 }
 # Official zip of VERSION whose snell-server reports PRINTED.
 make_snell_zip() {
@@ -49,6 +56,8 @@ fetch() {
     printf '%s\n' "$1" >> "$work/fetches"
     case $1 in
       https://api.github.com/repos/SagerNet/sing-box/releases/latest) cp "$work/release.json" "$2";;
+      "https://api.github.com/repos/SagerNet/sing-box/git/matching-refs/tags/v$CORE_SERIES.") cp "$work/refs.json" "$2";;
+      https://api.github.com/repos/SagerNet/sing-box/releases/tags/v*) cp "$work/release-${1##*/v}.json" "$2" 2>/dev/null;;
       https://github.com/SagerNet/sing-box/releases/download/v*|https://dl.nssurge.com/snell/*) cp "$work/${1##*/}" "$2";;
       "$SNELL_NOTES") cp "$work/notes.html" "$2";;
       *) return 1;;
@@ -146,7 +155,7 @@ reset_logs
 main menu <<< $'5\n2\n1\n0' > "$work/out" 2>&1 || { cat "$work/out"; fail 'menu core update'; }
 grep -q 'sing-box 已从 1.14.1 更新到 1.14.9' "$work/out" || { cat "$work/out"; fail 'core update message'; }
 [[ $(core_version) == 1.14.9 && $("$CORE.previous" version) == 'sing-box version 1.14.1' ]] || fail 'core replaced'
-grep -qx 'restart srm.service' "$work/systemctl" && grep -qx update_core "$work/locked" || fail 'restart under the lock'
+grep -qx 'restart srm.service' "$work/systemctl" && grep -qx 'update_core offer' "$work/locked" || fail 'restart under the lock'
 [[ $(update_hint) == 'Snell v6 6.0.0rc2 → 6.0.0' ]] || fail "hint after update: $(update_hint)"
 if compgen -G "$SRM_ROOT/core/.candidate.*" > /dev/null; then fail 'candidate left behind'; fi
 echo 'PASS menu 5 → 2 → confirm: new sing-box → digest verified → replaced → restarted → healthy; hint cleared'
@@ -178,6 +187,69 @@ if update_core > "$work/out" 2>&1; then fail 'unhealthy core accepted'; fi
 grep -q '健康检查失败，已恢复 1.14.9' "$work/out" || fail 'rollback message'
 [[ $(sha256 "$CORE") == "$good" && $(grep -cx 'restart srm.service' "$work/systemctl") == 2 ]] || fail 'core rolled back and restarted'
 echo 'PASS a failed health check after the restart puts the previous sing-box back'
+
+# --- a later sing-box series than the one srm has verified (1.14) ----------------
+# 1.15.0 is the newest stable release; the 1.14 series has 1.14.4 and 1.14.5, a tag
+# 1.14.6 whose Release is not published yet, and a release candidate.
+[[ $CORE_SERIES == 1.14 ]] || fail "verified series $CORE_SERIES"
+make_release 1.14.4; make_release 1.14.5; make_release 1.15.0
+make_refs 1.14.0 1.14.4 1.14.5 1.14.6 1.14.7-rc.1 1.14.0-beta.2
+reset_logs
+core_download "$work/fresh-core" > "$work/out" 2>&1 || { cat "$work/out"; fail 'install with a later series out'; }
+[[ $("$work/fresh-core" version) == 'sing-box version 1.14.5' ]] || fail 'install took another version than the newest 1.14'
+grep -q 'download/v1.14.5/' "$work/fetches" && ! grep -q 'download/v1.15' "$work/fetches" && ! grep -q 'tags/v1.14.7' "$work/fetches" || { cat "$work/fetches"; fail 'install lookups'; }
+echo 'PASS a new installation takes 1.14.5, the newest stable release of the verified series, not 1.15.0'
+
+make_core 1.14.1 0 "$CORE"
+main update-check run > /dev/null 2>&1 || fail 'check with a later series'
+jq -e '.items[0] == {name:"sing-box",current:"1.14.1",latest:"1.14.5",newer:true,unverified:"1.15.0"}' "$DATA/update-check.json" >/dev/null || { cat "$DATA/update-check.json"; fail 'cache with a later series'; }
+reset_logs
+main menu <<< $'5\n0\n0' > "$work/out" 2>&1 || fail 'menu with a later series'
+grep -q '可更新：sing-box 1.14.1 → 1.14.5，sing-box 1.15.0（srm 尚未验证），' "$work/out" || { cat "$work/out"; fail 'header hint for a later series'; }
+grep -q 'sing-box：当前 1.14.1，最新 1.14.5（srm 已验证的 1.14 系列，可更新）' "$work/out" && grep -q 'sing-box 1.15.0 可更新（srm 尚未验证）' "$work/out" || fail 'update page shows 1.15.0 as not verified'
+[[ ! -e $work/fetches ]] || fail 'the menu looked up versions'
+echo 'PASS the header and the update page show "sing-box 1.15.0 可更新（srm 尚未验证）" from the cache'
+
+# Menu 5 → 2 → confirm the restart → Enter: the default goes back, nothing changes.
+before=$(snapshot); reset_logs
+main menu <<< $'5\n2\n1\n\n0' > "$work/out" 2>&1 || { cat "$work/out"; fail 'menu offer back'; }
+grep -q '1. 更新到 1.14.5（srm 已验证）' "$work/out" && grep -q '2. 安装 1.15.0（srm 尚未验证）' "$work/out" && grep -q '已返回，sing-box 保持 1.14.1' "$work/out" || { cat "$work/out"; fail 'offer text'; }
+[[ $(snapshot) == "$before" ]] && ! grep -q '^restart' "$work/systemctl" && ! grep -q releases/download "$work/fetches" || fail 'going back changed something'
+echo 'PASS menu 5 → 2 offers 1.14.5 (verified) and 1.15.0 (not verified); Enter goes back without changes'
+
+# Without a person to confirm, only the verified series is installed.
+reset_logs
+main update core --yes > "$work/out" 2>&1 || { cat "$work/out"; fail 'update core --yes with a later series'; }
+[[ $(core_version) == 1.14.5 ]] && grep -q 'sing-box 1.15.0 可更新（srm 尚未验证），没有自动安装' "$work/out" || { cat "$work/out"; fail 'update --yes stays in 1.14'; }
+! grep -q 'download/v1.15' "$work/fetches" || fail '--yes downloaded 1.15.0'
+reset_logs
+main update core --yes > "$work/out" 2>&1 || fail 'update core --yes at the newest 1.14'
+grep -q 'srm 已验证的 sing-box 1.14 系列没有比 1.14.5 新的版本' "$work/out" && [[ ! -e $work/systemctl ]] || { cat "$work/out"; fail 'nothing to do in 1.14'; }
+echo 'PASS srm update core --yes installs 1.14.5 and only mentions 1.15.0'
+
+# A later series that rejects the configuration is not installed, even when confirmed.
+make_release 1.15.0 1
+make_release 1.14.5
+cp "$work/release-1.15.0.json" "$work/release.json"
+good=$(sha256 "$CORE"); reset_logs
+if main update core <<< $'1\n1' > "$work/out" 2>&1; then fail '1.15.0 rejecting the configuration accepted'; fi
+grep -q '1. 安装 1.15.0（srm 尚未验证）' "$work/out" && grep -q 'sing-box 1.15.0 不接受当前配置，保持 1.14.5' "$work/out" || { cat "$work/out"; fail 'check gate for a later series'; }
+[[ $(sha256 "$CORE") == "$good" && ! -e $work/systemctl ]] || fail 'rejected 1.15.0 replaced or restarted'
+echo 'PASS a confirmed 1.15.0 that fails `sing-box check` replaces nothing'
+
+make_release 1.15.0
+make_release 1.14.5
+cp "$work/release-1.15.0.json" "$work/release.json"
+main update-check run > /dev/null 2>&1 || fail 'check before installing 1.15.0'
+reset_logs
+main menu <<< $'5\n2\n1\n1\n0' > "$work/out" 2>&1 || { cat "$work/out"; fail 'menu install 1.15.0'; }
+grep -q 'sing-box 已从 1.14.5 更新到 1.15.0' "$work/out" && [[ $(core_version) == 1.15.0 ]] || { cat "$work/out"; fail 'confirmed 1.15.0 installed'; }
+grep -qx 'restart srm.service' "$work/systemctl" || fail '1.15.0 restarted'
+jq -e '.items[0]|.current == "1.15.0" and .newer == false and has("unverified") == false' "$DATA/update-check.json" >/dev/null || fail 'hint for 1.15.0 cleared'
+reset_logs
+main update core --yes > "$work/out" 2>&1 || fail 'update core --yes on 1.15.0'
+[[ $(core_version) == 1.15.0 && ! -e $work/systemctl ]] || fail '1.15.0 downgraded'
+echo 'PASS after confirming in menu 5 → 2, 1.15.0 is checked, installed and restarted; later updates never downgrade it'
 
 # Snell: menu 5 → 3 (only Snell) → confirm. The disabled v5 node's service stays as is.
 make_snell_zip 6.0.0 6.0.0
