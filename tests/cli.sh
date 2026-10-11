@@ -34,7 +34,7 @@ echo 'PASS version and protocol list'
     require_root() { return 0; }
     require_linux() { return 0; }
     [[ $(main routing dns 192.0.2.1) == 'routing_change dns 192.0.2.1' ]] || fail 'routing dispatch'
-    [[ $(main routing add N dns 'a.com b.com') == 'routing_change add N dns a.com b.com' ]] || fail 'routing add dispatch'
+    [[ $(main routing add N dns 'a.example.com b.example.com') == 'routing_change add N dns a.example.com b.example.com' ]] || fail 'routing add dispatch'
     [[ $(main add vless --name x --yes) == "node_add $SRM_SELF vless --name x --yes" ]] || fail 'add dispatch'
     [[ $(main node 1111111111111111 port 20000) == 'node_change 1111111111111111 port 20000' ]] || fail 'node dispatch'
     [[ $(main uninstall --yes) == uninstall ]] || fail 'uninstall dispatch'

@@ -20,8 +20,8 @@ jobs:
           git diff --exit-code -- dist/
           # Modules share variables, so they are linted together as the bundle.
           shellcheck -S warning -s bash dist/srm build.sh srm.sh
-      - name: Check tracked files for real server IP addresses
-        run: bash tests/no-real-ip.sh
+      - name: Check tracked files for real addresses, UUIDs, keys, domains, emails and home paths
+        run: bash tests/no-private-info.sh
       - name: Download checksum-pinned sing-box core
         run: |
           source ./srm.sh

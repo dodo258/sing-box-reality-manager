@@ -32,7 +32,7 @@ resolve_domain() { printf '%s\n' "${dns_answer:-198.51.100.7}"; }
 firewall_sync() { printf '%s\n' "${2:-sync}" >> "$work/firewall"; }
 http() { curl --noproxy '*' --silent --show-error --fail --max-time 5 "$@"; }
 
-uuid=0f2a6c1e-3b4d-4e5f-8a9b-0c1d2e3f4a5b
+uuid=00000000-0000-4000-8000-000000000006
 pin=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
 key=0123456789abcdef0123456789abcdef
 jq -n --arg uuid "$uuid" --arg pin "$pin" --arg key "$key" --arg certs "$DATA/certs" '

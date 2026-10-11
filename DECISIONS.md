@@ -341,3 +341,20 @@
   - 做成 sing-box 面板（s-ui 的路线）：一台 VPS 自用的人背上常驻端口、凭据和数据库，s-ui 自己的内存和锁 issue 就是代价。
   - 零提问部署（233boy、eooce）：srm 现在是两次回车，差别不大，不为这一步删掉端口和节点名的选择。
 - 拍板人：Claude（主人派活要求「做出别人没有的、把别人做得不好的做好」，取舍按推荐直接定）
+
+## 2026-10-11 公开仓库扫描扩到 IPv6、UUID、私钥、short_id、域名、邮箱、本机路径
+- 决定：`tests/no-real-ip.sh` 改名 `tests/no-private-info.sh`，一个 awk 程序逐行扫已跟踪文件，八类各有「放行的占位写法」和 `KNOWN_*` 公共清单（理由写在清单旁）：
+  - IPv6：只看全球单播（第一组 2000–3fff），放过文档段 2001:db8::/32、3fff::/20；清单里是 Cloudflare DNS、v3 `install.sh` 里 nat64.net 的公共 NAT64 DNS 和 AliDNS 示例前缀。
+  - UUID：除版本位、变体位和最后 4 位外全 0 的算占位（`00000000-0000-4000-8000-000000000001`），另放过全 0、全 f。测试样本里 18 个手编 UUID 按原顺序换成这种写法，fake core 生成的 UUID 前缀也换了。
+  - Reality 私钥：只看紧跟在 private_key / privateKey / PrivateKey 后面的 43 位 base64url；前 39 位同一个字符的算占位（`AAAA…AAAE`）。迁移样本的 6 个私钥换成占位，公钥用 `reality_public_key` 重新推导，样本里 v3 存的公钥文件同步改，样本仍自洽。
+  - short_id：只看 short_id / shortId / short-id / `?sid=` 后面的值；去掉最后一位后全 0 或是 `0123456789abcdef` 前缀的算占位。`6ba85179e30d4fc2` 进清单：mack-a/v2ray-agent 写死的 shortId，每台 v3 都一样。
+  - 域名：只认常见顶级域（排除 .sh、.md、.py 这类同名扩展名），放过 example.com/.org/.net 和保留名（.example、.test、.invalid、.localhost）；其余要在 `KNOWN_DOMAINS` 里（按可注册域名列，含子域），分组写理由：代码托管与下载、协议和客户端文档、srm / v3 会查询的服务、分流规则里的流媒体域名、Reality / ShadowTLS 伪装目标候选（含 v3 的两份候选列表）。测试里用作输入的几个真实短域名（单字母 .com、一个中文 .cn 域名）换成 example.com 下的名字；`notexample.com` 进清单（测后缀匹配不能把它当成 example.com）。
+  - 邮箱：只放过占位域名，不用公共清单。
+  - 路径：`/Users/<名字>`、`/home/<名字>` 只放过 user、you、runner、ubuntu 这类通用名。
+- 理由：主人要求公开仓库里这些地方一律是占位或文字描述。逐类找到能区分「占位」和「真值」的规则，测试样本改成占位；公共服务和伪装目标没有规则能和真实域名分开，只能列清单。
+- 备选/被否决的方案：
+  - 连公钥也扫：公钥本来就写在分享链接里，占位私钥推导出的公钥也是随机样子，扫它会逼着样本前后不自洽。
+  - 把 v3 的 `install.sh`、`documents/` 整个文件排除：省掉一长串清单，但切换发布前文件里新增的东西就扫不到了；按域名列清单更准。
+  - 用 Python 写扫描：CI 和本机都有，但项目只用 Bash + jq，awk 足够，和原脚本一致。
+- 已知局限：私钥和 short_id 只认同一行里紧跟字段名的值（JSON 换行写法扫不到）；顶级域不在 `TLDS` 清单里的冷门后缀不报；非 ASCII 域名只看它的 ASCII 部分。
+- 拍板人：Claude

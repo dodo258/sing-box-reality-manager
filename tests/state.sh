@@ -17,9 +17,9 @@ touch "$SRM_ROOT/.srm-owned" "$DATA/.srm-owned"
 
 # A schema 1 state as written by the v4 skeleton: three Reality nodes, a global rule.
 jq -n '{schema:1,policies:[{name:"Netflix",mode:"dns",domains:["netflix.com"]}],unlock_dns:"192.0.2.53",egress:null,nodes:[
- {id:"1111111111111111",name:"r1",type:"vless",enabled:true,host:"192.0.2.1",port:18101,sni:"www.python.org",uuid:"0f2a6c1e-3b4d-4e5f-8a9b-0c1d2e3f4a51",private_key:"private1",public_key:"public1",short_id:"0123456789abcde1"},
- {id:"2222222222222222",name:"r2",type:"vless",enabled:true,host:"192.0.2.1",port:18102,sni:"www.mozilla.org",uuid:"0f2a6c1e-3b4d-4e5f-8a9b-0c1d2e3f4a52",private_key:"private2",public_key:"public2",short_id:"0123456789abcde2"},
- {id:"3333333333333333",name:"r3",type:"vless",enabled:false,host:"192.0.2.1",port:18103,sni:"www.python.org",uuid:"0f2a6c1e-3b4d-4e5f-8a9b-0c1d2e3f4a53",private_key:"private3",public_key:"public3",short_id:"0123456789abcde3"}]}' > "$work/v1.json"
+ {id:"1111111111111111",name:"r1",type:"vless",enabled:true,host:"192.0.2.1",port:18101,sni:"www.python.org",uuid:"00000000-0000-4000-8000-000000000003",private_key:"private1",public_key:"public1",short_id:"0123456789abcde1"},
+ {id:"2222222222222222",name:"r2",type:"vless",enabled:true,host:"192.0.2.1",port:18102,sni:"www.mozilla.org",uuid:"00000000-0000-4000-8000-000000000004",private_key:"private2",public_key:"public2",short_id:"0123456789abcde2"},
+ {id:"3333333333333333",name:"r3",type:"vless",enabled:false,host:"192.0.2.1",port:18103,sni:"www.python.org",uuid:"00000000-0000-4000-8000-000000000005",private_key:"private3",public_key:"public3",short_id:"0123456789abcde3"}]}' > "$work/v1.json"
 cp "$work/v1.json" "$work/v1-original.json"
 
 state_upgrade "$work/v1.json" > "$work/v2.json" || fail 'upgrade schema 1'
@@ -148,7 +148,7 @@ routing_change add Video proxy youtube.com --nodes all > /dev/null || fail '--no
 jq -e '.policies[-1]=={name:"Video",mode:"proxy",domains:["youtube.com"]}' "$STATE" >/dev/null || fail '--nodes all should make the rule global'
 routing_change add Video proxy youtube.com --nodes 2222222222222222 > /dev/null || fail 'scope again'
 before=$(sha256 "$STATE")
-for bad in 'add X dns a.com --nodes 9999999999999999' 'add X dns a.com --nodes' 'add X dns a.com --nodes ,' 'add X dns --nodes 1111111111111111'; do
+for bad in 'add X dns a.example.com --nodes 9999999999999999' 'add X dns a.example.com --nodes' 'add X dns a.example.com --nodes ,' 'add X dns --nodes 1111111111111111'; do
     # shellcheck disable=SC2086 # split the argument list
     if routing_change $bad > /dev/null 2>&1 < /dev/null; then fail "accepted routing $bad"; fi
 done
@@ -179,13 +179,13 @@ routing_menu <<< $'4\nN4\nmax.com\ndns\n0' > /dev/null 2>&1 || fail '0 should re
 echo 'PASS routing menu picks nodes by number, Enter means every node, 0 returns, bad numbers change nothing'
 
 # Deleting a node removes it from scoped rules; a rule left with no node goes too.
-jq '.policies=[{name:"Only1",mode:"dns",domains:["a.com"],inbounds:["1111111111111111"]},
-               {name:"Both",mode:"dns",domains:["b.com"],inbounds:["1111111111111111","2222222222222222"]},
-               {name:"All",mode:"dns",domains:["c.com"]}]' "$work/v2.json" > "$STATE"
+jq '.policies=[{name:"Only1",mode:"dns",domains:["a.example.com"],inbounds:["1111111111111111"]},
+               {name:"Both",mode:"dns",domains:["b.example.com"],inbounds:["1111111111111111","2222222222222222"]},
+               {name:"All",mode:"dns",domains:["c.example.com"]}]' "$work/v2.json" > "$STATE"
 node_change 1111111111111111 delete > "$work/out" || fail delete
 grep -q '分流规则「Only1」只作用于这个节点，已一并删除' "$work/out" || fail 'delete message'
 jq -e '[.nodes[].id]==["2222222222222222","3333333333333333"] and
-       .policies==[{name:"Both",mode:"dns",domains:["b.com"],inbounds:["2222222222222222"]},{name:"All",mode:"dns",domains:["c.com"]}]' "$STATE" >/dev/null || fail 'policies after delete'
+       .policies==[{name:"Both",mode:"dns",domains:["b.example.com"],inbounds:["2222222222222222"]},{name:"All",mode:"dns",domains:["c.example.com"]}]' "$STATE" >/dev/null || fail 'policies after delete'
 echo 'PASS deleting a node prunes scoped rules without widening any of them'
 
 # Ports: 1–65535 accepted in state and when deploying; random stays in 10000–50000.
@@ -197,7 +197,7 @@ for port in 0 65536 1.5 '"443"'; do
     jq --argjson p "$port" '.nodes[0].port=$p' "$work/v2.json" > "$work/p.json"
     if validate_state "$work/p.json" 2>/dev/null; then fail "port $port accepted"; fi
 done
-printf '#!/usr/bin/env bash\ncase $2 in reality-keypair) printf "PrivateKey: priv%%s\\nPublicKey: pub%%s\\n" $RANDOM $RANDOM;; uuid) printf "%%s\\n" 0f2a6c1e-3b4d-4e5f-8a9b-$(openssl rand -hex 6);; esac\n' > "$work/core"
+printf '#!/usr/bin/env bash\ncase $2 in reality-keypair) printf "PrivateKey: priv%%s\\nPublicKey: pub%%s\\n" $RANDOM $RANDOM;; uuid) printf "%%s\\n" 00000000-0000-4000-8000-$(openssl rand -hex 6);; esac\n' > "$work/core"
 ensure_dependencies() { return 0; }
 reality_target_check() { return 0; }
 # Certificate domains resolve to the node's address.

@@ -1,12 +1,12 @@
 {
   "nodes": [
     {"name": "hysteria2-30445", "type": "hysteria2", "port": 30445, "enabled": true, "sni": "hy2.dodo258.local",
-     "password": "7d3e2a10-4b5c-4d6e-8f90-a1b2c3d4e5f6", "cert_dir": "selfsigned"},
+     "password": "00000000-0000-4000-8000-00000000000d", "cert_dir": "selfsigned"},
     {"name": "vless-30443", "type": "vless", "port": 30443, "enabled": true, "sni": "www.example.com",
-     "uuid": "7d3e2a10-4b5c-4d6e-8f90-a1b2c3d4e5f6", "private_key": "MKtlOD2flxsbIf_DezzpAsmmCa7B5aWvAjEIgu76YW4",
-     "public_key": "KmhSczuDovFw273sbSOBCd1Igc0enKUiVVuVDgba6Go", "short_id": "6ba85179e30d4fc2"},
+     "uuid": "00000000-0000-4000-8000-00000000000d", "private_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQ",
+     "public_key": "7BPSOhfa8XR1DfetZ6hqHU6r7I9RdjZgUoHB2xjGZkk", "short_id": "6ba85179e30d4fc2"},
     {"name": "anytls-30444", "type": "anytls", "port": 30444, "enabled": true, "sni": "vpn.example.com",
-     "password": "7d3e2a10-4b5c-4d6e-8f90-a1b2c3d4e5f6", "cert_dir": "certs/vpn.example.com/active"}
+     "password": "00000000-0000-4000-8000-00000000000d", "cert_dir": "certs/vpn.example.com/active"}
   ],
   "skipped": [],
   "units": ["dodo258-sing-box.service"]

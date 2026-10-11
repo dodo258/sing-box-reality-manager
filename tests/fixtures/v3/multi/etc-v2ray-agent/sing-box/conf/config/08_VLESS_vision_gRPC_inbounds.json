@@ -7,7 +7,7 @@
       "tag": "VLESSRealityGRPC",
       "users": [
         {
-          "uuid": "0a1b2c3d-1111-4222-8333-444455556666",
+          "uuid": "00000000-0000-4000-8000-000000000001",
           "name": "0a1b2c3d-VLESS_Reality_gPRC"
         }
       ],
@@ -20,7 +20,7 @@
             "server": "www.example.com",
             "server_port": 443
           },
-          "private_key": "KHNTAarbRs3yCCRcXb7D3xH6yR_jjX3Hp57f6B-yKkI",
+          "private_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAM",
           "short_id": [
             "",
             "6ba85179e30d4fc2"

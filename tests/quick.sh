@@ -22,7 +22,7 @@ for tool in curl wget; do
     printf '#!/usr/bin/env bash\nprintf "%%s %%s\\n" "%s" "$*" >> "%s/network-calls"\nexit 1\n' "$tool" "$work" > "$work/bin/$tool"
 done
 printf '#!/usr/bin/env bash\ncat > /dev/null\necho "[QR $*]"\n' > "$work/bin/qrencode"
-printf '#!/usr/bin/env bash\ncase $2 in reality-keypair) printf "PrivateKey: priv%%s\\nPublicKey: pub%%s\\n" $RANDOM $RANDOM;; uuid) printf "%%s\\n" 0f2a6c1e-3b4d-4e5f-8a9b-$(openssl rand -hex 6);; esac\n' > "$work/core"
+printf '#!/usr/bin/env bash\ncase $2 in reality-keypair) printf "PrivateKey: priv%%s\\nPublicKey: pub%%s\\n" $RANDOM $RANDOM;; uuid) printf "%%s\\n" 00000000-0000-4000-8000-$(openssl rand -hex 6);; esac\n' > "$work/core"
 chmod 755 "$work/bin/"* "$work/core"
 export PATH="$work/bin:$PATH"
 CORE=$work/core

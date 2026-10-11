@@ -320,7 +320,7 @@ done
 [[ ! -e $STATE ]] && ! grep -qE '^(disable|stop)' "$work/systemctl.log" || fail 'Enter after the user warning changed something'
 grep -qxF '注意：上面列出的 1 个用户迁移后将无法连接。' docs/menu-preview.txt || fail 'docs/menu-preview.txt lacks the user warning'
 main <<< $'\n1\n0' > "$work/out" 2>&1 || fail 'users3 migrate'
-jq -e '.nodes[0].uuid == "9fa0b1c2-3333-4444-8555-2a2b2c2d2e2f"' "$STATE" >/dev/null || fail 'first user not moved'
+jq -e '.nodes[0].uuid == "00000000-0000-4000-8000-000000000010"' "$STATE" >/dev/null || fail 'first user not moved'
 # --yes skips the preview; the users that stay behind are still named.
 load_fixture users3
 main migrate --apply --yes > "$work/out" 2>&1 || fail 'users3 --yes'

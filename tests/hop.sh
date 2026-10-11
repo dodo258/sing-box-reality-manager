@@ -91,7 +91,7 @@ jq -n "{schema:2,policies:[],unlock_dns:null,egress:null,nodes:[
   {id:\"1000000000000001\",name:\"hy2 跳\",type:\"hysteria2\",enabled:true,host:\"192.0.2.1\",port:24000,password:\"pw/1\",hop:{start:20000,end:20999}} + $cert,
   {id:\"1000000000000002\",name:\"hy2-self\",type:\"hysteria2\",enabled:true,host:\"2001:db8::1\",port:24001,password:\"pw\",hop:{start:21000,end:21999}} + $self,
   {id:\"1000000000000003\",name:\"plain\",type:\"hysteria2\",enabled:true,host:\"192.0.2.1\",port:24002,password:\"pw\"} + $cert,
-  {id:\"1000000000000004\",name:\"tuic\",type:\"tuic\",enabled:true,host:\"192.0.2.1\",port:24003,uuid:\"0f2a6c1e-3b4d-4e5f-8a9b-000000000001\",password:\"pw\"} + $cert]}" > "$STATE"
+  {id:\"1000000000000004\",name:\"tuic\",type:\"tuic\",enabled:true,host:\"192.0.2.1\",port:24003,uuid:\"00000000-0000-4000-8000-000000000002\",password:\"pw\"} + $cert]}" > "$STATE"
 node() { jq -c --arg id "$1" '.nodes[]|select(.id==$id)' "$STATE"; }
 
 validate_state "$STATE" >/dev/null 2>&1 || fail 'valid hop ranges rejected'

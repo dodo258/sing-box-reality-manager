@@ -16,8 +16,8 @@ ok() { pass=$((pass+1)); printf 'PASS %s\n' "$1"; }
 for port in 1 80 443 10000 33524 65535; do valid_port "$port"; done
 for port in 0 65536 99999 01000 080 '1;id' '' -1 ' 443'; do ! valid_port "$port" || exit 1; done
 ok 'port boundaries 1–65535 and invalid input'
-for host in example.com test.example.com xn--fiqs8s.cn; do valid_domain "$host"; done
-for host in '-x.com' 'a..com' 'abc.com;id' 'a/com' 'a-.com'; do ! valid_domain "$host" || exit 1; done
+for host in example.com test.example.com xn--fsqu00a.example.com; do valid_domain "$host"; done
+for host in '-x.com' 'a..com' 'abc.example.com;id' 'a/com' 'a-.com'; do ! valid_domain "$host" || exit 1; done
 ok 'domain validation'
 "$TEST_OPENSSL" req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -keyout "$work/key.pem" -out "$work/fullchain.pem" -days 2 -subj /CN=test.example.com -addext subjectAltName=DNS:test.example.com > "$work/openssl.log" 2>&1
 cert_valid "$work/fullchain.pem" "$work/key.pem" test.example.com
